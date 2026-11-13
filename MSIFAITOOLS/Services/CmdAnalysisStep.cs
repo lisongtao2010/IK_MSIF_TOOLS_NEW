@@ -70,8 +70,12 @@ namespace MSIFAITOOLS.Services
     /// <see cref="CmdPartAnalysisService"/> 的日志、界面提示与
     /// <c>docs\CMD分析_步骤命名.md</c> 都按这里的名字写，避免各处叫法不一致。
     ///
-    /// 点一次【CMD 分析】依次执行<b>最前面 1 步 + 第 1~6 步</b>（按钮名字不变，仍是「一次性跑完」）：
+    /// 点一次【CMD 分析】依次执行<b>（勾选时先跑）第 0 步 + 最前面 1 步 + 第 1~6 步</b>
+    /// （按钮名字不变，仍是「一次性跑完」）：
     /// <list type="number">
+    ///   <item><b>第 0 步 特注品.json 维护</b>（<see cref="CmdTzJsonMaintainer"/>，代号 <c>S0M</c>，
+    ///         <b>界面上勾选 checkbox 才执行</b>）：遍历 PDF 文件夹里文件名第 5 位是 <c>Z</c> 的 xlsx，
+    ///         读部品表 → 用 AI 判定哪些条目要追加进 <c>classify\特注品.json</c>（AI 说要加的才加）；</item>
     ///   <item><b>最前面 · 特注品 CSV 生成</b>（<see cref="CmdSpecialProductCsvExporter"/>，代号 <c>S0C</c>，
     ///         不占「第 N 步」编号）：遍历 PDF 文件夹下的 <c>*.xlsx</c>，文件名第 5 位是 <c>Z</c>
     ///         （= 特注品）的读部品表，生成 <c>AiAppData\&lt;文件名&gt;\特注品.csv</c>
@@ -258,6 +262,26 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
+        /// 第 0 步的编号（0）：点【CMD 分析】时排在最前面**特注品 CSV 生成**之前，
+        /// 界面上由 checkbox（第 0 步 · 特注品.json 维护）决定是否执行（勾选才跑）。
+        /// </summary>
+        public const int MaintainTzJsonNumber = 0;
+
+        /// <summary>
+        /// 第 0 步 · 特注品.json 维护（<see cref="CmdTzJsonMaintainer"/>）：
+        /// 遍历 PDF 文件夹下文件名第 5 位是 <c>Z</c> 的 xlsx，用 AI 判定部品表里的条目
+        /// 是否要追加进 <c>classify\特注品.json</c> —— AI 说要加的才加。
+        /// </summary>
+        public static CmdAnalysisStep MaintainTzJsonStep
+        {
+            get { return MaintainTzJsonStepValue; }
+        }
+
+        private static readonly CmdAnalysisStep MaintainTzJsonStepValue =
+            new CmdAnalysisStep(MaintainTzJsonNumber, "S0M", "特注品.json 维护",
+                "遍历文件名第 5 位是 Z 的 xlsx，用 AI 判定是否把部品表条目追加进 classify\\特注品.json");
+
+        /// <summary>
         /// 按 <see cref="CmdAnalysisStepKind"/> 取步骤对象；<see cref="CmdAnalysisStepKind.All"/> 返回 <c>null</c>
         /// （表示「全部步骤」，不对应单一步骤）。
         /// </summary>
@@ -265,6 +289,9 @@ namespace MSIFAITOOLS.Services
         {
             switch (kind)
             {
+                case CmdAnalysisStepKind.MaintainTzJson:
+                    return MaintainTzJsonStep;
+
                 case CmdAnalysisStepKind.SpecialProductCsv:
                     return SpecialProductCsvStep;
 
@@ -318,13 +345,21 @@ namespace MSIFAITOOLS.Services
     }
 
     /// <summary>
-    /// 【CMD 分析】要执行哪一步：主按钮走 <see cref="All"/>，界面上的六个子按钮各走一步。
+    /// 【CMD 分析】要执行哪一步：主按钮走 <see cref="All"/>，界面上的七个子按钮
+    /// （第 0 步 + 第 1~6 步）各走一步。
     /// 值取自 <see cref="CmdAnalysisSteps"/> 的步骤编号，保证「第 N 步」只有一处定义。
     /// </summary>
     internal enum CmdAnalysisStepKind
     {
         /// <summary>一次跑完 6 步（= 主按钮【CMD 分析】，旧行为）。</summary>
         All = 0,
+
+        /// <summary>
+        /// 第 0 步 特注品.json 维护：点分步执行区的【第 0 步】按钮可单独跑；
+        /// 主按钮【CMD 分析】时要 checkbox 勾选才跑（排在「最前面」那步之前）。
+        /// 编号是 0，与 <see cref="All"/> 的值相同会撞 case 标签，所以这里另给 100。
+        /// </summary>
+        MaintainTzJson = 100,
 
         /// <summary>最前面（不属于第 1~6 步）：特注品 CSV 生成。</summary>
         SpecialProductCsv = CmdAnalysisSteps.SpecialProductCsvNumber,

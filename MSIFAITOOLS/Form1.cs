@@ -59,7 +59,9 @@ namespace MSIFAITOOLS
             _aiButtonText = btnAiAnalyze.Text;
             _cmdButtonText = btnCmdAnalyze.Text;
 
-            // 六个子按钮的文字统一取自 CmdAnalysisSteps（步骤名的唯一定义处），保证按钮 / 日志叫法一致
+            // 七个子按钮（第 0 步 + 第 1~6 步）的文字统一取自 CmdAnalysisSteps
+            // （步骤名的唯一定义处），保证按钮 / 日志叫法一致
+            btnCmdStep0.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.MaintainTzJson);
             btnCmdStep1.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.Assembly);
             btnCmdStep2.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.CalloutSplit);
             btnCmdStep3.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.YoryoAppend);
@@ -180,6 +182,34 @@ namespace MSIFAITOOLS
             {
                 return 0;
             }
+        }
+
+        /// <summary>
+        /// 部品基本信息数据库的路径：<b>&lt;所选 PDF 文件夹&gt;\AiAppData\MSIF_Parts.db</b>
+        /// （= 分解输出根目录下的 <c>MSIF_Parts.db</c>，见
+        /// <see cref="PartBasicInfoRepository.ResolveDatabasePath(string)"/>）。
+        /// <para>
+        /// 数据库跟着图纸文件夹走：一个项目一份库，把文件夹拷走就带走了全部部品数据，
+        /// 也不会出现「换一个项目 / 换一台机器，看到的还是别的项目的部品」。
+        /// 还没分解过（没有输出根目录）时按「已选文件夹\AiAppData」推算；
+        /// 连文件夹都没选时退回程序目录下的旧位置（&lt;程序目录&gt;\Data\MSIF_Parts.db）。
+        /// </para>
+        /// </summary>
+        private string ResolvePartDatabasePath()
+        {
+            string outputDir = _lastOutputDir;
+
+            if (string.IsNullOrWhiteSpace(outputDir))
+            {
+                string folder = txtFolder.Text.Trim();
+
+                if (folder.Length > 0 && Directory.Exists(folder))
+                {
+                    outputDir = PdfSplitService.GetOutputRoot(folder);
+                }
+            }
+
+            return PartBasicInfoRepository.ResolveDatabasePath(outputDir);
         }
 
         /// <summary>
@@ -383,7 +413,8 @@ namespace MSIFAITOOLS
             btnStart.Enabled = !running;
             btnAiAnalyze.Enabled = !running;
             btnCmdAnalyze.Enabled = !running;
-            // 六个子按钮（第 1 / 2 / 3 / 4 / 5 / 6 步）执行期间只置灰，文字保持不变
+            // 七个子按钮（第 0 步 + 第 1 / 2 / 3 / 4 / 5 / 6 步）执行期间只置灰，文字保持不变
+            btnCmdStep0.Enabled = !running;
             btnCmdStep1.Enabled = !running;
             btnCmdStep2.Enabled = !running;
             btnCmdStep3.Enabled = !running;
@@ -964,7 +995,7 @@ namespace MSIFAITOOLS
                 "参照「" + MemberPartCatalogLoader.FolderName + "\\" + MemberPartCatalogLoader.FileName +
                 "」→ 结果写进「" + PartBasicInfoRepository.MemberNameAiColumnName + "」列",
                 Color.FromArgb(180, 180, 180));
-            AppendLog("部品基本信息数据库：" + PartBasicInfoRepository.ResolveDatabasePath(),
+            AppendLog("部品基本信息数据库：" + ResolvePartDatabasePath(),
                 Color.FromArgb(180, 180, 180));
 
             if (PartAnalysisService.IsDebugSingleFileMode)
@@ -982,7 +1013,7 @@ namespace MSIFAITOOLS
             try
             {
                 MemberNameAiAdvisor advisor = new MemberNameAiAdvisor(options,
-                    PartBasicInfoRepository.ResolveDatabasePath());
+                    ResolvePartDatabasePath());
 
                 // 同上：用匿名方法（delegate）代替 Lambda 表达式，日志回调复用 OnServiceLog
                 Func<MemberNameAiSummary> analyzeWork = delegate
@@ -1047,6 +1078,8 @@ namespace MSIFAITOOLS
         /// 以 xy.txt 校验后登录到 SQLite 部品基本信息表（与【AI 分析】的「部材名AI推荐」同一张表）。
         ///
         /// 点一次依次走「最前面 1 步 + 第 1~6 步」（名字见 <see cref="CmdAnalysisSteps"/>）：
+        /// （勾选 checkbox 时先跑）<b>第 0 步 特注品.json 维护</b>（PDF 文件夹下文件名第 5 位是 Z 的 xlsx →
+        /// 用 AI 判定是否追加进 classify\特注品.json）→
         /// <b>最前面</b> 特注品 CSV 生成（PDF 文件夹下文件名第 5 位是 Z 的 xlsx →
         /// <c>AiAppData\&lt;文件名&gt;\特注品.csv</c>）→
         /// 第 1 步 装配图部品入库 → 第 2 步 圈号拆分 → 第 3 步 要領図部品追加 → 第 4 步 特注品.json 部品追加 →
@@ -1064,6 +1097,17 @@ namespace MSIFAITOOLS
         private async void BtnCmdAnalyze_Click(object sender, EventArgs e)
         {
             await RunCmdAnalysisAsync(CmdAnalysisStepKind.All);
+        }
+
+        /// <summary>
+        /// 子按钮【第 0 步 · 特注品.json 维护】：只跑第 0 步
+        /// （PDF 文件夹下文件名第 5 位是 <c>Z</c> 的 xlsx → 读部品表 → 用 AI 判定哪些条目要追加进
+        /// <c>classify\特注品.json</c>）。**不看 checkbox**：点这个按钮就是要跑第 0 步；
+        /// checkbox 只决定「主按钮【CMD 分析】时要不要先跑第 0 步」。这一步不碰数据库。
+        /// </summary>
+        private async void BtnCmdStep0_Click(object sender, EventArgs e)
+        {
+            await RunCmdAnalysisAsync(CmdAnalysisStepKind.MaintainTzJson);
         }
 
         /// <summary>子按钮【第 1 步 · 装配图部品入库】：只重跑第 1 步（读 01_アッセンブリ図_部品機能情報.csv → 入库）。</summary>
@@ -1114,7 +1158,8 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 【CMD 分析】主按钮（<see cref="CmdAnalysisStepKind.All"/>）与六个子按钮共用的执行流程：
+        /// 【CMD 分析】主按钮（<see cref="CmdAnalysisStepKind.All"/>）与七个子按钮
+        /// （第 0 步 + 第 1~6 步）共用的执行流程：
         /// 校验分类 / 输出目录 → 做快照 → 后台执行 <see cref="CmdPartAnalysisService"/> 的分析 → 汇总显示。
         /// 单步执行时只跑该步，日志里仍用「【第 N 步 · 名字】」前缀。
         /// </summary>
@@ -1160,7 +1205,8 @@ namespace MSIFAITOOLS
             // 「最前面 · 特注品 CSV 生成」只遍历 PDF 文件夹下的 xlsx，不依赖アッセンブリ図：
             // 主按钮 / 该步骤在没有装配图时也继续（服务层会打「无需分析」后返回，CSV 照常生成）
             if (snapshot.Count == 0 && stepKind != CmdAnalysisStepKind.All &&
-                stepKind != CmdAnalysisStepKind.SpecialProductCsv)
+                stepKind != CmdAnalysisStepKind.SpecialProductCsv &&
+                stepKind != CmdAnalysisStepKind.MaintainTzJson)
             {
                 MessageBox.Show(this,
                     "【分类结果】中没有「" + PdfCategoryNames.Assembly + "」的 PDF。\n\n" +
@@ -1173,7 +1219,12 @@ namespace MSIFAITOOLS
             progressBar.Style = ProgressBarStyle.Continuous;
             progressBar.Value = 0;
 
-            // 主按钮 / 子按钮共用：日志与状态栏都用同一步骤名（名字来自 CmdAnalysisSteps）
+            // 第 0 步 特注品.json 维护：主按钮按 checkbox（勾选才跑）；
+            // 单独点【第 0 步 · 特注品.json 维护】按钮时无条件跑（服务层按 stepKind 判断）
+            // （后台线程不直接读控件，先在这里取界面上的状态）
+            bool maintainTzJson = chkCmdStep0.Checked;
+
+            // 主按钮 / 子按钮共用：日志与状态栏都用同一步骤名（名字来自 CmdAnD:\Github_lis2010\IK_MSIF_TOOLS\図面-20260918T025344Z-1-001\図面\alysisSteps）
             CmdAnalysisStep step = CmdAnalysisSteps.GetStep(stepKind);
             string actionName = step == null ? "CMD 分析" : step.Label;
 
@@ -1185,8 +1236,14 @@ namespace MSIFAITOOLS
                 actionName, snapshot.Count, PdfCategoryNames.Assembly, CmdPartAnalyzer.LtStep1FileName),
                 Color.FromArgb(120, 200, 255));
             AppendLog(CmdAnalysisSteps.DescribeRun(stepKind), Color.FromArgb(120, 200, 255));
+
+            if (maintainTzJson && stepKind == CmdAnalysisStepKind.All)
+            {
+                AppendLog(CmdAnalysisSteps.MaintainTzJsonStep.LogHeader +
+                    " 已勾选：先执行 特注品.json 维护（AI 判定是否追加）", Color.FromArgb(120, 200, 255));
+            }
             AppendLog("分解输出目录：" + outputDir, Color.FromArgb(180, 180, 180));
-            AppendLog("部品基本信息数据库：" + PartBasicInfoRepository.ResolveDatabasePath(),
+            AppendLog("部品基本信息数据库：" + ResolvePartDatabasePath(),
                 Color.FromArgb(180, 180, 180));
 
             SetStatus("正在 " + actionName + "（共 " + snapshot.Count + " 个 PDF）...", Color.FromArgb(230, 126, 34));
@@ -1198,12 +1255,13 @@ namespace MSIFAITOOLS
             try
             {
                 CmdPartAnalysisService service =
-                    new CmdPartAnalysisService(PartBasicInfoRepository.ResolveDatabasePath());
+                    new CmdPartAnalysisService(ResolvePartDatabasePath());
 
                 // 后台线程执行：用匿名方法（delegate）代替 Lambda 表达式
                 Func<PartAnalysisSummary> analyzeWork = delegate
                 {
-                    return service.AnalyzeAndSave(snapshot, outputDir, OnServiceLog, stepKind);
+                    return service.AnalyzeAndSave(snapshot, outputDir, OnServiceLog, stepKind,
+                        maintainTzJson);
                 };
 
                 summary = await Task.Run(analyzeWork);
@@ -1233,6 +1291,13 @@ namespace MSIFAITOOLS
             }
 
             string summaryText = CmdPartAnalysisService.BuildSummaryText(summary);
+
+            // 第 0 步不写数据库：完成提示换成说明文字，避免看起来像「保存 0 行」的失败
+            if (stepKind == CmdAnalysisStepKind.MaintainTzJson)
+            {
+                summaryText = CmdAnalysisSteps.MaintainTzJsonStep.Label +
+                    " 已完成（这一步不写数据库，明细见上方日志）。";
+            }
 
             progressBar.Style = ProgressBarStyle.Continuous;
             progressBar.Value = summary.SavedRowCount > 0 ? progressBar.Maximum : 0;
@@ -1613,11 +1678,21 @@ namespace MSIFAITOOLS
                 return;
             }
 
+            string databasePath = ResolvePartDatabasePath();
+
+            // 换了图纸文件夹（= 换了一份库）：先把旧窗口关掉重建，免得继续读写上一个项目的库。
+            // 旧窗口有未保存的修改时会先询问，用户选「取消」就继续用旧窗口（他正在编辑旧库的数据）
+            if (_partInfoForm != null && !_partInfoForm.IsDisposed &&
+                !string.Equals(_partInfoForm.DatabasePath, databasePath, StringComparison.OrdinalIgnoreCase))
+            {
+                _partInfoForm.Close();
+            }
+
             bool created = _partInfoForm == null || _partInfoForm.IsDisposed;
 
             if (created)
             {
-                _partInfoForm = new PartBasicInfoForm();
+                _partInfoForm = new PartBasicInfoForm(databasePath);
                 _partInfoForm.Owner = this;
                 _partInfoForm.FormClosed += PartInfoForm_FormClosed;
 

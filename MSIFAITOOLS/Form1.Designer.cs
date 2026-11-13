@@ -39,15 +39,15 @@ namespace MSIFAITOOLS
             this.tabMain = new System.Windows.Forms.TabControl();
             this.tabPageLog = new System.Windows.Forms.TabPage();
             this.rtbLog = new System.Windows.Forms.RichTextBox();
+            this.cmsLog = new System.Windows.Forms.ContextMenuStrip(this.components);
+            this.mnuLogCopy = new System.Windows.Forms.ToolStripMenuItem();
+            this.mnuLogCopyAll = new System.Windows.Forms.ToolStripMenuItem();
+            this.mnuLogSelectAll = new System.Windows.Forms.ToolStripMenuItem();
             this.tabPageClassify = new System.Windows.Forms.TabPage();
             this.dgvClassify = new System.Windows.Forms.DataGridView();
             this.cmsClassify = new System.Windows.Forms.ContextMenuStrip(this.components);
             this.mnuShowPartInfo = new System.Windows.Forms.ToolStripMenuItem();
             this.mnuPreviewPdf = new System.Windows.Forms.ToolStripMenuItem();
-            this.cmsLog = new System.Windows.Forms.ContextMenuStrip(this.components);
-            this.mnuLogCopy = new System.Windows.Forms.ToolStripMenuItem();
-            this.mnuLogCopyAll = new System.Windows.Forms.ToolStripMenuItem();
-            this.mnuLogSelectAll = new System.Windows.Forms.ToolStripMenuItem();
             this.pnlClassifyBar = new System.Windows.Forms.Panel();
             this.lblClassifySummary = new System.Windows.Forms.Label();
             this.chkAutoPreview = new System.Windows.Forms.CheckBox();
@@ -59,9 +59,10 @@ namespace MSIFAITOOLS
             this.lblProgress = new System.Windows.Forms.Label();
             this.btnOpenOutput = new System.Windows.Forms.Button();
             this.btnStart = new System.Windows.Forms.Button();
-            this.btnAiAnalyze = new System.Windows.Forms.Button();
             this.btnCmdAnalyze = new System.Windows.Forms.Button();
+            this.btnAiAnalyze = new System.Windows.Forms.Button();
             this.lblCmdStepHint = new System.Windows.Forms.Label();
+            this.btnCmdStep0 = new System.Windows.Forms.Button();
             this.btnCmdStep1 = new System.Windows.Forms.Button();
             this.btnCmdStep2 = new System.Windows.Forms.Button();
             this.btnCmdStep3 = new System.Windows.Forms.Button();
@@ -69,13 +70,14 @@ namespace MSIFAITOOLS
             this.btnCmdStep5 = new System.Windows.Forms.Button();
             this.btnCmdStep6 = new System.Windows.Forms.Button();
             this.lblCmdStepNote = new System.Windows.Forms.Label();
+            this.chkCmdStep0 = new System.Windows.Forms.CheckBox();
             this.btnAiSettings = new System.Windows.Forms.Button();
-            this.btnMemberNameMap = new System.Windows.Forms.Button();
             this.grpInput = new System.Windows.Forms.GroupBox();
             this.btnBrowse = new System.Windows.Forms.Button();
             this.txtFolder = new System.Windows.Forms.TextBox();
             this.lblFolder = new System.Windows.Forms.Label();
             this.chkCadSplit = new System.Windows.Forms.CheckBox();
+            this.btnMemberNameMap = new System.Windows.Forms.Button();
             this.statusStrip = new System.Windows.Forms.StatusStrip();
             this.lblStatus = new System.Windows.Forms.ToolStripStatusLabel();
             this.lblSpring = new System.Windows.Forms.ToolStripStatusLabel();
@@ -86,10 +88,10 @@ namespace MSIFAITOOLS
             this.grpLog.SuspendLayout();
             this.tabMain.SuspendLayout();
             this.tabPageLog.SuspendLayout();
+            this.cmsLog.SuspendLayout();
             this.tabPageClassify.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.dgvClassify)).BeginInit();
             this.cmsClassify.SuspendLayout();
-            this.cmsLog.SuspendLayout();
             this.pnlClassifyBar.SuspendLayout();
             this.grpAction.SuspendLayout();
             this.grpInput.SuspendLayout();
@@ -176,9 +178,9 @@ namespace MSIFAITOOLS
             this.grpLog.Controls.Add(this.tabMain);
             this.grpLog.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.grpLog.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.grpLog.Location = new System.Drawing.Point(20, 292);
+            this.grpLog.Location = new System.Drawing.Point(20, 314);
             this.grpLog.Name = "grpLog";
-            this.grpLog.Size = new System.Drawing.Size(860, 290);
+            this.grpLog.Size = new System.Drawing.Size(860, 268);
             this.grpLog.TabIndex = 2;
             this.grpLog.TabStop = false;
             this.grpLog.Text = "③  运行日志 / 分类结果";
@@ -191,7 +193,7 @@ namespace MSIFAITOOLS
             this.tabMain.Location = new System.Drawing.Point(3, 19);
             this.tabMain.Name = "tabMain";
             this.tabMain.SelectedIndex = 0;
-            this.tabMain.Size = new System.Drawing.Size(854, 278);
+            this.tabMain.Size = new System.Drawing.Size(854, 246);
             this.tabMain.TabIndex = 0;
             // 
             // tabPageLog
@@ -201,7 +203,7 @@ namespace MSIFAITOOLS
             this.tabPageLog.Location = new System.Drawing.Point(4, 26);
             this.tabPageLog.Name = "tabPageLog";
             this.tabPageLog.Padding = new System.Windows.Forms.Padding(3);
-            this.tabPageLog.Size = new System.Drawing.Size(846, 248);
+            this.tabPageLog.Size = new System.Drawing.Size(846, 216);
             this.tabPageLog.TabIndex = 0;
             this.tabPageLog.Text = "运行日志";
             // 
@@ -218,12 +220,45 @@ namespace MSIFAITOOLS
             this.rtbLog.Location = new System.Drawing.Point(3, 3);
             this.rtbLog.Name = "rtbLog";
             this.rtbLog.ReadOnly = true;
-            this.rtbLog.Size = new System.Drawing.Size(840, 242);
+            this.rtbLog.Size = new System.Drawing.Size(840, 210);
             this.rtbLog.TabIndex = 0;
             this.rtbLog.Text = "";
             this.rtbLog.WordWrap = false;
-            this.rtbLog.MouseDown += new System.Windows.Forms.MouseEventHandler(this.RtbLog_MouseDown);
             this.rtbLog.KeyDown += new System.Windows.Forms.KeyEventHandler(this.RtbLog_KeyDown);
+            this.rtbLog.MouseDown += new System.Windows.Forms.MouseEventHandler(this.RtbLog_MouseDown);
+            // 
+            // cmsLog
+            // 
+            this.cmsLog.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.mnuLogCopy,
+            this.mnuLogCopyAll,
+            this.mnuLogSelectAll});
+            this.cmsLog.Name = "cmsLog";
+            this.cmsLog.Size = new System.Drawing.Size(187, 70);
+            this.cmsLog.Opening += new System.ComponentModel.CancelEventHandler(this.CmsLog_Opening);
+            // 
+            // mnuLogCopy
+            // 
+            this.mnuLogCopy.Name = "mnuLogCopy";
+            this.mnuLogCopy.ShortcutKeyDisplayString = "Ctrl+C";
+            this.mnuLogCopy.Size = new System.Drawing.Size(186, 22);
+            this.mnuLogCopy.Text = "复制选中内容";
+            this.mnuLogCopy.Click += new System.EventHandler(this.MnuLogCopy_Click);
+            // 
+            // mnuLogCopyAll
+            // 
+            this.mnuLogCopyAll.Name = "mnuLogCopyAll";
+            this.mnuLogCopyAll.Size = new System.Drawing.Size(186, 22);
+            this.mnuLogCopyAll.Text = "复制全部日志";
+            this.mnuLogCopyAll.Click += new System.EventHandler(this.MnuLogCopyAll_Click);
+            // 
+            // mnuLogSelectAll
+            // 
+            this.mnuLogSelectAll.Name = "mnuLogSelectAll";
+            this.mnuLogSelectAll.ShortcutKeyDisplayString = "Ctrl+A";
+            this.mnuLogSelectAll.Size = new System.Drawing.Size(186, 22);
+            this.mnuLogSelectAll.Text = "全选";
+            this.mnuLogSelectAll.Click += new System.EventHandler(this.MnuLogSelectAll_Click);
             // 
             // tabPageClassify
             // 
@@ -233,7 +268,7 @@ namespace MSIFAITOOLS
             this.tabPageClassify.Location = new System.Drawing.Point(4, 26);
             this.tabPageClassify.Name = "tabPageClassify";
             this.tabPageClassify.Padding = new System.Windows.Forms.Padding(3);
-            this.tabPageClassify.Size = new System.Drawing.Size(846, 248);
+            this.tabPageClassify.Size = new System.Drawing.Size(846, 216);
             this.tabPageClassify.TabIndex = 1;
             this.tabPageClassify.Text = "分类结果";
             // 
@@ -253,7 +288,7 @@ namespace MSIFAITOOLS
             this.dgvClassify.RowHeadersVisible = false;
             this.dgvClassify.RowTemplate.Height = 24;
             this.dgvClassify.SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.FullRowSelect;
-            this.dgvClassify.Size = new System.Drawing.Size(840, 198);
+            this.dgvClassify.Size = new System.Drawing.Size(840, 166);
             this.dgvClassify.TabIndex = 0;
             this.dgvClassify.CellDoubleClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.DgvClassify_CellDoubleClick);
             this.dgvClassify.CurrentCellChanged += new System.EventHandler(this.DgvClassify_CurrentCellChanged);
@@ -284,39 +319,6 @@ namespace MSIFAITOOLS
             this.mnuPreviewPdf.Text = "预览 PDF";
             this.mnuPreviewPdf.Click += new System.EventHandler(this.MnuPreviewPdf_Click);
             // 
-            // cmsLog
-            // 
-            this.cmsLog.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this.mnuLogCopy,
-            this.mnuLogCopyAll,
-            this.mnuLogSelectAll});
-            this.cmsLog.Name = "cmsLog";
-            this.cmsLog.Size = new System.Drawing.Size(205, 70);
-            this.cmsLog.Opening += new System.ComponentModel.CancelEventHandler(this.CmsLog_Opening);
-            // 
-            // mnuLogCopy
-            // 
-            this.mnuLogCopy.Name = "mnuLogCopy";
-            this.mnuLogCopy.ShortcutKeyDisplayString = "Ctrl+C";
-            this.mnuLogCopy.Size = new System.Drawing.Size(204, 22);
-            this.mnuLogCopy.Text = "复制选中内容";
-            this.mnuLogCopy.Click += new System.EventHandler(this.MnuLogCopy_Click);
-            // 
-            // mnuLogCopyAll
-            // 
-            this.mnuLogCopyAll.Name = "mnuLogCopyAll";
-            this.mnuLogCopyAll.Size = new System.Drawing.Size(204, 22);
-            this.mnuLogCopyAll.Text = "复制全部日志";
-            this.mnuLogCopyAll.Click += new System.EventHandler(this.MnuLogCopyAll_Click);
-            // 
-            // mnuLogSelectAll
-            // 
-            this.mnuLogSelectAll.Name = "mnuLogSelectAll";
-            this.mnuLogSelectAll.ShortcutKeyDisplayString = "Ctrl+A";
-            this.mnuLogSelectAll.Size = new System.Drawing.Size(204, 22);
-            this.mnuLogSelectAll.Text = "全选";
-            this.mnuLogSelectAll.Click += new System.EventHandler(this.MnuLogSelectAll_Click);
-            // 
             // pnlClassifyBar
             // 
             this.pnlClassifyBar.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(242)))), ((int)(((byte)(244)))), ((int)(((byte)(247)))));
@@ -326,7 +328,7 @@ namespace MSIFAITOOLS
             this.pnlClassifyBar.Controls.Add(this.btnOpenClassifyDir);
             this.pnlClassifyBar.Controls.Add(this.btnPreviewPdf);
             this.pnlClassifyBar.Dock = System.Windows.Forms.DockStyle.Bottom;
-            this.pnlClassifyBar.Location = new System.Drawing.Point(3, 201);
+            this.pnlClassifyBar.Location = new System.Drawing.Point(3, 169);
             this.pnlClassifyBar.Name = "pnlClassifyBar";
             this.pnlClassifyBar.Size = new System.Drawing.Size(840, 44);
             this.pnlClassifyBar.TabIndex = 1;
@@ -421,9 +423,10 @@ namespace MSIFAITOOLS
             this.grpAction.Controls.Add(this.lblProgress);
             this.grpAction.Controls.Add(this.btnOpenOutput);
             this.grpAction.Controls.Add(this.btnStart);
-            this.grpAction.Controls.Add(this.btnAiAnalyze);
             this.grpAction.Controls.Add(this.btnCmdAnalyze);
+            this.grpAction.Controls.Add(this.btnAiAnalyze);
             this.grpAction.Controls.Add(this.lblCmdStepHint);
+            this.grpAction.Controls.Add(this.btnCmdStep0);
             this.grpAction.Controls.Add(this.btnCmdStep1);
             this.grpAction.Controls.Add(this.btnCmdStep2);
             this.grpAction.Controls.Add(this.btnCmdStep3);
@@ -431,12 +434,13 @@ namespace MSIFAITOOLS
             this.grpAction.Controls.Add(this.btnCmdStep5);
             this.grpAction.Controls.Add(this.btnCmdStep6);
             this.grpAction.Controls.Add(this.lblCmdStepNote);
+            this.grpAction.Controls.Add(this.chkCmdStep0);
             this.grpAction.Controls.Add(this.btnAiSettings);
             this.grpAction.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.grpAction.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
             this.grpAction.Location = new System.Drawing.Point(20, 126);
             this.grpAction.Name = "grpAction";
-            this.grpAction.Size = new System.Drawing.Size(860, 160);
+            this.grpAction.Size = new System.Drawing.Size(860, 182);
             this.grpAction.TabIndex = 1;
             this.grpAction.TabStop = false;
             this.grpAction.Text = "②  执行";
@@ -496,24 +500,6 @@ namespace MSIFAITOOLS
             this.btnStart.UseVisualStyleBackColor = false;
             this.btnStart.Click += new System.EventHandler(this.BtnStart_Click);
             // 
-            // btnAiAnalyze
-            // 
-            this.btnAiAnalyze.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(46)))), ((int)(((byte)(125)))), ((int)(((byte)(50)))));
-            this.btnAiAnalyze.Cursor = System.Windows.Forms.Cursors.Hand;
-            this.btnAiAnalyze.FlatAppearance.BorderSize = 0;
-            this.btnAiAnalyze.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(27)))), ((int)(((byte)(94)))), ((int)(((byte)(32)))));
-            this.btnAiAnalyze.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(76)))), ((int)(((byte)(175)))), ((int)(((byte)(80)))));
-            this.btnAiAnalyze.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnAiAnalyze.Font = new System.Drawing.Font("Microsoft YaHei", 11F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.btnAiAnalyze.ForeColor = System.Drawing.Color.White;
-            this.btnAiAnalyze.Location = new System.Drawing.Point(214, 34);
-            this.btnAiAnalyze.Name = "btnAiAnalyze";
-            this.btnAiAnalyze.Size = new System.Drawing.Size(112, 46);
-            this.btnAiAnalyze.TabIndex = 1;
-            this.btnAiAnalyze.Text = "AI 分析";
-            this.btnAiAnalyze.UseVisualStyleBackColor = false;
-            this.btnAiAnalyze.Click += new System.EventHandler(this.BtnAiAnalyze_Click);
-            // 
             // btnCmdAnalyze
             // 
             this.btnCmdAnalyze.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(121)))), ((int)(((byte)(107)))));
@@ -524,13 +510,31 @@ namespace MSIFAITOOLS
             this.btnCmdAnalyze.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdAnalyze.Font = new System.Drawing.Font("Microsoft YaHei", 11F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdAnalyze.ForeColor = System.Drawing.Color.White;
-            this.btnCmdAnalyze.Location = new System.Drawing.Point(332, 34);
+            this.btnCmdAnalyze.Location = new System.Drawing.Point(214, 34);
             this.btnCmdAnalyze.Name = "btnCmdAnalyze";
-            this.btnCmdAnalyze.Size = new System.Drawing.Size(118, 46);
-            this.btnCmdAnalyze.TabIndex = 2;
+            this.btnCmdAnalyze.Size = new System.Drawing.Size(112, 46);
+            this.btnCmdAnalyze.TabIndex = 1;
             this.btnCmdAnalyze.Text = "CMD 分析";
             this.btnCmdAnalyze.UseVisualStyleBackColor = false;
             this.btnCmdAnalyze.Click += new System.EventHandler(this.BtnCmdAnalyze_Click);
+            // 
+            // btnAiAnalyze
+            // 
+            this.btnAiAnalyze.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(46)))), ((int)(((byte)(125)))), ((int)(((byte)(50)))));
+            this.btnAiAnalyze.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnAiAnalyze.FlatAppearance.BorderSize = 0;
+            this.btnAiAnalyze.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(27)))), ((int)(((byte)(94)))), ((int)(((byte)(32)))));
+            this.btnAiAnalyze.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(76)))), ((int)(((byte)(175)))), ((int)(((byte)(80)))));
+            this.btnAiAnalyze.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnAiAnalyze.Font = new System.Drawing.Font("Microsoft YaHei", 11F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnAiAnalyze.ForeColor = System.Drawing.Color.White;
+            this.btnAiAnalyze.Location = new System.Drawing.Point(332, 34);
+            this.btnAiAnalyze.Name = "btnAiAnalyze";
+            this.btnAiAnalyze.Size = new System.Drawing.Size(118, 46);
+            this.btnAiAnalyze.TabIndex = 2;
+            this.btnAiAnalyze.Text = "AI 分析";
+            this.btnAiAnalyze.UseVisualStyleBackColor = false;
+            this.btnAiAnalyze.Click += new System.EventHandler(this.BtnAiAnalyze_Click);
             // 
             // lblCmdStepHint
             // 
@@ -543,6 +547,23 @@ namespace MSIFAITOOLS
             this.lblCmdStepHint.Text = "分步执行：";
             this.lblCmdStepHint.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
+            // btnCmdStep0
+            // 
+            this.btnCmdStep0.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(225)))), ((int)(((byte)(245)))), ((int)(((byte)(242)))));
+            this.btnCmdStep0.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnCmdStep0.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(152)))), ((int)(((byte)(214)))), ((int)(((byte)(208)))));
+            this.btnCmdStep0.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(204)))), ((int)(((byte)(235)))), ((int)(((byte)(229)))));
+            this.btnCmdStep0.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnCmdStep0.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnCmdStep0.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
+            this.btnCmdStep0.Location = new System.Drawing.Point(100, 86);
+            this.btnCmdStep0.Name = "btnCmdStep0";
+            this.btnCmdStep0.Size = new System.Drawing.Size(200, 28);
+            this.btnCmdStep0.TabIndex = 17;
+            this.btnCmdStep0.Text = "第 0 步 · 特注品.json 维护";
+            this.btnCmdStep0.UseVisualStyleBackColor = false;
+            this.btnCmdStep0.Click += new System.EventHandler(this.BtnCmdStep0_Click);
+            // 
             // btnCmdStep1
             // 
             this.btnCmdStep1.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(225)))), ((int)(((byte)(245)))), ((int)(((byte)(242)))));
@@ -552,7 +573,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep1.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep1.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep1.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep1.Location = new System.Drawing.Point(100, 86);
+            this.btnCmdStep1.Location = new System.Drawing.Point(306, 86);
             this.btnCmdStep1.Name = "btnCmdStep1";
             this.btnCmdStep1.Size = new System.Drawing.Size(176, 28);
             this.btnCmdStep1.TabIndex = 8;
@@ -569,7 +590,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep2.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep2.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep2.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep2.Location = new System.Drawing.Point(282, 86);
+            this.btnCmdStep2.Location = new System.Drawing.Point(488, 86);
             this.btnCmdStep2.Name = "btnCmdStep2";
             this.btnCmdStep2.Size = new System.Drawing.Size(124, 28);
             this.btnCmdStep2.TabIndex = 9;
@@ -586,7 +607,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep3.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep3.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep3.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep3.Location = new System.Drawing.Point(412, 86);
+            this.btnCmdStep3.Location = new System.Drawing.Point(618, 86);
             this.btnCmdStep3.Name = "btnCmdStep3";
             this.btnCmdStep3.Size = new System.Drawing.Size(168, 28);
             this.btnCmdStep3.TabIndex = 10;
@@ -603,7 +624,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep4.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep4.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep4.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep4.Location = new System.Drawing.Point(586, 86);
+            this.btnCmdStep4.Location = new System.Drawing.Point(100, 118);
             this.btnCmdStep4.Name = "btnCmdStep4";
             this.btnCmdStep4.Size = new System.Drawing.Size(206, 28);
             this.btnCmdStep4.TabIndex = 12;
@@ -620,15 +641,16 @@ namespace MSIFAITOOLS
             this.btnCmdStep5.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep5.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep5.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep5.Location = new System.Drawing.Point(100, 118);
+            this.btnCmdStep5.Location = new System.Drawing.Point(312, 118);
             this.btnCmdStep5.Name = "btnCmdStep5";
             this.btnCmdStep5.Size = new System.Drawing.Size(200, 28);
             this.btnCmdStep5.TabIndex = 13;
             this.btnCmdStep5.Text = "第 5 步 · 部品コード正規化";
             this.btnCmdStep5.UseVisualStyleBackColor = false;
             this.btnCmdStep5.Click += new System.EventHandler(this.BtnCmdStep5_Click);
-
+            // 
             // btnCmdStep6
+            // 
             this.btnCmdStep6.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(225)))), ((int)(((byte)(245)))), ((int)(((byte)(242)))));
             this.btnCmdStep6.Cursor = System.Windows.Forms.Cursors.Hand;
             this.btnCmdStep6.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(152)))), ((int)(((byte)(214)))), ((int)(((byte)(208)))));
@@ -636,7 +658,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep6.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep6.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep6.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep6.Location = new System.Drawing.Point(308, 118);
+            this.btnCmdStep6.Location = new System.Drawing.Point(518, 118);
             this.btnCmdStep6.Name = "btnCmdStep6";
             this.btnCmdStep6.Size = new System.Drawing.Size(200, 28);
             this.btnCmdStep6.TabIndex = 14;
@@ -648,12 +670,26 @@ namespace MSIFAITOOLS
             // 
             this.lblCmdStepNote.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblCmdStepNote.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(108)))), ((int)(((byte)(117)))), ((int)(((byte)(125)))));
-            this.lblCmdStepNote.Location = new System.Drawing.Point(516, 124);
+            this.lblCmdStepNote.Location = new System.Drawing.Point(100, 152);
             this.lblCmdStepNote.Name = "lblCmdStepNote";
-            this.lblCmdStepNote.Size = new System.Drawing.Size(332, 18);
+            this.lblCmdStepNote.Size = new System.Drawing.Size(480, 18);
             this.lblCmdStepNote.TabIndex = 11;
-            this.lblCmdStepNote.Text = "※ 上方【CMD 分析】= 依次跑完 6 步";
+            this.lblCmdStepNote.Text = "※ 上方【CMD 分析】= 依次跑完 勾选的第 0 步 + 6 步";
             this.lblCmdStepNote.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            // 
+            // chkCmdStep0
+            // 
+            this.chkCmdStep0.AutoSize = true;
+            this.chkCmdStep0.Checked = true;
+            this.chkCmdStep0.CheckState = System.Windows.Forms.CheckState.Checked;
+            this.chkCmdStep0.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.chkCmdStep0.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
+            this.chkCmdStep0.Location = new System.Drawing.Point(586, 150);
+            this.chkCmdStep0.Name = "chkCmdStep0";
+            this.chkCmdStep0.Size = new System.Drawing.Size(232, 21);
+            this.chkCmdStep0.TabIndex = 16;
+            this.chkCmdStep0.Text = "第 0 步 · 特注品.json 维护（AI 判定）";
+            this.chkCmdStep0.UseVisualStyleBackColor = true;
             // 
             // btnAiSettings
             // 
@@ -671,23 +707,6 @@ namespace MSIFAITOOLS
             this.btnAiSettings.Text = "AI 设置";
             this.btnAiSettings.UseVisualStyleBackColor = false;
             this.btnAiSettings.Click += new System.EventHandler(this.BtnAiSettings_Click);
-            // 
-            // btnMemberNameMap
-            // 
-            this.btnMemberNameMap.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(240)))), ((int)(((byte)(242)))), ((int)(((byte)(245)))));
-            this.btnMemberNameMap.Cursor = System.Windows.Forms.Cursors.Hand;
-            this.btnMemberNameMap.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(199)))), ((int)(((byte)(208)))), ((int)(((byte)(219)))));
-            this.btnMemberNameMap.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(226)))), ((int)(((byte)(232)))), ((int)(((byte)(240)))));
-            this.btnMemberNameMap.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnMemberNameMap.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.btnMemberNameMap.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.btnMemberNameMap.Location = new System.Drawing.Point(520, 64);
-            this.btnMemberNameMap.Name = "btnMemberNameMap";
-            this.btnMemberNameMap.Size = new System.Drawing.Size(322, 26);
-            this.btnMemberNameMap.TabIndex = 15;
-            this.btnMemberNameMap.Text = "部材名置换表（例：鴨居 → 上枠）…";
-            this.btnMemberNameMap.UseVisualStyleBackColor = false;
-            this.btnMemberNameMap.Click += new System.EventHandler(this.BtnMemberNameMap_Click);
             // 
             // grpInput
             // 
@@ -764,6 +783,23 @@ namespace MSIFAITOOLS
             this.chkCadSplit.Text = "开始分解前先调用 CadPartSplitter 做零件分割（Part_NN.png 等）";
             this.chkCadSplit.UseVisualStyleBackColor = true;
             // 
+            // btnMemberNameMap
+            // 
+            this.btnMemberNameMap.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(240)))), ((int)(((byte)(242)))), ((int)(((byte)(245)))));
+            this.btnMemberNameMap.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnMemberNameMap.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(199)))), ((int)(((byte)(208)))), ((int)(((byte)(219)))));
+            this.btnMemberNameMap.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(226)))), ((int)(((byte)(232)))), ((int)(((byte)(240)))));
+            this.btnMemberNameMap.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnMemberNameMap.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnMemberNameMap.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
+            this.btnMemberNameMap.Location = new System.Drawing.Point(520, 64);
+            this.btnMemberNameMap.Name = "btnMemberNameMap";
+            this.btnMemberNameMap.Size = new System.Drawing.Size(322, 26);
+            this.btnMemberNameMap.TabIndex = 15;
+            this.btnMemberNameMap.Text = "部材名置换表（例：鴨居 → 上枠）…";
+            this.btnMemberNameMap.UseVisualStyleBackColor = false;
+            this.btnMemberNameMap.Click += new System.EventHandler(this.BtnMemberNameMap_Click);
+            // 
             // statusStrip
             // 
             this.statusStrip.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(232)))), ((int)(((byte)(237)))), ((int)(((byte)(243)))));
@@ -827,10 +863,10 @@ namespace MSIFAITOOLS
             this.grpLog.ResumeLayout(false);
             this.tabMain.ResumeLayout(false);
             this.tabPageLog.ResumeLayout(false);
+            this.cmsLog.ResumeLayout(false);
             this.tabPageClassify.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.dgvClassify)).EndInit();
             this.cmsClassify.ResumeLayout(false);
-            this.cmsLog.ResumeLayout(false);
             this.pnlClassifyBar.ResumeLayout(false);
             this.pnlClassifyBar.PerformLayout();
             this.grpAction.ResumeLayout(false);
@@ -862,6 +898,7 @@ namespace MSIFAITOOLS
         private System.Windows.Forms.Button btnAiAnalyze;
         private System.Windows.Forms.Button btnCmdAnalyze;
         private System.Windows.Forms.Label lblCmdStepHint;
+        private System.Windows.Forms.Button btnCmdStep0;
         private System.Windows.Forms.Button btnCmdStep1;
         private System.Windows.Forms.Button btnCmdStep2;
         private System.Windows.Forms.Button btnCmdStep3;
@@ -869,6 +906,7 @@ namespace MSIFAITOOLS
         private System.Windows.Forms.Button btnCmdStep5;
         private System.Windows.Forms.Button btnCmdStep6;
         private System.Windows.Forms.Label lblCmdStepNote;
+        private System.Windows.Forms.CheckBox chkCmdStep0;
         private System.Windows.Forms.Button btnAiSettings;
         private System.Windows.Forms.Button btnMemberNameMap;
         private System.Windows.Forms.Button btnOpenOutput;

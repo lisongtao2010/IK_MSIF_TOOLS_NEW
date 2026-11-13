@@ -141,9 +141,10 @@ namespace MSIFAITOOLS
             this.dgvParts.ReadOnly = false;
             this.dgvParts.RowHeadersVisible = false;
             this.dgvParts.RowTemplate.Height = 24;
-            this.dgvParts.SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.FullRowSelect;
+            this.dgvParts.SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.CellSelect;
             this.dgvParts.Size = new System.Drawing.Size(980, 452);
             this.dgvParts.TabIndex = 1;
+            this.dgvParts.CellClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.DgvParts_CellClick);
             this.dgvParts.CellValueChanged += new System.Windows.Forms.DataGridViewCellEventHandler(this.DgvParts_CellValueChanged);
             this.dgvParts.KeyDown += new System.Windows.Forms.KeyEventHandler(this.DgvParts_KeyDown);
             //

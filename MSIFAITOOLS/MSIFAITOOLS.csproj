@@ -100,6 +100,12 @@
     <Compile Include="MemberNameReplacementForm.Designer.cs">
       <DependentUpon>MemberNameReplacementForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="MemberNamePickerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="MemberNamePickerForm.Designer.cs">
+      <DependentUpon>MemberNamePickerForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="WindowLayoutHelper.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Services\PdfSplitService.cs" />
@@ -134,6 +140,8 @@
     <Compile Include="Services\CmdSpecialProductCsvExporter.cs" />
     <Compile Include="Services\CmdSpecialProductAiAdvisor.cs" />
     <Compile Include="Services\SpecialProductPromptStore.cs" />
+    <Compile Include="Services\CmdTzJsonMaintainer.cs" />
+    <Compile Include="Services\TzJsonMaintainPromptStore.cs" />
     <Compile Include="Services\PartsInfoIndex.cs" />
     <Compile Include="Services\MemberNameAiAdvisor.cs" />
     <Compile Include="Services\MemberNamePromptStore.cs" />
@@ -144,9 +152,12 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <!--
-    原 CadPartSplitter 工程的源码直接编译进本程序：一个 MSIFAITOOLS.exe 就能做零件分割，
-    不再需要外部 CadPartSplitter.exe 子进程。用「链接」而不是把文件复制过来，
+    CadPartSplitter 工程的部分源码以「链接」方式编译进本程序（DetectorOptions 等选项类型 / 常量），
     保证两边只有一份源码，改一处即生效。
+
+    注意：【开始分解】实际执行的是外部 CadPartSplitter.exe
+    （默认 <程序目录>\CadPartSplitter\CadPartSplitter.exe，见 Services\CadPartSplitterRunner.cs），
+    这里的链接只用于复用它的选项类型，省得在主程序里再抄一份「输出目录怎么推导」之类的逻辑。
 
     排除项及原因：
       Program.cs                  → 自带 Main，会和本程序 Program.cs 的 Main 冲突（CS0017）
@@ -166,6 +177,8 @@
     <Compile Include="..\CadPartSplitter\*.cs" Exclude="..\CadPartSplitter\Program.cs;..\CadPartSplitter\CommandLineRunner.cs;..\CadPartSplitter\MainForm.cs;..\CadPartSplitter\MainForm.Designer.cs;..\CadPartSplitter\PdfInfoEditorForm.cs;..\CadPartSplitter\PdfInfoEditorForm.Designer.cs;..\CadPartSplitter\PdfRenderer.cs">
       <Link>CadPartSplitter\%(Filename)%(Extension)</Link>
     </Compile>
+    <!-- 【CMD 分析】第 0 步 · 特注品.json 维护：Excel 整表原文导出（.xls/.xlsx/.xlsm → 文本送 AI） -->
+    <Compile Include="Services\ExcelSheetDumper.cs" />
     <!-- Excel 部品表 AI 判定的提示语：编译进 exe 作兜底，同时复制到输出目录（可运行时修改、不用重新编译） -->
     <EmbeddedResource Include="..\CadPartSplitter\Prompts\TzJsonAi.Prompt.txt">
       <LogicalName>CadPartSplitter.Prompts.TzJsonAi.Prompt.txt</LogicalName>
@@ -201,6 +214,13 @@
     <EmbeddedResource Include="Prompts\SpecialProductAdvisor.Prompt.txt">
       <LogicalName>MSIFAITOOLS.Prompts.SpecialProductAdvisor.Prompt.txt</LogicalName>
     </EmbeddedResource>
+    <!-- 【CMD 分析】第 0 步 特注品.json 维护的 AI 判定提示语：同样既编译进 exe（兜底），又复制到输出目录（可运行时编辑） -->
+    <EmbeddedResource Include="Prompts\TzJsonMaintain.Prompt.txt">
+      <LogicalName>MSIFAITOOLS.Prompts.TzJsonMaintain.Prompt.txt</LogicalName>
+    </EmbeddedResource>
+    <None Include="Prompts\TzJsonMaintain.Prompt.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Include="hiroidashiData\h_H310_三方枠.xlsx">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>

@@ -7,7 +7,7 @@ namespace CadPartSplitter
 {
     /// <summary>
     /// 一张 PDF 的信息（分类清单 <c>classify\PdfInfoList.txt</c> 里的一行）：
-    /// 図番号 / 文件名 / 图面分类（基本図 / 加工図 / アッセンブリ図 / 要領図）/ 分类依据。
+    /// 図番号 / 文件名 / 图面分类（基本図 / 加工図 / アッセンブリ図 / 要領図 / 特注）/ 分类依据。
     ///
     /// 其余字段（页数 / 页面尺寸 / 表格张数 / 零件个数 / 文件大小 / 更新日期）清单里不再写，
     /// 模型仍保留它们，供读老清单（十列）与其它调用方使用。
@@ -34,8 +34,10 @@ namespace CadPartSplitter
         public double HeightMm { get; set; }
 
         /// <summary>
-        /// 图面分类：基本図 / 加工図 / アッセンブリ図 / 要領図；判不出来时为空串
-        /// （判定规则与 <see cref="DrawingListBuilder"/> 的 <c>drawing_list.csv</c> 完全一致）。
+        /// 图面分类：基本図 / 加工図 / アッセンブリ図 / 要領図 / 特注；判不出来时为空串。
+        /// 前四类与 <see cref="DrawingListBuilder"/> 的 <c>drawing_list.csv</c> 完全一致；
+        /// 「特注」只在这份清单里出现 —— 文件名第 5 位是 <c>Z</c> 的图纸（<c>H310Z10004.pdf</c>），
+        /// 见 <see cref="PdfInfoListBuilder.IsSpotDrawingNumber"/>。
         /// </summary>
         public string Category { get; set; }
 
@@ -87,7 +89,10 @@ namespace CadPartSplitter
     /// 生成时机：有线表格 CSV（<c>tables\*.csv</c>）落盘之后、<c>01_アッセンブリ図_部品機能情報.csv</c> 与
     /// <c>02_要領図_部品機能情報.csv</c> 之前 —— 后两者要「读它」才知道这张图是什么图。
     /// 分类判定复用 <see cref="DrawingListBuilder.Classify"/>（在 <c>tables\*.csv</c> 的单元格里找
-    /// 「図番号前 4 位 + 基本図 / 加工図 / アッセンブリ図 / 要領図」），与 <c>drawing_list.csv</c> 同源。
+    /// 「図番号前 4 位 + 基本図 / 加工図 / アッセンブリ図 / 要領図」），与 <c>drawing_list.csv</c> 同源；
+    /// 在此之上多一条「特注」：**文件名第 5 位是 <c>Z</c>**（<c>H310Z10004.pdf</c>）时分类定成
+    /// <see cref="SpotCategoryKeyword"/>（<c>特注</c>），不再看表題欄 —— 图番号的这一位就是特注图记号，
+    /// 比表題欄里怎么写可靠（判定见 <see cref="ClassifyCategory"/>）。
     ///
     /// 只读 PDF 元信息与 <c>tables\*.csv</c>，不改动任何已有产物
     /// （唯一会删的是老版本「一张图一份」的 <c>&lt;输出目录&gt;\PdfInfoList.txt</c>）。
@@ -102,6 +107,31 @@ namespace CadPartSplitter
         /// （<c>&lt;输出根目录&gt;\classify\PdfInfoList.txt</c>）。
         /// </summary>
         public const string ClassifyFolderName = "classify";
+
+        /// <summary>
+        /// 「特注」分类：**文件名第 5 位是 <c>Z</c>** 的图纸（<c>H310Z10004.pdf</c>）。
+        ///
+        /// 与其它四类不同，这一条不看表題欄 —— 図番号的第 5 位就是特注图的记号，
+        /// 表題欄写没写、写成什么样式都不影响（判定见 <see cref="IsSpotDrawingNumber"/>）。
+        /// 只在 <c>classify\PdfInfoList.txt</c> 里出现；<c>drawing_list.csv</c> 仍按
+        /// <see cref="DrawingListBuilder.Classify"/> 的四类判定。
+        /// </summary>
+        public const string SpotCategoryKeyword = "特注";
+
+        /// <summary>
+        /// 「特注」记号的位数（1 起算，即文件名的第 5 个字符）：
+        /// <c>H310Z10004</c> 的第 5 位是 <c>Z</c> → 特注。
+        /// </summary>
+        public const int SpotMarkPosition = 5;
+
+        /// <summary>「特注」记号字符（比较时不分大小写，<c>z</c> 也认）。</summary>
+        public const char SpotMark = 'Z';
+
+        /// <summary>
+        /// 「分类依据」里表示「按文件名第 5 位的 <c>Z</c> 判成特注」的前缀：
+        /// <c>図番号 H310Z10004（第 5 位 Z）</c>。
+        /// </summary>
+        public const string SpotBasisPrefix = "図番号";
 
         /// <summary>「アッセンブリ図」关键字：分类命中它才认为这张图是組立図。</summary>
         public const string AssemblyCategoryKeyword = "アッセンブリ図";
@@ -132,6 +162,93 @@ namespace CadPartSplitter
         /// 是同一份，变体也按同一规则认（<c>アセンブリ図</c> 算 アッセンブリ図）。
         /// </summary>
         private static readonly string[] RowCategoryKeywords = DrawingListBuilder.CategoryKeywords;
+
+        // ── 分类判定 ──────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// 文件名（去扩展名的図番号，例如 <c>H310Z10004</c>）的第 <see cref="SpotMarkPosition"/> 位
+        /// 是不是 <see cref="SpotMark"/>（<c>Z</c>，不分大小写）：是 → 这张图是特注图
+        /// （<see cref="SpotCategoryKeyword"/>）。
+        ///
+        /// 不够 5 位、或第 5 位是别的字符时返回 false
+        /// （<c>H310A20009</c> / <c>H453U10003</c> / <c>H325U10011</c> 都不是）。
+        /// </summary>
+        /// <param name="drawingNumber">図番号（PDF 文件名去扩展名；带不带扩展名都按前 5 位算）。</param>
+        public static bool IsSpotDrawingNumber(string drawingNumber)
+        {
+            if (string.IsNullOrEmpty(drawingNumber) || drawingNumber.Length < SpotMarkPosition)
+                return false;
+
+            char mark = drawingNumber[SpotMarkPosition - 1];
+
+            return mark == SpotMark || char.ToUpperInvariant(mark) == SpotMark;
+        }
+
+        /// <summary>
+        /// 特注图的「分类依据」文字：<c>図番号 H310Z10004（第 5 位 Z）</c>
+        /// （写进清单第四列，人工核对时一眼能看出为什么判成特注）。
+        /// </summary>
+        /// <param name="drawingNumber">図番号（PDF 文件名去扩展名）。</param>
+        public static string SpotBasisText(string drawingNumber)
+        {
+            return SpotBasisPrefix + " " + (drawingNumber ?? string.Empty)
+                   + "（第 " + SpotMarkPosition + " 位 " + SpotMark + "）";
+        }
+
+        /// <summary>
+        /// 判一张图的图面分类（<see cref="Build"/> 与 GUI「判定选中行 / 判定空白行」共用这一套）：
+        /// <list type="number">
+        ///   <item>文件名第 5 位是 <c>Z</c> → <c>特注</c>（<see cref="IsSpotDrawingNumber"/>）；</item>
+        ///   <item>文件名里已经写着图面分类 → 用文件名（<see cref="DrawingListBuilder.Classify"/>）；</item>
+        ///   <item>在 <c>tables\*.csv</c> 的单元格里找「図番号前 4 位 + 基本図 / 加工図 / アッセンブリ図 / 要領図」；</item>
+        ///   <item>逐格没命中时按「同一行」再找一次（<see cref="ClassifyByRow"/>）。</item>
+        /// </list>
+        /// 「特注」放在最前面：图番号第 5 位的 <c>Z</c> 是图纸本身的记号，比表題欄的写法可靠。
+        /// </summary>
+        /// <param name="drawingNumber">図番号（PDF 文件名去扩展名）。</param>
+        /// <param name="tablesDirectory">该图纸的 <c>tables</c> 目录（判特注时用不到，可为 null）。</param>
+        /// <param name="opts">参数 / 日志（可为 null）。</param>
+        /// <param name="matchedCell">分类依据：特注时是 <see cref="SpotBasisText"/>，取自文件名时是 <c>文件名 …</c>，逐格命中时是那一格的原文。</param>
+        /// <param name="matchedTable">命中的 CSV 文件名；特注 / 取自文件名时为 null。</param>
+        /// <returns>特注 / 基本図 / 加工図 / アッセンブリ図 / 要領図；判不出来返回空串。</returns>
+        public static string ClassifyCategory(string drawingNumber, string tablesDirectory, DetectorOptions opts,
+                                             out string matchedCell, out string matchedTable)
+        {
+            matchedCell = null;
+            matchedTable = null;
+
+            // ① 図番号 第 5 位是 Z（H310Z10004 …）→ 特注
+            if (IsSpotDrawingNumber(drawingNumber))
+            {
+                matchedCell = SpotBasisText(drawingNumber);
+                return SpotCategoryKeyword;
+            }
+
+            // ② 文件名里写着图面分类 / ③ 逐格找（与 drawing_list.csv 同一套规则）
+            string category = DrawingListBuilder.Classify(drawingNumber, tablesDirectory, opts,
+                                                          out matchedCell, out matchedTable);
+
+            if (!string.IsNullOrEmpty(category))
+                return category;
+
+            // ④ 同一格没命中时按「同一行」再找一次：表題欄常把「図番号」和「図種」写在相邻的两格里
+            // （例如 `H310U10025 | 枠 … 要領図`），那种写法在逐格判定里是找不到的。
+            string rowCell;
+            string rowTable;
+            string byRow = ClassifyByRow(drawingNumber, tablesDirectory, opts, out rowCell, out rowTable);
+
+            if (string.IsNullOrEmpty(byRow))
+                return string.Empty;
+
+            if (opts != null)
+                opts.Log("[INFO] PdfInfoList：图面分类改按「同一行」命中 —— " + rowTable + "："
+                         + CsvFile.SingleLine(rowCell));
+
+            matchedCell = rowCell;
+            matchedTable = rowTable;
+
+            return byRow;
+        }
 
         // ── 生成 ──────────────────────────────────────────────────────────────
 
@@ -174,36 +291,21 @@ namespace CadPartSplitter
                 Category = string.Empty
             };
 
-            // 图面分类：与 drawing_list.csv 同一套规则 —— 文件名里已经写着图面分类就用文件名，
-            // 否则在 tables\*.csv 的单元格里找「图番号前缀 + 关键字」（关键字含 アセンブリ図 等变体）
+            // 图面分类：特注（文件名第 5 位是 Z）→ 文件名里写着分类 → 逐格找 → 按同一行找，
+            // 与 GUI「判定选中行 / 判定空白行」同一套规则（见 ClassifyCategory）
             string cell;
             string table;
-            info.Category = DrawingListBuilder.Classify(
+            info.Category = ClassifyCategory(
                 info.DrawingNumber, Path.Combine(outputDirectory, TablesFolderName), o, out cell, out table);
             info.MatchedCell = cell;
             info.MatchedTable = table;
 
-            // 取自文件名时没有 table（MatchedTable 为空），单独记一行日志说明理由
-            if (info.Classified && string.IsNullOrEmpty(info.MatchedTable))
+            // 特注 / 取自文件名时没有 table（MatchedTable 为空），单独记一行日志说明理由
+            if (info.Category == SpotCategoryKeyword)
+                o.Log("[INFO] PdfInfoList：文件名第 " + SpotMarkPosition + " 位是 " + SpotMark
+                      + "（特注）—— " + info.DrawingNumber + " → " + SpotCategoryKeyword);
+            else if (info.Classified && string.IsNullOrEmpty(info.MatchedTable))
                 o.Log("[INFO] PdfInfoList：图面分类取自文件名 —— " + info.DrawingNumber + " → " + info.Category);
-
-            // 同一格没命中时按「同一行」再找一次：表題欄常把「図番号」和「図種」写在相邻的两格里
-            // （例如 `H310U10025 | 枠 … 要領図`），那种写法在上面的逐格判定里是找不到的。
-            if (!info.Classified)
-            {
-                string rowCell;
-                string rowTable;
-                string byRow = ClassifyByRow(info.DrawingNumber, Path.Combine(outputDirectory, TablesFolderName), o,
-                                             out rowCell, out rowTable);
-
-                if (!string.IsNullOrEmpty(byRow))
-                {
-                    o.Log("[INFO] PdfInfoList：图面分类改按「同一行」命中 —— " + rowTable + "：" + CsvFile.SingleLine(rowCell));
-                    info.Category = byRow;
-                    info.MatchedCell = rowCell;
-                    info.MatchedTable = rowTable;
-                }
-            }
 
             // 整批共用一份清单：<输出根目录>\classify\PdfInfoList.txt
             string path = Path.Combine(GetClassifyDirectory(outputDirectory, info.DrawingNumber), OutputFileName);
@@ -578,7 +680,7 @@ namespace CadPartSplitter
         /// <param name="drawingNumber">図番号（PDF 文件名去扩展名）。</param>
         /// <param name="opts">参数 / 日志（可为 null）。</param>
         /// <param name="source">依据（清单文件 + 命中的单元格 / 表格 CSV），供日志核对。</param>
-        /// <returns>基本図 / 加工図 / アッセンブリ図 / 要領図；判不出来返回空串。</returns>
+        /// <returns>特注 / 基本図 / 加工図 / アッセンブリ図 / 要領図；判不出来返回空串。</returns>
         public static string ResolveCategory(string outputDirectory, string drawingNumber, DetectorOptions opts,
                                              out string source)
         {
@@ -599,15 +701,16 @@ namespace CadPartSplitter
             string cell;
             string table;
             string tablesDir = Path.Combine(outputDirectory, TablesFolderName);
-            string category = DrawingListBuilder.Classify(drawingNumber, tablesDir, o, out cell, out table);
 
-            // 逐格没命中时按「同一行」再找一次（表題欄常把図番号与図種写在相邻两格里）
-            if (string.IsNullOrEmpty(category))
-                category = ClassifyByRow(drawingNumber, tablesDir, o, out cell, out table);
+            // 特注（文件名第 5 位是 Z）→ 文件名里的分类 → 逐格找 → 同一行找，与清单生成同一套规则
+            string category = ClassifyCategory(drawingNumber, tablesDir, o, out cell, out table);
 
-            source = string.IsNullOrEmpty(table)
-                         ? TablesFolderName + "\\*.csv（没有清单，现判）"
-                         : TablesFolderName + "\\" + table + "（没有清单，现判：" + CsvFile.SingleLine(cell) + "）";
+            if (category == SpotCategoryKeyword)
+                source = SpotBasisText(drawingNumber) + "（没有清单，现判）";
+            else
+                source = string.IsNullOrEmpty(table)
+                             ? TablesFolderName + "\\*.csv（没有清单，现判）"
+                             : TablesFolderName + "\\" + table + "（没有清单，现判：" + CsvFile.SingleLine(cell) + "）";
 
             return category;
         }

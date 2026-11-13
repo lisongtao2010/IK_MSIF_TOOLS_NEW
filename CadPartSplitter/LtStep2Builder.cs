@@ -16,11 +16,12 @@ namespace CadPartSplitter
     /// ,,,,,,,
     /// 片引戸,MEACC428,1,MEACC428,2, …
     /// </code>
-    /// 整理成（一行一个部品，品種 / 品名往下填满；品種表里没有「枠区分」列，该格留空）：
+    /// 整理成（一行一个部品，品種 / 品名往下填满；品種表里没有「枠区分」列，该格留空；
+    /// 表里没有「基本寸法」「切断寸法」列时这两格也留空）：
     /// <code>
-    /// 品種,部品名,枠区分,部品コード,員数
-    /// 片引戸,縦枠上部スペーサー,,MEACC428,1
-    /// 片引戸,小縦枠上部スペーサー,,MEACC428,2
+    /// 品種,部品名,枠区分,部品コード,員数,基本寸法,切断寸法
+    /// 片引戸,縦枠上部スペーサー,,MEACC428,1,,
+    /// 片引戸,小縦枠上部スペーサー,,MEACC428,2,,
     /// </code>
     ///
     /// 收录两种表：
@@ -39,7 +40,9 @@ namespace CadPartSplitter
     /// 1,ロットＮｏ．ラベル,三方枠,1,-,-,LAVS639
     /// </code>
     /// 表头（前 6 行内）同含「部品名」「枠区分」即认这种表：一行一条明细，
-    /// <c>品種</c> 留空（这种表本来就没有品種列）、<c>枠区分</c> 按列名搬 → <c>,ロットＮｏ．ラベル,三方枠,LAVS639,1</c>。
+    /// <c>品種</c> 留空（这种表本来就没有品種列）、<c>枠区分</c> 按列名搬 →
+    /// <c>,ロットＮｏ．ラベル,三方枠,LAVS639,1,-,-</c>（<c>基本寸法 / 切断寸法</c> 也按列名搬，
+    /// 表里没有这一列时该格留空）。
     /// <c>部品コード</c> 可有可无 —— 有些部品表只写「番号 / 部品名 / 枠区分 / 員数 / 基本寸法 / 切断寸法」
     /// （<c>H453U10003.pdf</c> / <c>H453U10004.pdf</c> 就是这种），缺这一列时输出里的 <c>部品コード</c> 恒留空，
     /// 不会因为缺列就把整张表跳过（与 <see cref="LtStep1Builder"/> 的「部品コード 可缺」一致）。
@@ -55,8 +58,9 @@ namespace CadPartSplitter
     ///
     /// 输出：<c>&lt;输出目录&gt;\02_要領図_部品機能情報.csv</c>（旧名 <c>LT_STEP2.csv</c>；
     /// 要領図 = 要領書，部品機能情報 = 部品表。UTF-8 带 BOM + CRLF + RFC 4180），
-    /// 列固定为 品種 / 部品名 / 枠区分 / 部品コード / 員数 —— 下游按固定列取数
-    /// （品種表没有枠区分列 → 该格留空；単純部品表没有品種列 → 该格留空；有的部品表没有部品コード列 → 该格留空）。
+    /// 列固定为 品種 / 部品名 / 枠区分 / 部品コード / 員数 / 基本寸法 / 切断寸法 —— 下游按固定列取数
+    /// （品種表没有枠区分列 → 该格留空；単純部品表没有品種列 → 该格留空；有的部品表没有部品コード列 → 该格留空；
+    /// 表里没有「基本寸法」「切断寸法」列、或那一格是空 → 该格留空，不会因此少一条明细）。
     /// 多张表按文件名顺序追加到同一个文件。只读 <c>tables\*.csv</c>，不改动任何已有产物。
     ///
     /// **只有要領図（要領書）才写这份清单**：图面分类读自分类清单 <c>classify\PdfInfoList.txt</c>
@@ -98,6 +102,15 @@ namespace CadPartSplitter
         private const string FrameKeyword = "枠区分";
 
         /// <summary>
+        /// 「基本寸法」列名（<c>番号 / 部品名 / 枠区分 / 員数 / 基本寸法 / 切断寸法[/ 部品コード]</c>）。
+        /// 有这一列就按列名搬到输出；没有这一列 / 这一格是空 → 输出里该格留空，不影响其它列。
+        /// </summary>
+        private const string BasicSizeKeyword = "基本寸法";
+
+        /// <summary>「切断寸法」列名（与 <see cref="BasicSizeKeyword"/> 同样处理，取不到就留空）。</summary>
+        private const string CutSizeKeyword = "切断寸法";
+
+        /// <summary>
         /// 「品番なし」を表す占位符：<c>－</c>（全角）/ <c>-</c>（半角）/ <c>ー</c>（長音）/ <c>—</c> / <c>–</c> …。
         /// 一整格只由这些符号组成（1 个或几个）时不算品番 —— 明细不收；
         /// 真品番里夹着 <c>-</c>（<c>TJ-3086</c>）不受影响：判定要求「整格都是这些符号」。
@@ -122,10 +135,15 @@ namespace CadPartSplitter
         /// <summary>找表头（品種列 / 重复列名行 / 部品名+枠区分 行）时最多看前几行。</summary>
         private const int MaxHeaderScanRows = 6;
 
-        /// <summary>输出表头：固定 5 列，下游按列取数。</summary>
+        /// <summary>
+        /// 输出表头：固定 7 列，下游按列取数。
+        /// 后两列 <c>基本寸法</c> / <c>切断寸法</c> 是追加的 —— 表里有这一列就搬值，
+        /// 没有这一列（或这一格是空）就留空，不会因此少一条明细。
+        /// </summary>
         private static readonly string[] OutHeader =
         {
-            VarietyKeyword, PartNameKeyword, FrameKeyword, PartCodeKeyword, QuantityKeyword
+            VarietyKeyword, PartNameKeyword, FrameKeyword, PartCodeKeyword, QuantityKeyword,
+            BasicSizeKeyword, CutSizeKeyword
         };
 
         /// <summary>
@@ -382,10 +400,12 @@ namespace CadPartSplitter
             if (starts.Count < 2)
                 return null;    // 只有一块 → 不是「多列重复」
 
-            // 3) 每块：品名（块标题）+ 品番列 + 員数列
+            // 3) 每块：品名（块标题）+ 品番列 + 員数列（+ 基本寸法 / 切断寸法 列，有就搬、没有留空）
             var names = new List<string>();
             var codeColumns = new List<int>();
             var quantityColumns = new List<int>();
+            var basicSizeColumns = new List<int>();
+            var cutSizeColumns = new List<int>();
 
             for (int b = 0; b < starts.Count; b++)
             {
@@ -396,6 +416,8 @@ namespace CadPartSplitter
 
                 int codeOffset = -1;
                 int quantityOffset = -1;
+                int basicSizeOffset = -1;
+                int cutSizeOffset = -1;
 
                 for (int c = start; c <= end && c < rows[blockRow].Length; c++)
                 {
@@ -406,11 +428,19 @@ namespace CadPartSplitter
 
                     if (quantityOffset < 0 && child.IndexOf(QuantityKeyword, StringComparison.Ordinal) >= 0)
                         quantityOffset = c - start;
+
+                    if (basicSizeOffset < 0 && child.IndexOf(BasicSizeKeyword, StringComparison.Ordinal) >= 0)
+                        basicSizeOffset = c - start;
+
+                    if (cutSizeOffset < 0 && child.IndexOf(CutSizeKeyword, StringComparison.Ordinal) >= 0)
+                        cutSizeOffset = c - start;
                 }
 
                 // 块里没有「部品コード」列名时，退回块首列（很多表把品番直接写在标题行那一列下面）
                 codeColumns.Add(start + (codeOffset >= 0 ? codeOffset : 0));
                 quantityColumns.Add(quantityOffset >= 0 ? start + quantityOffset : -1);
+                basicSizeColumns.Add(basicSizeOffset >= 0 ? start + basicSizeOffset : -1);
+                cutSizeColumns.Add(cutSizeOffset >= 0 ? start + cutSizeOffset : -1);
             }
 
             // 4) 明细行：品種往下填满，每块有品番就出一条
@@ -449,12 +479,16 @@ namespace CadPartSplitter
                     if (codeNormalized.IndexOf(PartCodeKeyword, StringComparison.Ordinal) >= 0)
                         continue;   // 表中间重复出现的表头行
 
-                    string quantity = quantityColumns[b] >= 0
-                        ? Cell(row, quantityColumns[b]).Trim()
-                        : string.Empty;
+                    string quantity = CellOf(row, quantityColumns[b]);
+                    string basicSize = CellOf(row, basicSizeColumns[b]);
+                    string cutSize = CellOf(row, cutSizeColumns[b]);
 
-                    // 品種表里没有「枠区分」列 → 该格固定留空（输出列数与単純部品表一致）
-                    detail.Add(new string[] { variety, names[b], string.Empty, code, quantity });
+                    // 品種表里没有「枠区分」列 → 该格固定留空（输出列数与単純部品表一致）；
+                    // 基本寸法 / 切断寸法 同样：这一块没有那一列（或这一格是空）就留空。
+                    detail.Add(new string[]
+                    {
+                        variety, names[b], string.Empty, code, quantity, basicSize, cutSize
+                    });
                 }
             }
 
@@ -467,7 +501,8 @@ namespace CadPartSplitter
         /// 摊平第二种形式：「単純部品表」—— 图纸上普通的部品表
         /// （表头 <c>番号 / 部品名 / 枠区分 / 員数 / 基本寸法 / 切断寸法 / 部品コード</c>，
         /// 没有品種列、也没有重复列名）。一行一条明细：<c>品種</c> 留空，
-        /// <c>部品名 / 枠区分 / 部品コード / 員数</c> 都按列名搬。
+        /// <c>部品名 / 枠区分 / 部品コード / 員数 / 基本寸法 / 切断寸法</c> 都按列名搬
+        /// （表里没有哪一列、或那一格是空 → 该格留空）。
         /// <c>部品コード</c> 列可缺（例如 <c>H453U10003.pdf</c> 只有
         /// <c>番号 / 部品名 / 枠区分 / 員数 / 基本寸法 / 切断寸法</c>）—— 缺这一列时明细里的
         /// <c>部品コード</c> 留空，仍然出明细（不再把整张表当「不是部品表」跳过）。
@@ -490,6 +525,8 @@ namespace CadPartSplitter
             int frameColumn = -1;
             int codeColumn = -1;
             int quantityColumn = -1;
+            int basicSizeColumn = -1;
+            int cutSizeColumn = -1;
 
             // 1) 前 6 行里找表头：必须有「部品名」+「枠区分」；「部品コード」可缺（缺了该格留空）。
             //    表头被拆成两行时（`番号 / 部品名 / 枠区分` 在上面一行、`部品コード / 員数` 落在紧跟的下一行）
@@ -507,22 +544,32 @@ namespace CadPartSplitter
 
                 int code = FindColumn(rows[r], PartCodeKeyword);
                 int quantity = FindColumn(rows[r], QuantityKeyword);
+                int basicSize = FindColumn(rows[r], BasicSizeKeyword);
+                int cutSize = FindColumn(rows[r], CutSizeKeyword);
                 int start = r + 1;
 
                 // 表头拆成两行：只在下一行确实还写着这些列名时才算第二行表头
                 // （不把明细行拿来当表头）
-                if ((code < 0 || quantity < 0) && start < rows.Count)
+                if ((code < 0 || quantity < 0 || basicSize < 0 || cutSize < 0) && start < rows.Count)
                 {
                     int nextCode = code < 0 ? FindColumn(rows[start], PartCodeKeyword) : -1;
                     int nextQuantity = quantity < 0 ? FindColumn(rows[start], QuantityKeyword) : -1;
+                    int nextBasicSize = basicSize < 0 ? FindColumn(rows[start], BasicSizeKeyword) : -1;
+                    int nextCutSize = cutSize < 0 ? FindColumn(rows[start], CutSizeKeyword) : -1;
 
-                    if (nextCode >= 0 || nextQuantity >= 0)
+                    if (nextCode >= 0 || nextQuantity >= 0 || nextBasicSize >= 0 || nextCutSize >= 0)
                     {
                         if (nextCode >= 0)
                             code = nextCode;
 
                         if (nextQuantity >= 0)
                             quantity = nextQuantity;
+
+                        if (nextBasicSize >= 0)
+                            basicSize = nextBasicSize;
+
+                        if (nextCutSize >= 0)
+                            cutSize = nextCutSize;
 
                         start++;    // 第二行也算表头，明细从它的下一行开始
                     }
@@ -532,8 +579,10 @@ namespace CadPartSplitter
                 detailStart = start;
                 nameColumn = name;
                 frameColumn = frame;
-                codeColumn = code;          // -1 = 这张表没有「部品コード」列 → 该格留空
-                quantityColumn = quantity;  // -1 = 没有「員数」列 → 该格留空
+                codeColumn = code;                  // -1 = 这张表没有「部品コード」列 → 该格留空
+                quantityColumn = quantity;          // -1 = 没有「員数」列 → 该格留空
+                basicSizeColumn = basicSize;        // -1 = 没有「基本寸法」列 → 该格留空
+                cutSizeColumn = cutSize;            // -1 = 没有「切断寸法」列 → 该格留空
 
                 break;
             }
@@ -579,15 +628,17 @@ namespace CadPartSplitter
                         continue;   // 表中间重复出现的表头行（部品名 那一格）
                 }
 
-                string frameValue = frameColumn >= 0
-                    ? Cell(row, frameColumn).Trim()
-                    : string.Empty;
-                string quantity = quantityColumn >= 0
-                    ? Cell(row, quantityColumn).Trim()
-                    : string.Empty;
+                string frameValue = CellOf(row, frameColumn);
+                string quantity = CellOf(row, quantityColumn);
+                string basicSize = CellOf(row, basicSizeColumn);
+                string cutSize = CellOf(row, cutSizeColumn);
 
-                // 这种表没有品種列 → 品種留空；枠区分 按列名搬；没有部品コード 列时该格留空
-                detail.Add(new string[] { string.Empty, name, frameValue, code, quantity });
+                // 这种表没有品種列 → 品種留空；枠区分 / 基本寸法 / 切断寸法 按列名搬，
+                // 没有那一列（或这一格是空）→ 该格留空；没有部品コード 列时该格也留空
+                detail.Add(new string[]
+                {
+                    string.Empty, name, frameValue, code, quantity, basicSize, cutSize
+                });
             }
 
             return detail;
@@ -731,6 +782,15 @@ namespace CadPartSplitter
                 s = s.Substring(PartNameKeyword.Length).Trim();
 
             return s;
+        }
+
+        /// <summary>
+        /// 取一格的文本（去首尾空白）：列号是 <c>-1</c>（这张表 / 这一块没有那一列）或越界 → 空串。
+        /// 输出里「取不到就留空」的列（枠区分 / 員数 / 基本寸法 / 切断寸法）都走这里。
+        /// </summary>
+        private static string CellOf(string[] row, int column)
+        {
+            return column < 0 ? string.Empty : Cell(row, column).Trim();
         }
 
         /// <summary>取单元格（越界返回空串）。</summary>

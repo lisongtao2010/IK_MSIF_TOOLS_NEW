@@ -13,6 +13,14 @@ namespace MSIFAITOOLS
     /// 并支持在画面上直接编辑、追加行、删除行，保存后回写数据库。
     /// 由【分类结果】选中 PDF 行后点击【部品信息】/右键菜单/Enter 打开；
     /// 窗口可复用（<see cref="ShowDrawing"/> 切换显示内容）。
+    ///
+    /// <para>
+    /// <b>表格操作</b>：单击 = 只选中<b>这一格</b>（不再整行选中）并<b>直接进入编辑、内容全选</b>，
+    /// 再打一次字就替换掉原来的值（见 <see cref="DgvParts_CellClick"/>）。
+    /// 「部材名」这一格单击时改为弹出输入辅助窗口 <see cref="MemberNamePickerForm"/>
+    /// （候选项 = 部材部品マスタ 的常用部材名；多选用 <c>|</c> 连接，与【CMD 分析】写库的写法一致）。
+    /// 删除 / 追加行以<b>选中单元格所在的行</b>为基准（<see cref="GetSelectedRows"/>）。
+    /// </para>
     /// </summary>
     internal sealed partial class PartBasicInfoForm : Form
     {
@@ -25,7 +33,10 @@ namespace MSIFAITOOLS
         /// <summary>当前显示的 PDF 完整路径。</summary>
         private string _pdfPath = string.Empty;
 
-        /// <summary>指定的数据库路径（为空时使用 <see cref="PartBasicInfoRepository.ResolveDatabasePath"/>）。</summary>
+        /// <summary>
+        /// 指定的数据库路径（由主画面按「&lt;所选 PDF 文件夹&gt;\AiAppData\MSIF_Parts.db」算出并传入；
+        /// 为空时退回 <see cref="PartBasicInfoRepository.ResolveDatabasePath()"/>）。
+        /// </summary>
         private readonly string _databasePath;
 
         /// <summary>填表期间抑制「单元格变更」引起的脏标记。</summary>
@@ -51,6 +62,21 @@ namespace MSIFAITOOLS
 
         /// <summary>是否已经尝试读过部品マスタ（读不到也只试一次，不反复读盘）。</summary>
         private bool _partMasterLoaded;
+
+        /// <summary>
+        /// 「部材名」列的名字（<c>colMemberName</c>）：多值用 <c>|</c> 连接的那一列，
+        /// 单击时弹出输入辅助窗口（<see cref="MemberNamePickerForm"/>）。
+        /// </summary>
+        private const string MemberNameColumnName = "colMemberName";
+
+        /// <summary>
+        /// 部材部品マスタ（部材名 → 部品名）索引：给「部材名」辅助窗口当候选列表用。
+        /// 第一次点「部材名」单元格时读一次（数据库优先，其次 <c>部材部品\部材部品.csv</c>），之后整画面复用。
+        /// </summary>
+        private MemberPartCatalog _memberNameCatalog;
+
+        /// <summary>是否已经尝试读过部材部品マスタ（读不到也只试一次，不反复读盘）。</summary>
+        private bool _memberNameCatalogLoaded;
 
         /// <summary>
         /// 整行背景色（淡绿色）：这一行来自 <b>アッセンブリ図</b> 自身的部品表
@@ -154,7 +180,10 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 创建部品基本信息画面。
         /// </summary>
-        /// <param name="databasePath">数据库文件路径；为空时按 App.config / 程序目录解析。</param>
+        /// <param name="databasePath">
+        /// 数据库文件路径（&lt;所选 PDF 文件夹&gt;\AiAppData\MSIF_Parts.db，由主画面传入）；
+        /// 为空时按 App.config / 程序目录解析。
+        /// </param>
         public PartBasicInfoForm(string databasePath)
         {
             InitializeComponent();
@@ -172,6 +201,15 @@ namespace MSIFAITOOLS
         public string PdfPath
         {
             get { return _pdfPath; }
+        }
+
+        /// <summary>
+        /// 本画面使用的数据库路径（为空 = 按 App.config / 程序目录解析）。
+        /// 主画面在打开前用它判断「图纸文件夹换了没有」——换了就关掉重建，免得写进上一个项目的库。
+        /// </summary>
+        public string DatabasePath
+        {
+            get { return _databasePath; }
         }
 
         /// <summary>
@@ -226,7 +264,7 @@ namespace MSIFAITOOLS
             }
             else if (!File.Exists(databasePath))
             {
-                error = "数据库尚未创建（请先执行【AI 分析】）：\n" + databasePath;
+                error = "数据库尚未创建（请先执行【CMD 分析】或【AI 分析】）：\n" + databasePath;
             }
             else
             {
@@ -512,13 +550,8 @@ namespace MSIFAITOOLS
         {
             DataGridViewRow anchor = null;
 
-            foreach (DataGridViewRow row in dgvParts.SelectedRows)
+            foreach (DataGridViewRow row in GetSelectedRows())
             {
-                if (row.IsNewRow)
-                {
-                    continue;
-                }
-
                 if (anchor == null || row.Index > anchor.Index)
                 {
                     anchor = row;
@@ -538,7 +571,50 @@ namespace MSIFAITOOLS
             return anchor;
         }
 
-        /// <summary>「删除行」：删除表格中选中的行（可按住 Ctrl / Shift 多选）。</summary>
+        /// <summary>
+        /// 当前「选中的行」：表格是单元格选中模式（<c>DataGridViewSelectionMode.CellSelect</c>）时
+        /// <c>SelectedRows</c> 是空的，所以按<b>选中的单元格所在的行</b>收集（同一行只取一次）。
+        /// 整行选中模式（或用户点了行头）时退回 <c>SelectedRows</c>。
+        /// </summary>
+        /// <returns>选中的行（不含新增行；一行都没选中时返回空列表）。</returns>
+        private List<DataGridViewRow> GetSelectedRows()
+        {
+            List<DataGridViewRow> rows = new List<DataGridViewRow>();
+            List<int> usedIndexes = new List<int>();
+
+            foreach (DataGridViewCell cell in dgvParts.SelectedCells)
+            {
+                if (cell == null || cell.RowIndex < 0 || usedIndexes.Contains(cell.RowIndex))
+                {
+                    continue;
+                }
+
+                DataGridViewRow row = dgvParts.Rows[cell.RowIndex];
+
+                if (row.IsNewRow)
+                {
+                    continue;
+                }
+
+                usedIndexes.Add(cell.RowIndex);
+                rows.Add(row);
+            }
+
+            if (rows.Count == 0)
+            {
+                foreach (DataGridViewRow row in dgvParts.SelectedRows)
+                {
+                    if (!row.IsNewRow)
+                    {
+                        rows.Add(row);
+                    }
+                }
+            }
+
+            return rows;
+        }
+
+        /// <summary>「删除行」：删除选中单元格所在的行（按住 Ctrl 选中多格时可一次删多行）。</summary>
         private void BtnDeleteRow_Click(object sender, EventArgs e)
         {
             DeleteSelectedRows();
@@ -549,15 +625,8 @@ namespace MSIFAITOOLS
         {
             dgvParts.EndEdit();
 
-            List<DataGridViewRow> targets = new List<DataGridViewRow>();
-
-            foreach (DataGridViewRow row in dgvParts.SelectedRows)
-            {
-                if (!row.IsNewRow)
-                {
-                    targets.Add(row);
-                }
-            }
+            // 表格是「单元格选中」模式，SelectedRows 通常是空的 → 按选中的单元格收集行
+            List<DataGridViewRow> targets = GetSelectedRows();
 
             if (targets.Count == 0 && dgvParts.CurrentCell != null)
             {
@@ -1578,6 +1647,203 @@ namespace MSIFAITOOLS
             return true;
         }
 
+        /// <summary>
+        /// 单击单元格：只选中<b>这一格</b>（不再整行选中），并<b>直接进入编辑、把内容全选</b>
+        /// （EditMode 是 <c>EditOnKeystrokeOrF2</c>，不手动 BeginEdit 的话要点两次才可以改）。
+        /// <list type="bullet">
+        ///   <item>「部材名」→ 弹出输入辅助窗口（<see cref="ShowMemberNamePicker"/>），不进入普通编辑；</item>
+        ///   <item>只读列（No / 参照元 / 数据来源 / 登录时间）→ 只选中单元格；</item>
+        ///   <item>其它列 → 选中 + 进入编辑 + 全选（再打一个字就替换掉原来的值）。</item>
+        /// </list>
+        /// </summary>
+        private void DgvParts_CellClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (_suppressGridEvents || e.RowIndex < 0 || e.ColumnIndex < 0)
+            {
+                return;
+            }
+
+            if (e.RowIndex >= dgvParts.Rows.Count || e.ColumnIndex >= dgvParts.Columns.Count)
+            {
+                return;
+            }
+
+            DataGridViewCell cell = dgvParts.Rows[e.RowIndex].Cells[e.ColumnIndex];
+
+            if (cell == null || dgvParts.ReadOnly || cell.ReadOnly)
+            {
+                return;
+            }
+
+            // Ctrl / Shift 按下时是「多选单元格」（【删除行】一次删多行）→ 只选中，不进入编辑
+            if ((Control.ModifierKeys & (Keys.Control | Keys.Shift)) != Keys.None)
+            {
+                return;
+            }
+
+            if (IsMemberNameColumn(cell.OwningColumn))
+            {
+                // 部材名 是「多个候选用 | 连接」的列 → 用辅助窗口选择，而不是让用户手打
+                ShowMemberNamePicker(cell);
+                return;
+            }
+
+            BeginCellEditAndSelectAll(cell);
+        }
+
+        /// <summary>
+        /// 让这个单元格进入编辑状态，并把编辑框里的文字全选。
+        /// 已经在编辑<b>同一格</b>时不重做（第二次点击要把光标放在点到的位置，不能又全选）。
+        /// </summary>
+        private void BeginCellEditAndSelectAll(DataGridViewCell cell)
+        {
+            if (cell == null)
+            {
+                return;
+            }
+
+            if (dgvParts.IsCurrentCellInEditMode && ReferenceEquals(dgvParts.CurrentCell, cell))
+            {
+                return;
+            }
+
+            try
+            {
+                dgvParts.CurrentCell = cell;
+                dgvParts.BeginEdit(true);
+            }
+            catch (Exception)
+            {
+                // 下拉列（校验状态）的值不在候选里等情况 → 只选中单元格，不进入编辑
+                return;
+            }
+
+            SelectEditingText();
+        }
+
+        /// <summary>
+        /// 把单元格编辑框（TextBox）里的文字全选；编辑框还没建好时排到消息循环里再试一次
+        /// （DataGridView 在 BeginEdit 之后才真正创建编辑控件）。
+        /// </summary>
+        private void SelectEditingText()
+        {
+            if (!dgvParts.IsCurrentCellInEditMode)
+            {
+                return;
+            }
+
+            TextBox editor = dgvParts.EditingControl as TextBox;
+
+            if (editor != null)
+            {
+                editor.SelectAll();
+                return;
+            }
+
+            if (!dgvParts.IsHandleCreated)
+            {
+                return;
+            }
+
+            BeginInvoke((MethodInvoker)delegate
+            {
+                if (!dgvParts.IsCurrentCellInEditMode)
+                {
+                    return;
+                }
+
+                TextBox late = dgvParts.EditingControl as TextBox;
+
+                if (late != null)
+                {
+                    late.SelectAll();
+                }
+            });
+        }
+
+        /// <summary>这一列是不是「部材名」（<see cref="MemberNameColumnName"/>：多值用 <c>|</c> 连接的那一列）。</summary>
+        private static bool IsMemberNameColumn(DataGridViewColumn column)
+        {
+            return column != null && string.Equals(column.Name, MemberNameColumnName, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 点「部材名」单元格时弹出输入辅助窗口（<see cref="MemberNamePickerForm"/>）：
+        /// 候选项 = 部材部品マスタ 的常用部材名；单元格原来的值如果是 <c>|</c> 分开的多项，
+        /// 那些项也加进候选并预先勾选。确定后把勾选的项用 <c>|</c> 连接写回单元格
+        /// （一项 = 单值，一项都没勾 = 清空；在窗口里手工输入的文字原样写入）。
+        /// </summary>
+        private void ShowMemberNamePicker(DataGridViewCell cell)
+        {
+            if (cell == null)
+            {
+                return;
+            }
+
+            string currentValue = GetCellText(cell.OwningRow, cell.OwningColumn.Name);
+
+            using (MemberNamePickerForm picker =
+                new MemberNamePickerForm(GetMemberNameCatalog(), currentValue))
+            {
+                if (picker.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
+
+                string selectedValue = picker.SelectedValue ?? string.Empty;
+
+                if (string.Equals(selectedValue, currentValue, StringComparison.Ordinal))
+                {
+                    // 值没变 → 不产生「有未保存的修改」
+                    return;
+                }
+
+                if (dgvParts.IsCurrentCellInEditMode)
+                {
+                    // 弹窗前已经进入编辑状态：先退出编辑，免得编辑框把旧值写回去
+                    dgvParts.CancelEdit();
+                }
+
+                cell.Value = selectedValue;
+            }
+        }
+
+        /// <summary>
+        /// 部材部品マスタ 的索引（部材名 一览 + 每个部材名 下的部品名）：给「部材名」辅助窗口当候选列表用。
+        /// 第一次用到时读一次（数据库优先，其次 <c>部材部品\部材部品.csv</c>），之后整画面复用。
+        /// 读不到时返回 <c>null</c> —— 只是候选列表为空（窗口里仍可手工输入），不弹提示。
+        /// </summary>
+        private MemberPartCatalog GetMemberNameCatalog()
+        {
+            if (_memberNameCatalogLoaded)
+            {
+                return _memberNameCatalog;
+            }
+
+            _memberNameCatalogLoaded = true;
+
+            // 第一次可能要打开 SQLite 数据库 / 导入 部材部品.csv → 短暂显示等待光标
+            Cursor previousCursor = Cursor;
+            Cursor = Cursors.WaitCursor;
+
+            try
+            {
+                string searchFrom = _pdfPath.Length > 0 ? Path.GetDirectoryName(_pdfPath) : null;
+
+                _memberNameCatalog = MemberPartCatalogLoader.LoadFor(searchFrom, null);
+            }
+            catch (Exception)
+            {
+                // 部材部品マスタ 读不到 / 格式异常：候选项为空（不去打扰用户）
+            }
+            finally
+            {
+                Cursor = previousCursor;
+            }
+
+            return _memberNameCatalog;
+        }
+
         /// <summary>单元格内容变化时：刷新行颜色、统计与未保存标记。</summary>
         private void DgvParts_CellValueChanged(object sender, DataGridViewCellEventArgs e)
         {
@@ -1614,7 +1880,13 @@ namespace MSIFAITOOLS
             }
         }
 
-        /// <summary>表格内按 Delete 键删除选中的行。</summary>
+        /// <summary>
+        /// 表格内按 Delete 删除选中的行。
+        /// <para>
+        /// 单元格单击就会进入编辑（<see cref="DgvParts_CellClick"/>），编辑中按 Delete 只删单元格里的文字，
+        /// 所以「删行」请用【删除行】按钮 / <see cref="DeleteSelectedRows"/>（未进入编辑时 Delete 仍然删行）。
+        /// </para>
+        /// </summary>
         private void DgvParts_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Delete && !dgvParts.IsCurrentCellInEditMode)

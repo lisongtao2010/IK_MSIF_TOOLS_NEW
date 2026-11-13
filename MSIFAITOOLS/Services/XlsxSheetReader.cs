@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Xml;
+using ExcelDataReader;
 
 namespace MSIFAITOOLS.Services
 {
@@ -12,9 +14,21 @@ namespace MSIFAITOOLS.Services
     ///
     /// <para>
     /// 本工具只需要读 Excel 里的文本（部品コード / 使い分け 等），不写 Excel、不需要样式，
-    /// 所以不引入第三方 Excel 库（ClosedXML / EPPlus / DocumentFormat.OpenXml 都要额外装包），
-    /// 直接用 .NET 自带的 <see cref="ZipArchive"/>（xlsx = zip 包）+
+    /// 所以主路径直接用 .NET 自带的 <see cref="ZipArchive"/>（xlsx = zip 包）+
     /// <see cref="XmlDocument"/> 解 <c>xl/sharedStrings.xml</c> 与 <c>xl/worksheets/sheet1.xml</c>。
+    /// </para>
+    ///
+    /// <para>
+    /// <b>主路径打不开时不直接放弃</b>（图纸文件夹里的 Excel 是别人保存的，什么样的都有），
+    /// 按顺序再试两条路：
+    /// <list type="number">
+    ///   <item>zip 尾部的 EOCD 里「条目数」写错、<see cref="ZipArchive"/> 报
+    ///         「中央ディレクトリの終わりに予期されるエントリの数が…」时，
+    ///         按中央目录里实际的条目数把这两个数字改对，再读一次；</item>
+    ///   <item>还是不行就用 <c>ExcelDataReader</c>（本项目已引用，CadPartSplitter 读部品表也用它；
+    ///         老 <c>.xls</c>（BIFF）这种根本不是 zip 的文件，只有它能读）。</item>
+    /// </list>
+    /// 兜底成功时会在提示里写明「走了哪条兜底、为什么」，日志里一眼能看出来。
     /// </para>
     ///
     /// <para>支持的内容：</para>
@@ -68,7 +82,20 @@ namespace MSIFAITOOLS.Services
             return ReadSheetCore(filePath, sheetName, notes);
         }
 
-        /// <summary><see cref="ReadFirstSheet"/> / <see cref="ReadSheet"/> 的共同实现。</summary>
+        /// <summary>
+        /// <see cref="ReadFirstSheet"/> / <see cref="ReadSheet"/> 的共同实现。
+        ///
+        /// <para>
+        /// 按三条路读，前一条失败才走后面一条（图纸文件夹里的 Excel 是别人保存的，
+        /// 版式 / zip 结构什么样的都有，宁可多试一次，也不要让整份部品表读不出来）：
+        /// </para>
+        /// <list type="number">
+        ///   <item>正常路径：<see cref="ZipArchive"/> + <see cref="XmlDocument"/>；</item>
+        ///   <item>zip 尾部的 EOCD 里「条目数」写错时（.NET 会直接抛异常，Excel 自己却能打开），
+        ///         按中央目录实际条目数修正后重读（见 <see cref="TryRepairZip"/>）；</item>
+        ///   <item>仍读不出时改用 ExcelDataReader（项目已引用；老 <c>.xls</c> 只有它能读）。</item>
+        /// </list>
+        /// </summary>
         private static List<string[]> ReadSheetCore(string filePath, string sheetName, IList<string> notes)
         {
             List<string[]> rows = new List<string[]>();
@@ -79,59 +106,169 @@ namespace MSIFAITOOLS.Services
                 return rows;
             }
 
+            string fileName = Path.GetFileName(filePath);
+
+            // ── ① 正常路径：xlsx = zip 包 ──
+            Exception zipError = null;
+
             try
             {
-                // FileShare.ReadWrite：Excel 正开着这个文件时也能读
-                using (FileStream stream = new FileStream(filePath, FileMode.Open, FileAccess.Read,
-                    FileShare.ReadWrite))
-                using (ZipArchive archive = new ZipArchive(stream, ZipArchiveMode.Read, false, Encoding.UTF8))
+                using (FileStream stream = OpenRead(filePath))
                 {
-                    List<string> sharedStrings = ReadSharedStrings(archive);
-                    bool byName = !string.IsNullOrWhiteSpace(sheetName);
-                    ZipArchiveEntry sheetEntry = byName
-                        ? FindWorksheetEntry(archive, sheetName.Trim())
-                        : FindFirstWorksheetEntry(archive);
+                    return ReadWorkbook(stream, fileName, sheetName, notes);
+                }
+            }
+            catch (Exception ex)
+            {
+                zipError = ex;
+            }
 
-                    if (sheetEntry == null)
+            // ── ② 兜底 1：EOCD 的「条目数」与实际中央目录条目数不一致时，修正后再读 ──
+            try
+            {
+                string repairDetail;
+                MemoryStream repaired = TryRepairZip(filePath, out repairDetail);
+
+                if (repaired != null)
+                {
+                    using (repaired)
                     {
-                        AddNote(notes, Path.GetFileName(filePath) + (byName
-                            ? "：找不到工作表「" + sheetName.Trim() + "」"
-                            : "：找不到工作表（xl/worksheets/sheet1.xml）"));
+                        List<string[]> repairedRows = ReadWorkbook(repaired, fileName, sheetName, notes);
+                        AddNote(notes, fileName + "：" + repairDetail);
 
-                        return rows;
-                    }
-
-                    using (Stream sheetStream = sheetEntry.Open())
-                    {
-                        XmlDocument document = new XmlDocument();
-                        document.Load(sheetStream);
-
-                        XmlNode sheetData = FindDescendant(document.DocumentElement, "sheetData");
-
-                        if (sheetData == null)
-                        {
-                            return rows;
-                        }
-
-                        foreach (XmlNode rowNode in sheetData.ChildNodes)
-                        {
-                            if (rowNode == null || rowNode.NodeType != XmlNodeType.Element ||
-                                !IsName(rowNode, "row"))
-                            {
-                                continue;
-                            }
-
-                            rows.Add(ReadRow(rowNode, sharedStrings));
-                        }
+                        return repairedRows;
                     }
                 }
             }
             catch (Exception ex)
             {
-                AddNote(notes, Path.GetFileName(filePath) + "：读取失败（" + ex.Message + "）");
+                AddNote(notes, fileName + "：修正中央目录条目数后仍然读取失败（" + ex.Message + "）");
+            }
+
+            // ── ③ 兜底 2：ExcelDataReader（能读老 .xls，xlsx 的容错一般也比 ZipArchive 宽）──
+            try
+            {
+                string excelDetail;
+
+                if (TryReadWithExcelDataReader(filePath, sheetName, rows, notes, out excelDetail))
+                {
+                    AddNote(notes, fileName + "：" + excelDetail);
+
+                    return rows;
+                }
+            }
+            catch (Exception)
+            {
+                // 兜底也失败：下面用 ZipArchive 的原始原因报告，用户看得懂是什么问题
+            }
+
+            string reason = zipError == null
+                ? "原因不明"
+                : zipError.GetType().Name + "：" + zipError.Message;
+
+            AddNote(notes, fileName + "：读取失败（" + reason + "）");
+            AddNote(notes, fileName + "：" + DescribeFile(filePath));
+
+            return rows;
+        }
+
+        /// <summary>
+        /// 从 zip 流读工作簿：共享字符串 + 指定（或第一张）工作表 → 「行 → 单元格文本数组」。
+        /// 打不开 / 结构异常时抛异常，由 <see cref="ReadSheetCore"/> 决定走哪条兜底路径。
+        /// </summary>
+        /// <param name="stream">zip 流（文件流，或修正过 EOCD 的内存流）。</param>
+        /// <param name="fileName">日志里的文件名（只用于提示）。</param>
+        /// <param name="sheetName">工作表名；空 = 第一张表。</param>
+        /// <param name="notes">提示（工作表找不到时写一条）。</param>
+        private static List<string[]> ReadWorkbook(Stream stream, string fileName, string sheetName,
+            IList<string> notes)
+        {
+            List<string[]> rows = new List<string[]>();
+
+            using (ZipArchive archive = new ZipArchive(stream, ZipArchiveMode.Read, false, Encoding.UTF8))
+            {
+                List<string> sharedStrings = ReadSharedStrings(archive);
+                bool byName = !string.IsNullOrWhiteSpace(sheetName);
+                ZipArchiveEntry sheetEntry = byName
+                    ? FindWorksheetEntry(archive, sheetName.Trim())
+                    : FindFirstWorksheetEntry(archive);
+
+                if (sheetEntry == null)
+                {
+                    AddNote(notes, fileName + (byName
+                        ? "：找不到工作表「" + sheetName.Trim() + "」"
+                        : "：找不到工作表（xl/worksheets/sheet1.xml）"));
+
+                    return rows;
+                }
+
+                using (Stream sheetStream = sheetEntry.Open())
+                {
+                    XmlDocument document = new XmlDocument();
+                    document.Load(sheetStream);
+
+                    XmlNode sheetData = FindDescendant(document.DocumentElement, "sheetData");
+
+                    if (sheetData == null)
+                    {
+                        return rows;
+                    }
+
+                    foreach (XmlNode rowNode in sheetData.ChildNodes)
+                    {
+                        if (rowNode == null || rowNode.NodeType != XmlNodeType.Element ||
+                            !IsName(rowNode, "row"))
+                        {
+                            continue;
+                        }
+
+                        rows.Add(ReadRow(rowNode, sharedStrings));
+                    }
+                }
             }
 
             return rows;
+        }
+
+        /// <summary>只读打开文件（<c>FileShare.ReadWrite</c>：Excel 正开着这个文件时也能读）。</summary>
+        private static FileStream OpenRead(string filePath)
+        {
+            return new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        }
+
+        /// <summary>
+        /// 读不动时补一行文件信息（大小 + 头部格式）：日志里据此判断是文件被截断 /
+        /// 本来就不是 xlsx（老式 <c>.xls</c>）/ 内容损坏，不用再让用户去翻文件。
+        /// </summary>
+        private static string DescribeFile(string filePath)
+        {
+            try
+            {
+                long size = new FileInfo(filePath).Length;
+                byte[] head = new byte[4];
+                int read;
+
+                using (FileStream stream = OpenRead(filePath))
+                {
+                    read = stream.Read(head, 0, head.Length);
+                }
+
+                bool zip = read >= 2 && head[0] == (byte)'P' && head[1] == (byte)'K';
+
+                // D0 CF 11 E0 = OLE2 容器头（Excel 97-2003 的 .xls）
+                bool ole2 = read == 4 && head[0] == 0xD0 && head[1] == 0xCF && head[2] == 0x11 &&
+                    head[3] == 0xE0;
+
+                return "文件 " + size + " 字节，头部是 " + (zip
+                    ? "zip（xlsx）"
+                    : ole2
+                        ? "OLE2（老式 .xls）"
+                        : "未知格式（可能是 Excel 95 / 文本 / 损坏文件）");
+            }
+            catch (Exception)
+            {
+                return "文件信息读不出来（文件可能已被删除 / 被占用）";
+            }
         }
 
         /// <summary>读 <c>xl/sharedStrings.xml</c>（没有该文件时返回空表）。</summary>
@@ -539,6 +676,318 @@ namespace MSIFAITOOLS.Services
         private static bool IsName(XmlNode node, string localName)
         {
             return string.Equals(node.LocalName ?? node.Name, localName, StringComparison.Ordinal);
+        }
+
+        /// <summary>zip 尾部 EOCD（End Of Central Directory）签名：<c>PK\005\006</c>。</summary>
+        private const uint EndOfCentralDirectorySignature = 0x06054B50;
+
+        /// <summary>中央目录条目（Central Directory File Header）签名：<c>PK\001\002</c>。</summary>
+        private const uint CentralDirectoryEntrySignature = 0x02014B50;
+
+        /// <summary>允许整份读进内存做修正的最大文件大小（再大就算了，别把内存吃掉）。</summary>
+        private const long MaxRepairFileSize = 256L * 1024 * 1024;
+
+        /// <summary>
+        /// 修正「zip 尾部 EOCD 里写的条目数」与「中央目录实际条目数」不一致的问题，
+        /// 返回可以重新交给 <see cref="ZipArchive"/> 的内存流；不需要修正 / 修正不了时返回 <c>null</c>。
+        ///
+        /// <para>
+        /// 背景：图纸文件夹里 <c>H310Z10004.XLS</c> 这类 Excel 自己打得开，但 .NET 的
+        /// <see cref="ZipArchive"/> 报「中央ディレクトリの終わりに予期されるエントリの数が
+        /// 中央ディレクトリ内のエントリの数に対応しません」—— 尾部记录写着「共 N 个条目」，
+        /// 中央目录里实际是 M 个（N ≠ M）。本方法按实际条目数改写 EOCD 里那两个 2 字节字段
+        /// （偏移 +8 = 本盘条目数、+10 = 总条目数），别的字节一个都不动。
+        /// </para>
+        ///
+        /// <para>ZIP64 / 超大文件 / 不是 zip / 条目数本来就对：返回 <c>null</c>（交给后面的兜底）。</para>
+        /// </summary>
+        /// <param name="filePath">xlsx 文件路径。</param>
+        /// <param name="detail">修正说明（成功时给出「原来的数 / 实际的数」，写进日志）。</param>
+        private static MemoryStream TryRepairZip(string filePath, out string detail)
+        {
+            detail = string.Empty;
+
+            byte[] data;
+
+            try
+            {
+                using (FileStream stream = OpenRead(filePath))
+                {
+                    if (stream.Length < 22 || stream.Length > MaxRepairFileSize)
+                    {
+                        return null;
+                    }
+
+                    data = new byte[stream.Length];
+                    int read = 0;
+
+                    while (read < data.Length)
+                    {
+                        int count = stream.Read(data, read, data.Length - read);
+
+                        if (count <= 0)
+                        {
+                            return null;
+                        }
+
+                        read += count;
+                    }
+                }
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
+
+            // ── 找 EOCD：从文件尾部往前找（尾部最多还有 64KB 的注释区）──
+            int eocd = -1;
+            int lowest = Math.Max(0, data.Length - 22 - 0xFFFF);
+
+            for (int i = data.Length - 22; i >= lowest; i--)
+            {
+                if (ReadUInt32(data, i) == EndOfCentralDirectorySignature)
+                {
+                    eocd = i;
+                    break;
+                }
+            }
+
+            if (eocd < 0)
+            {
+                return null;
+            }
+
+            int recorded = ReadUInt16(data, eocd + 10);
+            uint directorySize = ReadUInt32(data, eocd + 12);
+            uint directoryOffset = ReadUInt32(data, eocd + 16);
+
+            // ZIP64（字段写满 0xFF / 0xFFFF）或数值明显不对：不猜，交给后面的兜底
+            if (recorded == 0xFFFF || directorySize == 0xFFFFFFFF || directoryOffset == 0xFFFFFFFF ||
+                directoryOffset >= data.Length)
+            {
+                return null;
+            }
+
+            // ── 按中央目录实际数一遍条目 ──
+            int actual = 0;
+            long position = directoryOffset;
+
+            while (position + 46 <= data.Length &&
+                ReadUInt32(data, (int)position) == CentralDirectoryEntrySignature)
+            {
+                int nameLength = ReadUInt16(data, (int)position + 28);
+                int extraLength = ReadUInt16(data, (int)position + 30);
+                int commentLength = ReadUInt16(data, (int)position + 32);
+
+                position += 46 + nameLength + extraLength + commentLength;
+                actual++;
+            }
+
+            if (actual == 0 || actual == recorded || actual > 0xFFFF)
+            {
+                return null;                // 数得对 / 数不出来：这个错不是本方法能修的
+            }
+
+            // ── 改写 EOCD 的两个「条目数」字段 ──
+            WriteUInt16(data, eocd + 8, (ushort)actual);
+            WriteUInt16(data, eocd + 10, (ushort)actual);
+
+            detail = "xlsx 尾部记录的条目数是 " + recorded + "，中央目录里实际是 " + actual +
+                " 个（Excel 自己打得开），已按实际条目数修正后重读";
+
+            return new MemoryStream(data, false);
+        }
+
+        /// <summary>读小端 2 字节无符号整数（zip 结构一律小端）。</summary>
+        private static int ReadUInt16(byte[] data, int offset)
+        {
+            return data[offset] | (data[offset + 1] << 8);
+        }
+
+        /// <summary>读小端 4 字节无符号整数。</summary>
+        private static uint ReadUInt32(byte[] data, int offset)
+        {
+            return (uint)(data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) |
+                (data[offset + 3] << 24));
+        }
+
+        /// <summary>写小端 2 字节无符号整数（只用于修正 EOCD 的条目数）。</summary>
+        private static void WriteUInt16(byte[] data, int offset, ushort value)
+        {
+            data[offset] = (byte)(value & 0xFF);
+            data[offset + 1] = (byte)((value >> 8) & 0xFF);
+        }
+
+        /// <summary>
+        /// 兜底读取：用 ExcelDataReader（项目已引用，<c>CadPartSplitter.TzJsonBuilder</c> 读部品表也用它）。
+        /// 它按文件内容判断格式：老 <c>.xls</c>（BIFF）这种根本不是 zip 的也能读，
+        /// xlsx 的容错一般也比 <see cref="ZipArchive"/> 宽。
+        /// </summary>
+        /// <param name="filePath">Excel 文件路径。</param>
+        /// <param name="sheetName">工作表名；空 = 第一张表。</param>
+        /// <param name="rows">读到的内容（行 → 单元格文本数组）。</param>
+        /// <param name="notes">提示（找不到指定工作表时写一条）。</param>
+        /// <param name="detail">成功说明（写进日志：为什么走了这条兜底）。</param>
+        /// <returns>工作簿打得开（哪怕一条明细都没有）返回 <c>true</c>；打不开时返回 <c>false</c>。</returns>
+        private static bool TryReadWithExcelDataReader(string filePath, string sheetName,
+            List<string[]> rows, IList<string> notes, out string detail)
+        {
+            detail = string.Empty;
+
+            ExcelReaderConfiguration configuration = new ExcelReaderConfiguration
+            {
+                // 老 .xls 没写代码页时按日文 Shift-JIS 解（与 CadPartSplitter 的部品表读取一致）
+                FallbackEncoding = Encoding.GetEncoding(932),
+                LeaveOpen = false
+            };
+
+            using (FileStream stream = OpenRead(filePath))
+            using (IExcelDataReader reader = ExcelReaderFactory.CreateReader(stream, configuration))
+            {
+                bool byName = !string.IsNullOrWhiteSpace(sheetName);
+                string wanted = byName ? sheetName.Trim() : string.Empty;
+                int index = 0;
+
+                while (true)
+                {
+                    index++;
+
+                    string name = ReadSheetName(reader, index);
+                    bool match = byName
+                        ? string.Equals(name, wanted, StringComparison.Ordinal)
+                        : index == 1;
+
+                    if (match)
+                    {
+                        ReadAllRows(reader, rows);
+                        detail = "ZipArchive 打不开，改用 ExcelDataReader 读取成功";
+                        return true;
+                    }
+
+                    // 不是要找的表：先把这张表的行读到底再换下一张
+                    // （个别格式不读完就 NextResult 会读不出后面的表）
+                    while (reader.Read())
+                    {
+                    }
+
+                    if (!reader.NextResult())
+                    {
+                        break;
+                    }
+                }
+
+                // 工作簿打得开，但没有要找的那张表：与正常路径同样的提示
+                if (byName)
+                {
+                    AddNote(notes, Path.GetFileName(filePath) + "：找不到工作表「" + wanted + "」");
+                }
+
+                detail = "ZipArchive 打不开，改用 ExcelDataReader 打开了工作簿";
+                return true;
+            }
+        }
+
+        /// <summary>取当前工作表名；读不到时用「表N」占位（只影响日志与提示）。</summary>
+        private static string ReadSheetName(IExcelDataReader reader, int index)
+        {
+            try
+            {
+                string name = reader.Name;
+
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    return name.Trim();
+                }
+            }
+            catch (NotSupportedException)
+            {
+                // 个别格式不带表名
+            }
+            catch (InvalidOperationException)
+            {
+                // 同上
+            }
+
+            return "表" + index.ToString(CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// 把当前工作表整张读成「行 → 单元格文本数组」（空行也保留，行号才对应得上 Excel）。
+        /// 单个单元格读失败只让那一格变成空串，不打断整张表。
+        /// </summary>
+        private static void ReadAllRows(IExcelDataReader reader, List<string[]> rows)
+        {
+            while (reader.Read())
+            {
+                int count = reader.FieldCount;
+                string[] row = new string[count];
+
+                for (int c = 0; c < count; c++)
+                {
+                    object value;
+
+                    try
+                    {
+                        value = reader.GetValue(c);
+                    }
+                    catch (Exception)
+                    {
+                        value = null;           // 损坏的单元格：当空格处理
+                    }
+
+                    row[c] = ToText(value);
+                }
+
+                rows.Add(row);
+            }
+        }
+
+        /// <summary>
+        /// 单元格值 → 文本：字符串原样，数字去掉多余的 <c>.0</c>（員数 1 不写成 1.0），
+        /// 日期写成 <c>yyyy-MM-dd</c>。与 <c>CadPartSplitter.TzJsonBuilder</c> 的格式化一致，
+        /// 两条读取路径读出来的表能对得上。
+        /// </summary>
+        private static string ToText(object value)
+        {
+            if (value == null)
+            {
+                return string.Empty;
+            }
+
+            string text = value as string;
+
+            if (text != null)
+            {
+                return text;
+            }
+
+            if (value is bool)
+            {
+                return ((bool)value) ? "TRUE" : "FALSE";
+            }
+
+            if (value is DateTime)
+            {
+                return ((DateTime)value).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            }
+
+            if (value is double || value is float || value is decimal)
+            {
+                double number = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+
+                if (Math.Abs(number - Math.Round(number)) < 1e-9)
+                {
+                    return ((long)Math.Round(number)).ToString(CultureInfo.InvariantCulture);
+                }
+
+                return number.ToString("0.########", CultureInfo.InvariantCulture);
+            }
+
+            return Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
         }
 
         private static void AddNote(IList<string> notes, string message)

@@ -16,10 +16,10 @@ namespace MSIFAITOOLS.Services
             ExitCode = -1;
         }
 
-        /// <summary>始终为 true：分割代码就在本程序里，不存在「找不到外部程序」的情况。</summary>
+        /// <summary>找到并成功启动了外部 CadPartSplitter.exe 时为 true（找不到时由调用方跳过第 1 步）。</summary>
         public bool ExeFound { get; set; }
 
-        /// <summary>实际执行分割的程序路径（就是本程序自己的 exe 路径）。</summary>
+        /// <summary>实际执行的 CadPartSplitter.exe 完整路径（找不到时为 null）。</summary>
         public string ExePath { get; set; }
 
         /// <summary>退出码为 0 时为 true（含「该文件夹下没有可处理的 PDF」这种情况）。</summary>
@@ -42,30 +42,39 @@ namespace MSIFAITOOLS.Services
     }
 
     /// <summary>
-    /// 在本进程内执行「零件分割」（原 <c>CadPartSplitter</c> 工程的源码已整体并入本程序）。
+    /// 以子进程方式启动独立的 <c>CadPartSplitter.exe</c>，做「零件分割」。
     ///
-    /// 合并前这里是 <c>Process.Start</c> 拉起独立的 <c>CadPartSplitter.exe</c>，原因有两个：
-    ///   * 两边平台不同（本程序 AnyCPU，分割工程 x64 —— OpenCvSharp4 只带 x64 原生库）；
-    ///   * 两边原生 DLL 撞名（Docnet.Core 的 pdfium.dll 与 PdfiumViewer 的 pdfium.dll 同名）。
-    /// 合并后这些冲突都已消除：
-    ///   * 本程序改为 x64（<c>MSIFAITOOLS.csproj</c> 里 <c>PlatformTarget</c>），与 OpenCvSharp4 一致；
-    ///   * PDF 渲染统一走 PdfiumViewer，不再引用 Docnet.Core，pdfium.dll 只留一份；
-    ///   * PdfPig 统一到 0.1.16；
-    ///   * 分割源码（<c>CadPartSplitter</c> 命名空间）直接编译进 MSIFAITOOLS.exe，
-    ///     所以这里改成直接调用 <see cref="CadPartSplitter.BatchRunner.Run"/>，不再有子进程。
+    /// 之所以走外部程序（而不是在本进程内调用）：
+    ///   * 分割工程自带 OpenCvSharp4 的 x64 原生库与 pdfium.dll，单独一个 exe 更好维护，
+    ///     也能单独打开它的界面 / 命令行调试；
+    ///   * 升级分割逻辑时只替换 <c>CadPartSplitter.exe</c>，不必重新编译整个 MSIF AI TOOLS。
+    /// （<c>MSIFAITOOLS.csproj</c> 里仍链接着一份分割源码，只为复用它的选项类型
+    ///  <see cref="CadPartSplitter.DetectorOptions"/> 拼日志文案；【开始分解】执行的是本类找到的 exe。）
     ///
-    /// 对调用方的约定保持不变：
-    ///   * 输出目录仍是 <c>&lt;输入文件夹&gt;\AiAppData\&lt;图纸名&gt;</c>；
-    ///   * 逐行日志照样回调给 <c>onLog</c>（含 <c>[DONE]</c> / <c>[批量完成]</c> 汇总行）；
-    ///   * 退出码语义不变：0 = 全部成功（含「没有可处理的 PDF」），1 = 输入无效，2 = 有失败项。
+    /// exe 查找顺序（第一个存在的就用它）：
+    ///   1. 环境变量 <c>CADPARTSPLITTER_EXE</c> 指定的路径；
+    ///   2. <c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c>
+    ///      —— VS 里 F5 时即 <c>MSIFAITOOLS\bin\Debug\CadPartSplitter\CadPartSplitter.exe</c>；
+    ///   3. <c>&lt;程序目录&gt;\CadPartSplitter.exe</c>（不分子文件夹的部署方式）；
+    ///   4. 开发目录兜底：<c>&lt;程序目录&gt;\..\CadPartSplitter\CadPartSplitter.exe</c>、
+    ///      <c>&lt;程序目录&gt;\..\..\CadPartSplitter\bin\Debug\CadPartSplitter.exe</c>、
+    ///      <c>...\bin\Release\CadPartSplitter.exe</c> 等（应对输出目录被改到别处的老工程设置）。
+    ///
+    /// 对调用方的约定：
+    ///   * 输出目录：<c>&lt;输入文件夹&gt;\AiAppData\&lt;图纸名&gt;</c>（不传第二个参数，由 exe 自己推导）；
+    ///   * 逐行日志：把 exe 的 stdout / stderr 逐行回调给 <c>onLog</c>（含 <c>[DONE]</c> / <c>[批量完成]</c> 汇总行）；
+    ///   * 退出码语义：0 = 全部成功（含「没有可处理的 PDF」），1 = 输入无效 / 找不到 exe，2 = 有失败项。
     /// </summary>
     internal static class CadPartSplitterRunner
     {
-        /// <summary>原独立程序的名称（仅保留给界面提示文案引用，已不再启动它）。</summary>
+        /// <summary>外部执行程序的名称。</summary>
         public const string ExeFileName = "CadPartSplitter.exe";
 
-        /// <summary>原「显式指定 CadPartSplitter.exe 路径」的环境变量（合并后不再使用，保留以免调用方编译不过）。</summary>
+        /// <summary>显式指定 CadPartSplitter.exe 路径的环境变量（优先级最高）。</summary>
         public const string ExePathEnvironmentVariable = "CADPARTSPLITTER_EXE";
+
+        /// <summary>exe 默认所在子目录名（&lt;程序目录&gt;\CadPartSplitter\）。</summary>
+        public const string ExeFolderName = "CadPartSplitter";
 
         /// <summary>最多缓存多少行输出（只用于失败时提示，不落盘，防止内存无限增长）。</summary>
         private const int MaxBufferedLines = 4000;
@@ -74,43 +83,86 @@ namespace MSIFAITOOLS.Services
         private const int TailLineCount = 8;
 
         /// <summary>
-        /// 执行者路径：分割代码已编译进本程序，这里返回本程序自身的 exe 路径（供界面显示）。
-        /// 方法名沿用旧名，调用方无须改动；不再查找任何外部 exe。
+        /// 查找要执行的 <c>CadPartSplitter.exe</c>（顺序见本类型注释）。
+        /// 找不到时返回 null，由 <see cref="RunBatch"/> 转成「已跳过第 1 步」的警告。
         /// </summary>
         public static string FindExePath()
         {
+            // 1. 环境变量优先：便于临时指向别的版本 / 别的目录
+            string configured = null;
+
             try
             {
-                System.Reflection.Assembly entry = System.Reflection.Assembly.GetEntryAssembly();
+                configured = Environment.GetEnvironmentVariable(ExePathEnvironmentVariable);
+            }
+            catch (Exception)
+            {
+                // 读不到环境变量就按默认规则继续找
+            }
 
-                if (entry != null && !string.IsNullOrEmpty(entry.Location))
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                configured = configured.Trim().Trim('"');
+
+                try
                 {
-                    return entry.Location;
+                    if (File.Exists(configured))
+                    {
+                        return Path.GetFullPath(configured);
+                    }
+                }
+                catch (Exception)
+                {
+                    // 环境变量里是非法路径，忽略它
                 }
             }
-            catch (Exception)
+
+            string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+
+            // 2. 默认位置（<程序目录>\CadPartSplitter\CadPartSplitter.exe）
+            // 3. 同级（<程序目录>\CadPartSplitter.exe）
+            // 4. 开发目录兜底（输出目录被改到别处时的老工程设置）
+            string[] candidates = new string[]
             {
-                // 取不到入口程序集时退回 BaseDirectory 拼装
+                Path.Combine(baseDirectory, ExeFolderName, ExeFileName),
+                Path.Combine(baseDirectory, ExeFileName),
+                Path.Combine(baseDirectory, "..", ExeFolderName, ExeFileName),
+                Path.Combine(baseDirectory, "..", "..", ExeFolderName, "bin", "Debug", ExeFileName),
+                Path.Combine(baseDirectory, "..", "..", ExeFolderName, "bin", "Release", ExeFileName),
+                Path.Combine(baseDirectory, "..", "..", "..", ExeFolderName, "bin", "Debug", ExeFileName)
+            };
+
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                try
+                {
+                    if (File.Exists(candidates[i]))
+                    {
+                        return Path.GetFullPath(candidates[i]);
+                    }
+                }
+                catch (Exception)
+                {
+                    // 路径非法就跳过
+                }
             }
 
-            try
-            {
-                return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "MSIFAITOOLS.exe");
-            }
-            catch (Exception)
-            {
-                return null;
-            }
+            return null;
         }
 
         /// <summary>
-        /// 在本进程内分割该文件夹下的所有 PDF（原 <c>CadPartSplitter.exe &lt;文件夹&gt;</c> 的等价行为）。
+        /// 启动 <see cref="ExeFileName"/> 批量分割该文件夹下的所有 PDF
+        /// （等价于命令行 <c>CadPartSplitter.exe &lt;文件夹&gt;</c>）。
         ///
         /// 说明：
         ///   * 同步阻塞，几十毫秒到数分钟（取决于 PDF 数量），界面线程请放在 Task.Run 里调用；
-        ///   * 输出目录与合并前一致：&lt;文件夹&gt;\AiAppData\&lt;图纸名&gt;，与本工具的分解输出目录相同，文件名互不冲突；
-        ///   * 逐行日志回调给 <paramref name="onLog"/>（可能就是调用线程，界面更新请自行 Invoke）；
-        ///   * 任何异常都不向外抛出，以 <see cref="CadPartSplitResult.Success"/> = false +
+        ///   * 输出目录：&lt;文件夹&gt;\AiAppData\&lt;图纸名&gt;（不传第二个参数，由 exe 自己推导），
+        ///     与本工具的分解输出目录相同，文件名互不冲突；
+        ///   * exe 的 stdout / stderr 逐行回调给 <paramref name="onLog"/>
+        ///     （在 exe 的输出线程上触发，界面更新请自行 Invoke），
+        ///     其中 <c>[DONE]</c> / <c>[批量完成]</c> 行会填进 <see cref="CadPartSplitResult.Summary"/>；
+        ///   * 找不到 exe / 文件夹不存在 / 启动失败等任何情况都不向外抛出，
+        ///     以 <see cref="CadPartSplitResult.Success"/> = false +
         ///     <see cref="CadPartSplitResult.ErrorMessage"/> 返回。
         /// </summary>
         /// <param name="folder">待处理的 PDF 文件夹。</param>
@@ -122,9 +174,11 @@ namespace MSIFAITOOLS.Services
             List<string> lines = new List<string>();
             Stopwatch watch = Stopwatch.StartNew();
 
-            // 源码已并入本程序：不再存在「找不到外部程序」这种情况
-            result.ExeFound = true;
-            result.ExePath = FindExePath();
+            // 先定位外部程序（找不到时只记警告，不抛异常 —— 第 2 步照常执行）
+            string exePath = FindExePath();
+
+            result.ExeFound = !string.IsNullOrEmpty(exePath);
+            result.ExePath = exePath;
 
             if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
             {
@@ -168,51 +222,66 @@ namespace MSIFAITOOLS.Services
 
             try
             {
-                CadPartSplitter.DetectorOptions options = new CadPartSplitter.DetectorOptions();
-
-                // 输出根目录留空 → <输入文件夹>\AiAppData，每张图纸再各自一个子文件夹
-                options.OutputDirectory = null;
-                options.Logger = onLine;
-
-                onLine("[INFO] 零件分割：直接调用本程序内的分割模块（不再启动 CadPartSplitter.exe）");
-                onLine("[INFO] 输出目录："
-                       + CadPartSplitter.DetectorOptions.GetDefaultBatchOutputDirectory(folder));
-
-                // 与合并前完全一致：仅当前文件夹、不递归、页码 0、DPI 300（DetectorOptions 的默认值）
-                List<CadPartSplitter.BatchItemResult> items =
-                    CadPartSplitter.BatchRunner.Run(folder, options, false, null);
-
-                int ok = 0;
-
-                foreach (CadPartSplitter.BatchItemResult item in items)
+                if (string.IsNullOrEmpty(exePath))
                 {
-                    if (item.Success)
-                    {
-                        ok++;
-                    }
+                    // 找不到 exe：不阻断第 2 步，界面会显示「已跳过 CadPartSplitter 零件分割」
+                    result.ExitCode = 1;
+                    result.ErrorMessage =
+                        "找不到 " + ExeFileName + "：请把它放到 "
+                        + Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ExeFolderName, ExeFileName)
+                        + "，或用环境变量 " + ExePathEnvironmentVariable + " 指定完整路径";
+
+                    onLine("[ERROR] " + result.ErrorMessage);
                 }
-
-                int failed = items.Count - ok;
-
-                if (items.Count == 0)
+                else
                 {
-                    onLine("[DONE] 该文件夹下没有可处理的 PDF。");
-                }
-                else if (failed > 0)
-                {
-                    // 汇总行由 BatchRunner 自己输出（[批量完成] …），这里只补失败清单，方便界面定位
-                    onLine("[WARN] 失败清单：");
+                    ProcessStartInfo startInfo = new ProcessStartInfo();
+                    startInfo.FileName = exePath;
 
-                    foreach (CadPartSplitter.BatchItemResult item in items)
+                    // 只传输入文件夹：输出根目录由 exe 自己推导为
+                    // <输入文件夹>\AiAppData，每张图纸再各自一个子文件夹
+                    startInfo.Arguments = QuoteArgument(folder);
+
+                    // 以 exe 所在目录为工作目录，避免 exe 依赖「当前目录」找原生 dll / Prompts
+                    startInfo.WorkingDirectory = Path.GetDirectoryName(exePath)
+                                                 ?? AppDomain.CurrentDomain.BaseDirectory;
+                    startInfo.UseShellExecute = false;
+                    startInfo.CreateNoWindow = true;
+                    startInfo.RedirectStandardOutput = true;
+                    startInfo.RedirectStandardError = true;
+                    startInfo.StandardOutputEncoding = Encoding.UTF8;
+                    startInfo.StandardErrorEncoding = Encoding.UTF8;
+
+                    onLine("[INFO] 零件分割：启动外部程序 " + exePath);
+                    onLine("[INFO] 命令行：\"" + exePath + "\" " + startInfo.Arguments);
+                    onLine("[INFO] 输出根目录："
+                           + CadPartSplitter.DetectorOptions.GetDefaultBatchOutputDirectory(folder));
+
+                    using (Process process = new Process())
                     {
-                        if (!item.Success)
+                        process.StartInfo = startInfo;
+
+                        // exe 的 stdout / stderr 逐行转发（[CAD] 前缀由调用方自己加）
+                        process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
                         {
-                            onLine("        " + Path.GetFileName(item.InputFile) + " → " + item.ErrorMessage);
-                        }
+                            onLine(e.Data);
+                        };
+                        process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                        {
+                            onLine(e.Data);
+                        };
+
+                        process.Start();
+                        process.BeginOutputReadLine();
+                        process.BeginErrorReadLine();
+                        process.WaitForExit();
+
+                        // 再等一次：让异步读流把尾部几行也回调完（.NET Framework 的既有行为）
+                        process.WaitForExit();
+
+                        result.ExitCode = process.ExitCode;
                     }
                 }
-
-                result.ExitCode = failed > 0 ? 2 : 0;
             }
             catch (Exception ex)
             {
@@ -253,7 +322,7 @@ namespace MSIFAITOOLS.Services
             switch (exitCode)
             {
                 case 1:
-                    return "输入无效（退出码 1）";
+                    return "输入无效 / 找不到 CadPartSplitter.exe（退出码 1）";
 
                 case 2:
                     return "有部分 PDF 分割失败（退出码 2），详见上方 [CAD] 日志";
@@ -261,6 +330,32 @@ namespace MSIFAITOOLS.Services
                 default:
                     return "进程异常结束（退出码 " + exitCode + "）";
             }
+        }
+
+        /// <summary>
+        /// 把路径包成一个命令行参数：含空格 / 制表符 / 引号时加双引号，
+        /// 末尾的反斜杠双写（否则会和结尾引号连成 <c>\"</c> 造成误转义）。
+        /// </summary>
+        private static string QuoteArgument(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "\"\"";
+            }
+
+            if (value.IndexOf(' ') < 0 && value.IndexOf('\t') < 0 && value.IndexOf('"') < 0)
+            {
+                return value;
+            }
+
+            string escaped = value.Replace("\"", "\\\"");
+
+            if (escaped.EndsWith("\\", StringComparison.Ordinal))
+            {
+                escaped += "\\";
+            }
+
+            return "\"" + escaped + "\"";
         }
 
         /// <summary>

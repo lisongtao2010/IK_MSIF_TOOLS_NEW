@@ -9,9 +9,9 @@ namespace CadPartSplitter
     /// 「PDF 信息清单」维护窗口：直接编辑整批共用的
     /// <c>&lt;输出根目录&gt;\classify\PdfInfoList.txt</c>（図番号 / 文件名 / 图面分类 / 分类依据）。
     ///
-    /// 为什么需要它：图面分类是自动判出来的（在 <c>tables\*.csv</c> 的单元格里找
-    /// 「図番号前 4 位 + 基本図 / 加工図 / アッセンブリ図 / 要領図」），表題欄写得不规范、
-    /// 或者在图纸上根本看不出来时这一列就会**空着**。空着会导致
+    /// 为什么需要它：图面分类是自动判出来的（文件名第 5 位是 <c>Z</c> → 特注；否则在
+    /// <c>tables\*.csv</c> 的单元格里找「図番号前 4 位 + 基本図 / 加工図 / アッセンブリ図 / 要領図」），
+    /// 表題欄写得不规范、或者在图纸上根本看不出来时这一列就会**空着**。空着会导致
     /// <c>01_アッセンブリ図_部品機能情報.csv</c> / <c>01_アッセンブリ図_要領図.csv</c> /
     /// <c>02_要領図_部品機能情報.csv</c> 这些「只有特定图种才生成」的产物不落盘。
     /// 所以这里给一个人工兜底：在表格里把「图面分类」填上 / 选上，保存后下一轮分割直接生效。
@@ -25,8 +25,15 @@ namespace CadPartSplitter
     /// </summary>
     public partial class PdfInfoEditorForm : Form
     {
-        /// <summary>「图面分类」下拉里给的四类（与 <see cref="DrawingListBuilder"/> 的关键字一致）。</summary>
-        private static readonly string[] CategoryChoices = { "基本図", "加工図", "アッセンブリ図", "要領図" };
+        /// <summary>
+        /// 「图面分类」下拉里给的四类（与 <see cref="DrawingListBuilder"/> 的关键字一致），
+        /// 再加「特注」（<see cref="PdfInfoListBuilder.SpotCategoryKeyword"/>：文件名第 5 位是 <c>Z</c>
+        /// 的图纸）—— 自动判定会填这个值，手工补的时候下拉里也要能选到。
+        /// </summary>
+        private static readonly string[] CategoryChoices =
+        {
+            "基本図", "加工図", "アッセンブリ図", "要領図", PdfInfoListBuilder.SpotCategoryKeyword
+        };
 
         /// <summary>控件提示（字段持有，避免被 GC 掉）。</summary>
         private readonly ToolTip _tip = new ToolTip();
@@ -569,7 +576,7 @@ namespace CadPartSplitter
 
             if (category.Length == 0)
             {
-                SetStatus("先在「分类：」里选一个（基本図 / 加工図 / アッセンブリ図 / 要領図）。");
+                SetStatus("先在「分类：」里选一个（基本図 / 加工図 / アッセンブリ図 / 要領図 / 特注）。");
                 return;
             }
 
@@ -609,9 +616,9 @@ namespace CadPartSplitter
         }
 
         /// <summary>
-        /// 对指定行重跑自动判定：读这张图自己的 <c>tables\*.csv</c>
-        /// （逐格找 → 找不到再按「同一行」找，与 <see cref="PdfInfoListBuilder.Build"/> 完全同一套规则），
-        /// 命中就填「图面分类 + 分类依据」。
+        /// 对指定行重跑自动判定：与 <see cref="PdfInfoListBuilder.Build"/> 完全同一套规则
+        /// （文件名第 5 位是 <c>Z</c> → 特注 → 文件名里的分类 → 逐格找 → 找不到再按「同一行」找，
+        /// 表格读这张图自己的 <c>tables\*.csv</c>），命中就填「图面分类 + 分类依据」。
         /// </summary>
         /// <param name="rows">要判定的行。</param>
         /// <param name="onlyEmpty">true = 跳过已经有分类的行。</param>
@@ -644,11 +651,10 @@ namespace CadPartSplitter
                 string cell = null;
                 string table = null;
 
-                // 文件名里已经写着图面分类的（…_アッセンブリ図.pdf），没有 tables 目录也能判
-                string category = DrawingListBuilder.Classify(number, tablesDirectory, opts, out cell, out table);
-
-                if (string.IsNullOrEmpty(category) && tablesDirectory != null)
-                    category = PdfInfoListBuilder.ClassifyByRow(number, tablesDirectory, opts, out cell, out table);
+                // 特注（文件名第 5 位是 Z）→ 文件名里写着图面分类 → 逐格找 → 按同一行找，
+                // 与 PdfInfoListBuilder.Build 完全同一套规则；文件名里写着分类的，没有 tables 目录也能判
+                string category = PdfInfoListBuilder.ClassifyCategory(number, tablesDirectory, opts,
+                                                                     out cell, out table);
 
                 if (string.IsNullOrEmpty(category))
                 {

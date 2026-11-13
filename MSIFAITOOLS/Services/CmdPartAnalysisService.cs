@@ -12,6 +12,12 @@ namespace MSIFAITOOLS.Services
     /// 用 <c>xy.txt</c> 校验后登录到与【AI 分析】完全相同的 SQLite 表
     /// （<see cref="PartBasicInfoRepository.TableName"/>）。
     ///
+    /// <para>
+    /// 数据库文件放在「<b>&lt;所选 PDF 文件夹&gt;\AiAppData\MSIF_Parts.db</b>」：
+    /// 跟着图纸文件夹走（一个项目一份库，拷走文件夹就带走了部品数据），
+    /// 路径由 <see cref="PartBasicInfoRepository.ResolveDatabasePath(string)"/> 算出。
+    /// </para>
+    ///
     /// 与【AI 分析】（<see cref="PartAnalysisService"/>）的区别只在「数据从哪儿来」：
     ///   · AI 分析：plu_table.txt → 送 AI → 解析 AI 返回结果；
     ///   · CMD 分析：01_アッセンブリ図_部品機能情報.csv → 本工具自己的列名映射 → 部品明细。
@@ -67,14 +73,22 @@ namespace MSIFAITOOLS.Services
     {
         private readonly string _databasePath;
 
+        /// <summary>调用方是否明确指定了数据库路径（false = 按分解输出目录 &lt;PDF 文件夹&gt;\AiAppData 自动决定）。</summary>
+        private readonly bool _databasePathExplicit;
+
         public CmdPartAnalysisService(string databasePath)
         {
-            _databasePath = string.IsNullOrWhiteSpace(databasePath)
-                ? PartBasicInfoRepository.ResolveDatabasePath()
-                : databasePath;
+            _databasePathExplicit = !string.IsNullOrWhiteSpace(databasePath);
+            _databasePath = _databasePathExplicit
+                ? databasePath.Trim()
+                : PartBasicInfoRepository.ResolveDatabasePath();
         }
 
-        /// <summary>本次使用的数据库路径。</summary>
+        /// <summary>
+        /// 构造时记下的数据库路径。
+        /// 自动模式（构造时传空）下这只是打开前的默认值 —— 实际使用的路径在
+        /// <see cref="AnalyzeAndSave"/> 里按分解输出目录（&lt;PDF 文件夹&gt;\AiAppData）决定。
+        /// </summary>
         public string DatabasePath
         {
             get { return _databasePath; }
@@ -115,17 +129,47 @@ namespace MSIFAITOOLS.Services
         public PartAnalysisSummary AnalyzeAndSave(IList<PdfClassification> classifications,
             string outputDirectory, Action<LogKind, string> onLog, CmdAnalysisStepKind stepKind)
         {
+            return AnalyzeAndSave(classifications, outputDirectory, onLog, stepKind, false);
+        }
+
+        /// <summary>
+        /// 同上，并决定是否执行「<b>第 0 步 · 特注品.json 维护</b>」
+        /// （界面上勾选 checkbox 时传 <c>true</c>）。
+        /// <para>
+        /// 第 0 步（<see cref="CmdTzJsonMaintainer"/>）：遍历 PDF 文件夹下文件名第 5 位是 <c>Z</c>
+        /// 的 xlsx，用 AI 判定部品表里的条目是否要追加进 <c>classify\特注品.json</c>，AI 说要加的才加。
+        /// 它<b>排在「最前面 · 特注品 CSV 生成」之前</b>：json 先补全，后面那步与第 4 步都能读到更完整的内容。
+        /// </para>
+        /// <para>
+        /// 只跑第 0 步（<see cref="CmdAnalysisStepKind.MaintainTzJson"/>）时到此结束，不写数据库。
+        /// </para>
+        /// </summary>
+        /// <param name="classifications">一览（分类结果）数据。</param>
+        /// <param name="outputDirectory">分解输出根目录（&lt;PDF 文件夹&gt;\AiAppData）。</param>
+        /// <param name="onLog">日志回调（kind, message）。</param>
+        /// <param name="stepKind">要执行的步骤（主按钮传 <see cref="CmdAnalysisStepKind.All"/>）。</param>
+        /// <param name="maintainTzJson">是否执行第 0 步 特注品.json 维护（AI 判定）。</param>
+        public PartAnalysisSummary AnalyzeAndSave(IList<PdfClassification> classifications,
+            string outputDirectory, Action<LogKind, string> onLog, CmdAnalysisStepKind stepKind,
+            bool maintainTzJson)
+        {
             if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
             {
                 throw new DirectoryNotFoundException(
                     "找不到分解输出目录（请先执行【开始分解】）：" + outputDirectory);
             }
 
-            PartAnalysisSummary summary = new PartAnalysisSummary(_databasePath);
+            // 部品基本信息数据库放在「所选 PDF 文件夹\AiAppData\MSIF_Parts.db」：
+            // 跟着图纸文件夹走（一个项目一份库）。调用方明确指定了路径时用指定的
+            string databasePath = _databasePathExplicit
+                ? _databasePath
+                : PartBasicInfoRepository.ResolveDatabasePath(outputDirectory);
+
+            PartAnalysisSummary summary = new PartAnalysisSummary(databasePath);
 
             PartAnalysisService.ReportLog(onLog, LogKind.Info,
                 "数据来源：" + CmdPartAnalyzer.LtStep1FileName + "（CadPartSplitter 生成，不调用 AI）");
-            PartAnalysisService.ReportLog(onLog, LogKind.Info, "部品基本信息数据库：" + _databasePath);
+            PartAnalysisService.ReportLog(onLog, LogKind.Info, "部品基本信息数据库：" + databasePath);
             bool runAssembly = stepKind == CmdAnalysisStepKind.All || stepKind == CmdAnalysisStepKind.Assembly;
             bool runCalloutSplit = stepKind == CmdAnalysisStepKind.All || stepKind == CmdAnalysisStepKind.CalloutSplit;
             bool runYoryoAppend = stepKind == CmdAnalysisStepKind.All || stepKind == CmdAnalysisStepKind.YoryoAppend;
@@ -135,7 +179,26 @@ namespace MSIFAITOOLS.Services
             bool runSpecialProductCsv = stepKind == CmdAnalysisStepKind.All ||
                 stepKind == CmdAnalysisStepKind.SpecialProductCsv;
 
+            // 第 0 步：主按钮【CMD 分析】按界面 checkbox（勾选才跑）；
+            // 单独点【第 0 步 · 特注品.json 维护】按钮时无条件执行（点按钮本身就是明确指令）
+            bool runMaintainTzJson = stepKind == CmdAnalysisStepKind.MaintainTzJson ||
+                (maintainTzJson && stepKind == CmdAnalysisStepKind.All);
+
             PartAnalysisService.ReportLog(onLog, LogKind.Info, CmdAnalysisSteps.DescribeRun(stepKind));
+
+            // 第 0 步（可单独执行 / 主按钮时勾选才跑）：文件名第 5 位是 Z 的 xlsx →
+            // 用 AI 判定是否追加进 classify\特注品.json
+            // 排在「最前面 · 特注品 CSV 生成」之前：json 先补全，那一步与第 4 步都能读到更完整的内容
+            if (runMaintainTzJson)
+            {
+                MaintainTzJson(outputDirectory, onLog);
+
+                // 只跑这一步（分步执行）：到这里结束，不写数据库
+                if (stepKind == CmdAnalysisStepKind.MaintainTzJson)
+                {
+                    return summary;
+                }
+            }
 
             // 最前面：文件名第 5 位是 Z（特注品）的 xlsx → AiAppData\<文件名>\特注品.csv
             // 不依赖数据库，所以在挑选「アッセンブリ図」之前执行（没有装配图也会生成 CSV）
@@ -165,8 +228,14 @@ namespace MSIFAITOOLS.Services
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format("待分析「{0}」PDF：{1} 个",
                 PdfCategoryNames.Assembly, targets.Count));
 
-            using (PartBasicInfoRepository repository = new PartBasicInfoRepository(_databasePath))
+            using (PartBasicInfoRepository repository = new PartBasicInfoRepository(databasePath))
             {
+                if (!string.IsNullOrEmpty(PartBasicInfoRepository.LastMigrationMessage))
+                {
+                    PartAnalysisService.ReportLog(onLog, LogKind.Info,
+                        "  " + PartBasicInfoRepository.LastMigrationMessage);
+                }
+
                 if (!runAssembly && !HasSavedRows(repository, targets))
                 {
                     // 第 2 / 3 / 4 / 5 / 6 步都依赖第 1 步写入的行：一行都没有就只提示，不做任何写库
@@ -228,6 +297,94 @@ namespace MSIFAITOOLS.Services
             }
 
             return summary;
+        }
+
+        /// <summary>
+        /// 【第 0 步】特注品.json 维护（界面上勾选才执行）：PDF 文件夹下文件名第 5 位是 <c>Z</c>
+        /// 的 xlsx → 读部品表 → 用 AI 判定哪些条目要追加进 <c>classify\特注品.json</c>
+        /// （AI 说要加的才加，见 <see cref="CmdTzJsonMaintainer"/>）。
+        /// <para>
+        /// 没配 AI 接口密钥 / <c>特注品.json</c> 解析失败时只记日志，<b>不动 特注品.json</b>。
+        /// <c>特注品.json</c> 还不存在时按<b>「作成名」</b>处理：AI 不再判断「追加」，而是把部品表里
+        /// 属于特注品的条目全部列出，用来新建这份 json（一条都没给出时不建空文件）。
+        /// 这一步<b>不碰数据库</b>，也不依赖第 1 步的结果。
+        /// </para>
+        /// </summary>
+        private static void MaintainTzJson(string outputDirectory, Action<LogKind, string> onLog)
+        {
+            string root = outputDirectory.TrimEnd(Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            string pdfDirectory = Path.GetDirectoryName(root);
+            string classifyDirectory = CmdTzPartCollector.GetClassifyDirectory(root);
+            string jsonPath = Path.Combine(classifyDirectory, CmdTzPartCollector.FileName);
+
+            PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Empty);
+            PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
+                "{0}扫描 {1} 下的 xlsx（文件名第 {2} 位是 {3} = 特注品）→ 交给 AI 处理 {4}" +
+                "（已存在=判定追加 / 还没存在=作成名）",
+                CmdAnalysisSteps.MaintainTzJsonStep.LogHeader, pdfDirectory,
+                CmdSpecialProductRule.DrawingNoPosition, CmdSpecialProductRule.DrawingNoMark, jsonPath));
+
+            AiApiOptions aiOptions = AiApiOptions.FromConfiguration();
+
+            if (aiOptions == null || !aiOptions.IsConfigured)
+            {
+                PartAnalysisService.ReportLog(onLog, LogKind.Warning,
+                    "  未配置 AI 接口密钥，第 0 步跳过（" + CmdTzPartCollector.FileName +
+                    " 不变；可在【AI 设置】里配置）");
+                return;
+            }
+
+            PartAnalysisService.ReportLog(onLog, LogKind.Info,
+                "  AI：" + aiOptions.Describe() + " → 由 AI 判断哪些部品要追加");
+            PartAnalysisService.ReportLog(onLog, LogKind.Info,
+                "  AI 提示语：" + TzJsonMaintainPromptStore.Load().Source);
+
+            // 作成名：还没有 特注品.json 时，AI 的活不是「判断追加」而是「把特注品条目全部列出 → 新建」
+            bool jsonExists = File.Exists(jsonPath);
+
+            PartAnalysisService.ReportLog(onLog, LogKind.Info, jsonExists
+                ? "  " + CmdTzPartCollector.FileName + " 已存在 → 由 AI 判断哪些部品要追加"
+                : "  还没有 " + CmdTzPartCollector.FileName + " → 作成名：由 AI 从部品表建一份新的" +
+                  "（AI 不给条目时按部品表原样作成）");
+
+            CmdTzJsonMaintainResult result = CmdTzJsonMaintainer.Run(pdfDirectory, classifyDirectory,
+                aiOptions, onLog);
+
+            if (!string.IsNullOrEmpty(TzJsonMaintainPromptStore.LastLoadError))
+            {
+                PartAnalysisService.ReportLog(onLog, LogKind.Warning,
+                    "  " + TzJsonMaintainPromptStore.LastLoadError);
+            }
+
+            foreach (string note in result.Notes)
+            {
+                PartAnalysisService.ReportLog(onLog, LogKind.Info, "  提示：" + note);
+            }
+
+            PartAnalysisService.ReportLog(onLog,
+                result.AddedRowCount > 0 ? LogKind.Success : LogKind.Info,
+                string.Format(
+                    "  完成：扫描 {0} 个 Excel（特注品 {1} 个），AI 调用 {2} 次，追加 {3} 条" +
+                    "（不追加 {4} 个 / 重复跳过 {5} 条 / 失败 {6} 个）{7}",
+                    result.ScannedFileCount, result.SpecialProductFileCount, result.AiCallCount,
+                    result.AddedRowCount, result.AiRejectedFileCount, result.SkippedDuplicateCount,
+                    result.AiFailedFileCount,
+                    result.JsonCreated
+                        ? "，已新建 " + result.TzJsonPath
+                        : result.Written ? "，已写回 " + result.TzJsonPath : "，未写文件"));
+
+            // “AI 调用 0 次”容易被当成故障：这里直接说清是哪种情况
+            if (result.AiCallCount == 0)
+            {
+                PartAnalysisService.ReportLog(onLog, LogKind.Warning, result.SpecialProductFileCount == 0
+                    ? "  本次没有调用 AI：文件名第 " + CmdSpecialProductRule.DrawingNoPosition + " 位是 " +
+                      CmdSpecialProductRule.DrawingNoMark + " 的 Excel 一个都没有"
+                    : string.Format(
+                        "  本次没有调用 AI：特注品 Excel 有 {0} 个，但部品表都没读到明细" +
+                        "（见上面的提示：读不到部品表就不会送 AI）",
+                        result.SpecialProductFileCount));
+            }
         }
 
         /// <summary>

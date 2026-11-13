@@ -38,15 +38,35 @@ namespace MSIFAITOOLS.Services
 
     /// <summary>
     /// 部品基本信息表的 SQLite 仓储。
-    /// 数据库文件默认位于 &lt;程序目录&gt;\Data\MSIF_Parts.db，
-    /// 可用 App.config 的 PartDatabasePath 覆盖（相对路径按程序目录解析）。
+    ///
+    /// <para>
+    /// <b>数据库文件放在「所选 PDF 文件夹」里，跟着图纸走</b>：
+    /// <c>&lt;PDF 文件夹&gt;\AiAppData\MSIF_Parts.db</c>（= 分解输出根目录下的 <c>MSIF_Parts.db</c>）。
+    /// 一个图纸文件夹（一个项目）一份库，拷走文件夹就带走了全部部品数据，
+    /// 也不会出现「换了一台机器 / 换了一个项目，看到的还是别的项目的部品」。
+    /// 路径由调用方用 <see cref="ResolveDatabasePath(string)"/> 按分解输出目录算出后传进来。
+    /// </para>
+    ///
+    /// <para>
+    /// 兜底：还没有分解输出目录时退回 <b>&lt;程序目录&gt;\Data\MSIF_Parts.db</b>（旧位置）。
+    /// <see cref="DatabasePathSettingKey"/>（App.config 的 <c>PartDatabasePath</c>）可以覆盖：
+    /// 绝对路径 = 固定用那个文件；相对路径 = 相对 <c>AiAppData</c>（没有输出目录时相对程序目录）。
+    /// </para>
+    ///
+    /// <para>
+    /// 旧版本把库建在 <c>&lt;程序目录&gt;\Data\MSIF_Parts.db</c>：新位置还没有库时，
+    /// 打开前会把旧库（含 <c>-wal</c> / <c>-shm</c>）<b>自动复制</b>过去，已登录的数据不会“消失”。
+    /// </para>
     /// </summary>
     internal sealed class PartBasicInfoRepository : IDisposable
     {
         /// <summary>数据库默认文件名。</summary>
         public const string DefaultDatabaseFileName = "MSIF_Parts.db";
 
-        /// <summary>数据库默认子文件夹名。</summary>
+        /// <summary>
+        /// 旧位置的子文件夹名（&lt;程序目录&gt;\Data\MSIF_Parts.db）。
+        /// 只在「没有分解输出目录」和「把旧库迁移到新位置」时用到。
+        /// </summary>
         public const string DefaultDatabaseFolderName = "Data";
 
         /// <summary>部品基本信息表名。</summary>
@@ -135,14 +155,21 @@ namespace MSIFAITOOLS.Services
         private readonly SQLiteConnection _connection;
 
         /// <summary>
+        /// 最近一次打开数据库时的迁移说明（把旧位置的库复制到新位置时非空），供界面打印到日志。
+        /// </summary>
+        public static string LastMigrationMessage { get; private set; }
+
+        /// <summary>
         /// 打开（不存在时创建）数据库并确保表结构存在。
         /// </summary>
-        /// <param name="databasePath">数据库文件完整路径；为空时使用 <see cref="ResolveDatabasePath"/>。</param>
+        /// <param name="databasePath">数据库文件完整路径；为空时使用 <see cref="ResolveDatabasePath()"/>。</param>
         public PartBasicInfoRepository(string databasePath)
         {
             _databasePath = string.IsNullOrWhiteSpace(databasePath)
                 ? ResolveDatabasePath()
                 : databasePath.Trim();
+
+            LastMigrationMessage = string.Empty;
 
             string folder = Path.GetDirectoryName(_databasePath);
 
@@ -150,6 +177,10 @@ namespace MSIFAITOOLS.Services
             {
                 Directory.CreateDirectory(folder);
             }
+
+            // 旧版本把库放在 <程序目录>\Data 下：新位置还没有库时先把旧库搬一份过来，
+            // 否则换了位置以后已登录的部品全部“看不见”（实际上还在旧文件里）
+            CopyLegacyDatabase(_databasePath);
 
             SQLiteConnectionStringBuilder builder = new SQLiteConnectionStringBuilder();
             builder.DataSource = _databasePath;
@@ -169,32 +200,147 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 解析数据库路径：App.config 的 PartDatabasePath（相对路径按程序目录）→ 默认 &lt;程序目录&gt;\Data\MSIF_Parts.db。
+        /// 旧位置（&lt;程序目录&gt;\Data\MSIF_Parts.db）的完整路径。
+        /// </summary>
+        public static string LegacyDatabasePath
+        {
+            get
+            {
+                return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, DefaultDatabaseFolderName,
+                    DefaultDatabaseFileName);
+            }
+        }
+
+        /// <summary>
+        /// 解析数据库路径（没有分解输出目录时用）：App.config 的 <c>PartDatabasePath</c>
+        /// （绝对路径原样用；相对路径按程序目录）→ 默认 &lt;程序目录&gt;\Data\MSIF_Parts.db。
         /// </summary>
         public static string ResolveDatabasePath()
         {
-            string configured = null;
+            return ResolveDatabasePath(null);
+        }
 
-            try
-            {
-                configured = ConfigurationManager.AppSettings[DatabasePathSettingKey];
-            }
-            catch (ConfigurationErrorsException)
-            {
-                configured = null;
-            }
+        /// <summary>
+        /// 解析数据库路径：<b>默认放在分解输出根目录（&lt;PDF 文件夹&gt;\AiAppData）下的 MSIF_Parts.db</b>。
+        /// <para>
+        /// ① App.config 的 <c>PartDatabasePath</c> 写了绝对路径 → 一律用它（明确指定的优先级最高）；
+        /// ② 写了相对路径 → 相对 <paramref name="dataDirectory"/>（没有时相对程序目录）；
+        /// ③ 没写 → <paramref name="dataDirectory"/> 非空时 <c>&lt;dataDirectory&gt;\MSIF_Parts.db</c>，
+        ///    为空时退回旧位置 &lt;程序目录&gt;\Data\MSIF_Parts.db。
+        /// </para>
+        /// </summary>
+        /// <param name="dataDirectory">分解输出根目录（&lt;PDF 文件夹&gt;\AiAppData）；为空表示还不知道。</param>
+        public static string ResolveDatabasePath(string dataDirectory)
+        {
+            string configured = ReadConfiguredDatabasePath();
+            string baseDirectory = string.IsNullOrWhiteSpace(dataDirectory)
+                ? AppDomain.CurrentDomain.BaseDirectory
+                : dataDirectory.Trim();
 
             if (!string.IsNullOrWhiteSpace(configured))
             {
-                string value = configured.Trim();
-
-                return Path.IsPathRooted(value)
-                    ? value
-                    : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, value);
+                return Path.IsPathRooted(configured)
+                    ? configured
+                    : Path.Combine(baseDirectory, configured);
             }
 
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, DefaultDatabaseFolderName,
-                DefaultDatabaseFileName);
+            if (!string.IsNullOrWhiteSpace(dataDirectory))
+            {
+                return Path.Combine(baseDirectory, DefaultDatabaseFileName);
+            }
+
+            return LegacyDatabasePath;
+        }
+
+        /// <summary>读 App.config 的 <c>PartDatabasePath</c>（没写 / 读不到时返回 null）。</summary>
+        private static string ReadConfiguredDatabasePath()
+        {
+            try
+            {
+                string configured = ConfigurationManager.AppSettings[DatabasePathSettingKey];
+
+                if (string.IsNullOrWhiteSpace(configured))
+                {
+                    return null;
+                }
+
+                string value = configured.Trim();
+
+                // 老版本的默认值是 Data\MSIF_Parts.db（意思是「程序目录\Data\MSIF_Parts.db」）。
+                // 现在相对路径按 AiAppData 解释，照读会建到 AiAppData\Data\MSIF_Parts.db，
+                // 所以这条旧默认值当作「没配置」，直接用新默认位置（AiAppData\MSIF_Parts.db）
+                string legacyDefault = Path.Combine(DefaultDatabaseFolderName, DefaultDatabaseFileName);
+
+                if (string.Equals(value.Replace('/', '\\'), legacyDefault, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                return value;
+            }
+            catch (ConfigurationErrorsException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 目标位置还没有数据库、而旧位置（&lt;程序目录&gt;\Data）有时，把旧库复制过去（含 -wal / -shm），
+        /// 让升级前登录的部品数据跟着走。已经存在 / 同一个文件 / 复制失败时什么都不做（失败就建新库）。
+        /// <para>
+        /// <b>只迁移一次</b>：复制成功后会在旧库旁边写一个 <c>MSIF_Parts.db.migrated</c> 标记，
+        /// 以后再选别的图纸文件夹（= 另一个项目的库）时不再重复复制，
+        /// 否则会把 A 项目的部品数据塞进 B 项目的库里。
+        /// </para>
+        /// </summary>
+        private static void CopyLegacyDatabase(string databasePath)
+        {
+            try
+            {
+                string legacyPath = LegacyDatabasePath;
+
+                if (!File.Exists(legacyPath) || File.Exists(databasePath))
+                {
+                    return;
+                }
+
+                if (string.Equals(Path.GetFullPath(legacyPath), Path.GetFullPath(databasePath),
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                string markerPath = legacyPath + ".migrated";
+
+                if (File.Exists(markerPath))
+                {
+                    return;
+                }
+
+                File.Copy(legacyPath, databasePath, false);
+
+                // WAL 模式下最新的事务可能还在 -wal / -shm 里，一起带走
+                foreach (string suffix in new string[] { "-wal", "-shm" })
+                {
+                    string source = legacyPath + suffix;
+
+                    if (File.Exists(source))
+                    {
+                        File.Copy(source, databasePath + suffix, true);
+                    }
+                }
+
+                LastMigrationMessage = string.Format(
+                    "旧数据库已复制到新位置：{0} → {1}（原来放在程序目录下，现在跟着图纸文件夹走；" +
+                    "只复制这一次，写入了 {2}）",
+                    legacyPath, databasePath, Path.GetFileName(markerPath));
+
+                File.WriteAllText(markerPath, databasePath);
+            }
+            catch (Exception)
+            {
+                // 复制不了就算了：新位置照样建新库，不影响本步骤
+            }
         }
 
         /// <summary>
