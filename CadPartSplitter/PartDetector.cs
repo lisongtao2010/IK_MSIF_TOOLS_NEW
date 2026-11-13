@@ -116,56 +116,97 @@ namespace CadPartSplitter
 
                 List<Rect> partRects = null;
 
-                // ── 方式 A：按文字层推断出的表格块精确遮蔽 ──────────────────
-                if (_opts.MaskTableBlocks && tableAreas != null && tableAreas.Count > 0)
-                {
-                    // 顺便算出「表格列带」左边界（只为剔除块遮蔽漏掉的表格残片）
-                    _tableBandStartX = DetectTableColumnStart(clean);
+                // 检测实际使用的二值图（图框已擦、表格已遮蔽）：矩形分割只出 1 块时，
+                // 「不规则分割」要在这张图上把粘连的视图重新拆开（见 IrregularSplitter）。
+                Mat maskedKeep = null;
 
-                    using (Mat masked = MaskTableAreas(clean, tableAreas))
+                try
+                {
+                    // ── 方式 A：按文字层推断出的表格块精确遮蔽 ──────────────────
+                    if (_opts.MaskTableBlocks && tableAreas != null && tableAreas.Count > 0)
                     {
+                        // 顺便算出「表格列带」左边界（只为剔除块遮蔽漏掉的表格残片）
+                        _tableBandStartX = DetectTableColumnStart(clean);
+
+                        Mat masked = MaskTableAreas(clean, tableAreas);
                         SaveDebug(masked, "debug_02_masked.png");
                         partRects = DilateAndExtract(masked, imgWidth, imgHeight);
+
+                        if (partRects.Count == 0)
+                        {
+                            _opts.Log("[WARN] 按表格块遮蔽后未检出零件，回退为整列遮蔽重试。");
+                            masked.Dispose();
+                            partRects     = null;
+                            _maskStartX   = -1;
+                            _maskByBlocks = false;
+                        }
+                        else
+                        {
+                            maskedKeep = masked;
+                        }
+                    }
+
+                    // ── 方式 B：右侧整列遮蔽（也是方式 A 的兜底）──────────────────
+                    if (partRects == null)
+                    {
+                        Mat masked = MaskRight(clean, _opts.RightMaskRatio);
+                        SaveDebug(masked, "debug_02_masked.png");
+                        partRects  = DilateAndExtract(masked, imgWidth, imgHeight);
+                        maskedKeep = masked;
+                    }
+
+                    _opts.Log($"[INFO] 有效零件区域：{partRects.Count} 个");
+
+                    // 表格残片（表題欄 / 変更履歴表）文字密、占比高：在导出 PNG 之前筛掉，
+                    // 这样输出文件编号仍然连续，也不会留下「只有一张表」的伪零件图。
+                    if (partRects.Count > 0 && _opts.DropTextHeavyParts && textBoxes != null && textBoxes.Count > 0)
+                        partRects = DropTextHeavyRects(partRects, textBoxes);
+
+                    // ── 兜底：矩形分割只出 1 块 → 不规则分割 ────────────────────
+                    // 多个子视图被尺寸线 / 引线串成一个连通域时，外接矩形只有一个，
+                    // 怎么调核都拆不开；改按「像素归属」拆（见 IrregularSplitter），
+                    // 每块用多边形掩膜裁剪，矩形框重叠也不会把别的视图带进来。
+                    if (_opts.IrregularSplitWhenSingle && partRects.Count == 1 && maskedKeep != null)
+                    {
+                        List<IrregularSplitter.Region> regions = IrregularSplitter.Split(maskedKeep, _opts);
+
+                        if (regions.Count > 1 && _opts.DropTextHeavyParts
+                            && textBoxes != null && textBoxes.Count > 0)
+                        {
+                            regions = DropTextHeavyRegions(regions, textBoxes);
+                        }
+
+                        if (regions.Count > 0)
+                        {
+                            _opts.Log($"[INFO] 矩形分割只得到 1 块 → 改用不规则分割：拆成 {regions.Count} 块");
+                            using (Mat exportImage = ErasePageFrameOn(original))
+                            {
+                                return ExportIrregularParts(exportImage, regions, imgWidth, imgHeight);
+                            }
+                        }
+
+                        _opts.Log("[INFO] 不规则分割没能拆开，保留矩形分割结果"
+                                  + "（可调 IrregularSplitReach，或用 --no-irregular-split 撤回）");
                     }
 
                     if (partRects.Count == 0)
                     {
-                        _opts.Log("[WARN] 按表格块遮蔽后未检出零件，回退为整列遮蔽重试。");
-                        partRects     = null;
-                        _maskStartX   = -1;
-                        _maskByBlocks = false;
+                        PrintNoResultHint();
+                        return new List<PartInfo>();
                     }
-                }
 
-                // ── 方式 B：右侧整列遮蔽（也是方式 A 的兜底）──────────────────
-                if (partRects == null)
-                {
-                    using (Mat masked = MaskRight(clean, _opts.RightMaskRatio))
+                    // 导出裁切用的是原始彩色图：把图框线一并擦掉。
+                    // 否则输出图会带着图纸的左 / 上 / 下边框（右边框落在零件框外），
+                    // 看上去就像「整页图纸被竖着切了一刀、右边的部分没了」。
+                    using (Mat exportImage = ErasePageFrameOn(original))
                     {
-                        SaveDebug(masked, "debug_02_masked.png");
-                        partRects = DilateAndExtract(masked, imgWidth, imgHeight);
+                        return ExportParts(exportImage, partRects, imgWidth, imgHeight);
                     }
                 }
-
-                _opts.Log($"[INFO] 有效零件区域：{partRects.Count} 个");
-
-                // 表格残片（表題欄 / 変更履歴表）文字密、占比高：在导出 PNG 之前筛掉，
-                // 这样输出文件编号仍然连续，也不会留下「只有一张表」的伪零件图。
-                if (partRects.Count > 0 && _opts.DropTextHeavyParts && textBoxes != null && textBoxes.Count > 0)
-                    partRects = DropTextHeavyRects(partRects, textBoxes);
-
-                if (partRects.Count == 0)
+                finally
                 {
-                    PrintNoResultHint();
-                    return new List<PartInfo>();
-                }
-
-                // 导出裁切用的是原始彩色图：把图框线一并擦掉。
-                // 否则输出图会带着图纸的左 / 上 / 下边框（右边框落在零件框外），
-                // 看上去就像「整页图纸被竖着切了一刀、右边的部分没了」。
-                using (Mat exportImage = ErasePageFrameOn(original))
-                {
-                    return ExportParts(exportImage, partRects, imgWidth, imgHeight);
+                    if (maskedKeep != null)
+                        maskedKeep.Dispose();
                 }
             }
         }
@@ -680,24 +721,10 @@ namespace CadPartSplitter
 
             foreach (var r in rects)
             {
-                double area = r.Width * (double)r.Height;
-                if (area <= 0.0)
+                if (r.Width <= 0 || r.Height <= 0)
                     continue;
 
-                double textArea = 0.0;
-                foreach (var t in textBoxes)
-                {
-                    int x0 = Math.Max(r.Left,   t.X);
-                    int y0 = Math.Max(r.Top,    t.Y);
-                    int x1 = Math.Min(r.Right,  t.Right);
-                    int y1 = Math.Min(r.Bottom, t.Bottom);
-                    if (x1 <= x0 || y1 <= y0) continue;
-
-                    textArea += (x1 - x0) * (double)(y1 - y0);
-                }
-
-                if (textArea > area) textArea = area;   // 词框互相重叠时封顶
-                double ratio = textArea / area;
+                double ratio = TextAreaRatio(r, textBoxes);
 
                 // 调参用：--debug 时列出每个候选块的实测占比（决定 TextHeavyRatio 取多少）
                 if (_opts.SaveDebugImages)
@@ -730,6 +757,86 @@ namespace CadPartSplitter
         }
 
         /// <summary>
+        /// 同 <see cref="DropTextHeavyRects"/>，用于不规则分割拆出来的块（按块的外接框判）。
+        ///
+        /// 不规则分割是为了拆「多个视图粘成一块」，但它也可能把表題欄这类文字表格拆成几块，
+        /// 所以拆完照样过一遍文字占比，只留下真正的视图。
+        /// </summary>
+        private List<IrregularSplitter.Region> DropTextHeavyRegions(
+            List<IrregularSplitter.Region> regions, IList<PageRect> textBoxes)
+        {
+            double threshold = _opts.TextHeavyRatio;
+            if (threshold <= 0.0 || threshold > 1.0)
+                threshold = 0.60;
+
+            var kept  = new List<IrregularSplitter.Region>();
+            var drops = new List<string>();
+
+            foreach (var region in regions)
+            {
+                Rect r = region.Bounds;
+                if (r.Width <= 0 || r.Height <= 0)
+                    continue;
+
+                double ratio = TextAreaRatio(r, textBoxes);
+
+                if (_opts.SaveDebugImages)
+                    _opts.Log($"[RATIO] x={r.X} y={r.Y} w={r.Width} h={r.Height} 文字行占比 {ratio:0.000}（不规则块）");
+
+                if (ratio >= threshold)
+                {
+                    drops.Add($"x={r.X} y={r.Y} w={r.Width} h={r.Height} 文字行占比 {ratio:0.00}");
+                    continue;
+                }
+
+                kept.Add(region);
+            }
+
+            if (drops.Count == 0)
+                return regions;
+
+            if (kept.Count == 0)
+            {
+                _opts.Log($"[WARN] 不规则分割出的 {drops.Count} 块文字行占比都 ≥ {threshold:0.00}，"
+                          + "已全部保留（避免输出为空；可用 --text-ratio 调高阈值）。");
+                return regions;
+            }
+
+            foreach (string d in drops)
+                _opts.Log($"[DROP] 文字行占比过高，判定不是零件图：{d}");
+
+            _opts.Log($"[INFO] 不规则分割 + 文字行占比筛除：丢弃 {drops.Count} 块 / 保留 {kept.Count} 块"
+                      + $"（阈值 {threshold:0.00}）");
+            return kept;
+        }
+
+        /// <summary>
+        /// 块内「文字行框与块的交集面积之和」占块面积的比例。
+        /// 用交集而不是把整行框计入：跨在块边界上的行不会把自己整块算给这个块。
+        /// </summary>
+        private static double TextAreaRatio(Rect r, IList<PageRect> textBoxes)
+        {
+            double area = r.Width * (double)r.Height;
+            if (area <= 0.0)
+                return 0.0;
+
+            double textArea = 0.0;
+            foreach (var t in textBoxes)
+            {
+                int x0 = Math.Max(r.Left,   t.X);
+                int y0 = Math.Max(r.Top,    t.Y);
+                int x1 = Math.Min(r.Right,  t.Right);
+                int y1 = Math.Min(r.Bottom, t.Bottom);
+                if (x1 <= x0 || y1 <= y0) continue;
+
+                textArea += (x1 - x0) * (double)(y1 - y0);
+            }
+
+            if (textArea > area) textArea = area;   // 词框互相重叠时封顶
+            return textArea / area;
+        }
+
+        /// <summary>
         /// 按 Y 坐标排序，裁切每个零件并保存 PNG；同时计算 PDF 坐标（mm）。
         /// PDF 坐标以页面左上角为原点，与图像坐标轴方向一致。
         /// </summary>
@@ -755,6 +862,64 @@ namespace CadPartSplitter
                         continue;
                     }
                     _opts.Log($"[SAVE] {name}  ({roi.Width}×{roi.Height} px  Y={roi.Y})");
+                }
+
+                result.Add(new PartInfo
+                {
+                    Index    = i + 1,
+                    FileName = name,
+                    PixelX   = roi.X,
+                    PixelY   = roi.Y,
+                    PixelW   = roi.Width,
+                    PixelH   = roi.Height,
+                    PdfX_mm  = roi.X      * mmPerPx,
+                    PdfY_mm  = roi.Y      * mmPerPx,
+                    PdfW_mm  = roi.Width  * mmPerPx,
+                    PdfH_mm  = roi.Height * mmPerPx
+                });
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 导出「不规则分割」得到的块：矩形裁切框 + 多边形掩膜，掩膜外的像素涂白。
+        ///
+        /// 与 <see cref="ExportParts"/> 的区别只有一个 —— 裁切后不是整块矩形都留下，而是只留
+        /// 该块多边形内的像素。相邻视图的矩形框即使重叠，彼此的线框也不会串进来
+        /// （这正是矩形分割拆不开时仍然能分开的原因）。
+        ///
+        /// 文件名、编号规则、<see cref="PartInfo"/> 里的坐标口径与矩形分割完全一致
+        /// （坐标仍记外接框，下游按矩形读图不会错位；掩膜外的空白是白底）。
+        /// </summary>
+        private List<PartInfo> ExportIrregularParts(Mat original, List<IrregularSplitter.Region> regions,
+                                                   int imgWidth, int imgHeight)
+        {
+            double mmPerPx = 25.4 / _opts.RenderDpi;
+            var result     = new List<PartInfo>();
+            var sorted     = regions.OrderBy(r => r.Bounds.Y).ThenBy(r => r.Bounds.X).ToList();
+
+            for (int i = 0; i < sorted.Count; i++)
+            {
+                IrregularSplitter.Region region = sorted[i];
+                Rect roi  = region.Bounds;
+                string name = $"Part_{i + 1:D2}.png";
+                string path = Path.Combine(_opts.OutputDirectory, name);
+
+                using (Mat crop   = new Mat(original, roi))
+                using (Mat output = new Mat(roi.Height, roi.Width, original.Type(), Scalar.All(255)))
+                using (Mat mask   = IrregularSplitter.BuildMask(region.Polygon, roi))
+                {
+                    crop.CopyTo(output, mask);
+
+                    if (!output.SaveImage(path))
+                    {
+                        _opts.Log($"[WARN] 保存失败：{path}");
+                        continue;
+                    }
+
+                    _opts.Log($"[SAVE] {name}  ({roi.Width}×{roi.Height} px  Y={roi.Y}  "
+                              + $"不规则掩膜 {region.Polygon.Length} 点)");
                 }
 
                 result.Add(new PartInfo

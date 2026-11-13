@@ -38,6 +38,9 @@ namespace CadPartSplitter
     ///   --pad &lt;值&gt;       外接框扩展像素（默认 30）
     ///   --kw &lt;值&gt;        膨胀核宽度（默认 60）
     ///   --kh &lt;值&gt;        膨胀核高度（默认 10）
+    ///   --no-irregular-split 关闭「不规则分割」兜底（矩形分割只出 1 块时按闭合轮廓拆开）
+    ///   --irregular-reach &lt;值&gt; 不规则分割时每个视图外扩多少像素认领线框 / 标注（默认 100）
+    ///   --no-strip-annot 关闭「PDF 批注 / 图章清理」（默认渲染前先删注释另存 &lt;图纸名&gt;_clean.pdf）
     ///
     /// 输出目录省略时写到 &lt;输入文件所在目录&gt;\AiAppData\&lt;图纸名&gt;
     /// （与下游 AI 环节约定：每张图纸一个子文件夹）。
@@ -498,6 +501,22 @@ namespace CadPartSplitter
                         if (TryGetNextInt(args, ref i, out int kh))
                             opts.DilateKernelHeight = kh;
                         break;
+
+                    case "--no-irregular-split":
+                        // 关闭「不规则分割」兜底：矩形分割只出 1 块时不再尝试按闭合轮廓拆开
+                        opts.IrregularSplitWhenSingle = false;
+                        break;
+
+                    case "--irregular-reach":
+                        // 不规则分割时每个视图向外扩多少像素认领自己的线框 / 标注（默认 100）
+                        if (TryGetNextInt(args, ref i, out int reach))
+                            opts.IrregularSplitReach = reach;
+                        break;
+
+                    case "--no-strip-annot":
+                        // 关闭「PDF 批注 / 图章清理」：不生成 <图纸名>_clean.pdf，直接渲染原 PDF
+                        opts.StripPdfAnnotations = false;
+                        break;
                 }
             }
         }
@@ -571,12 +590,17 @@ namespace CadPartSplitter
             Console.WriteLine("  --pad   <N>    外接框扩展像素（默认 30）");
             Console.WriteLine("  --kw    <N>    膨胀核宽度（默认 60）");
             Console.WriteLine("  --kh    <N>    膨胀核高度（默认 10）");
+            Console.WriteLine("  --no-irregular-split  关闭「不规则分割」兜底（矩形分割只出 1 块时按闭合轮廓拆开）");
+            Console.WriteLine("  --irregular-reach <N> 不规则分割时每个视图外扩多少像素认领线框 / 标注（默认 100）");
+            Console.WriteLine("  --no-strip-annot 关闭「PDF 批注 / 图章清理」（默认渲染前先删注释另存 <图纸名>_clean.pdf）");
             Console.WriteLine();
             Console.WriteLine("输出：");
             Console.WriteLine("  省略输出目录时写到 <输入文件所在目录>\\AiAppData\\<图纸名>\\");
             Console.WriteLine("  （第 2 页起为 <图纸名>_P页号，避免覆盖前一页结果）");
             Console.WriteLine("  批量模式（输入是文件夹）省略输出根目录时写到");
             Console.WriteLine("  <输入文件夹>\\AiAppData\\<图纸名>\\（每张图纸各自一个子文件夹）");
+            Console.WriteLine("  <输出目录>\\<图纸名>_clean.pdf（删掉批注 / 图章后的 PDF，渲染位图用的就是它）");
+
             Console.WriteLine("  <输出目录>\\Part_01.png / parts_info.json / parts_text.txt / callouts.txt");
             Console.WriteLine("              / outside_info.json / outside_text.txt");
             Console.WriteLine("              / tables_info.json / tables_text.txt / tables\\table_NN.csv");

@@ -75,11 +75,18 @@ namespace CadPartSplitter
             opts.Log("[INFO] Input: " + Path.GetFullPath(filePath));
             opts.Log("[INFO] Output: " + Path.GetFullPath(opts.OutputDirectory));
 
+            // 识别前先把 PDF 上的「批注 / 图章」删掉，另存为 <输出目录>\<图纸名>_clean.pdf，
+            // 下面渲染位图时用这份干净 PDF（批注会被 PDFium 按 FPDF_ANNOT 一起画进位图，
+            // 变成粗实心块 / 引线，把本应分开的视图连成一片）。
+            // 文字 / 表格 / 圈号仍读原 PDF：批注是 annotation，不在页面内容流里，
+            // 两者的文字层与矢量图形完全一致，这样产物里的 source / 文件名也不会变成 xxx_clean.pdf。
+            string renderPath = PdfAnnotationStripper.PrepareInput(filePath, opts);
+
             List<PartInfo> parts;
             int imgWidth, imgHeight;
             int maskStartX = -1;
 
-            using (Mat original = LoadImage(filePath, opts))
+            using (Mat original = LoadImage(renderPath, opts))
             {
                 imgWidth  = original.Cols;
                 imgHeight = original.Rows;

@@ -100,7 +100,11 @@
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
     <Compile Include="PartSplitterService.cs" />
+    <!-- 识别前的 PDF 预处理：删掉批注 / 图章，另存 <图纸名>_clean.pdf 后再识别（PDFium P/Invoke） -->
+    <Compile Include="PdfAnnotationStripper.cs" />
     <Compile Include="PartDetector.cs" />
+    <!-- 不规则分割兜底：矩形分割只出 1 块时按「闭合轮廓实体 + 多边形掩膜」把粘连的多个视图拆开 -->
+    <Compile Include="IrregularSplitter.cs" />
     <Compile Include="PdfRenderer.cs" />
     <Compile Include="DetectorOptions.cs" />
     <Compile Include="PartInfo.cs" />
