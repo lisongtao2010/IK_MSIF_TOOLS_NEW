@@ -48,17 +48,16 @@ namespace MSIFAITOOLS.Services
     ///   * 分割工程自带 OpenCvSharp4 的 x64 原生库与 pdfium.dll，单独一个 exe 更好维护，
     ///     也能单独打开它的界面 / 命令行调试；
     ///   * 升级分割逻辑时只替换 <c>CadPartSplitter.exe</c>，不必重新编译整个 MSIF AI TOOLS。
-    /// （<c>MSIFAITOOLS.csproj</c> 里仍链接着一份分割源码，只为复用它的选项类型
-    ///  <see cref="CadPartSplitter.DetectorOptions"/> 拼日志文案；【开始分解】执行的是本类找到的 exe。）
+    /// 【开始分解】只执行本类找到的 exe；主程序里不再编译分割源码（<c>MSIFAITOOLS.csproj</c>
+    /// 已去掉 <c>..\CadPartSplitter\*.cs</c> 链接），日志里的输出根目录由本类的
+    /// <see cref="GetDefaultBatchOutputDirectory"/> 按 exe 的同一规则复刻。
     ///
-    /// exe 查找顺序（第一个存在的就用它）：
-    ///   1. 环境变量 <c>CADPARTSPLITTER_EXE</c> 指定的路径；
-    ///   2. <c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c>
-    ///      —— VS 里 F5 时即 <c>MSIFAITOOLS\bin\Debug\CadPartSplitter\CadPartSplitter.exe</c>；
-    ///   3. <c>&lt;程序目录&gt;\CadPartSplitter.exe</c>（不分子文件夹的部署方式）；
-    ///   4. 开发目录兜底：<c>&lt;程序目录&gt;\..\CadPartSplitter\CadPartSplitter.exe</c>、
-    ///      <c>&lt;程序目录&gt;\..\..\CadPartSplitter\bin\Debug\CadPartSplitter.exe</c>、
-    ///      <c>...\bin\Release\CadPartSplitter.exe</c> 等（应对输出目录被改到别处的老工程设置）。
+    /// exe 位置固定为 <c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c>，不做任何兜底猜测：
+    /// 分割工程的 <c>OutputPath</c> 就是 <c>..\MSIFAITOOLS\bin\{Debug,Release}\CadPartSplitter\</c>，
+    /// 所以「生成解决方案」后本程序旁边一定有这一份（VS 里 F5 即
+    /// <c>MSIFAITOOLS\bin\Debug\CadPartSplitter\CadPartSplitter.exe</c>）。
+    /// 唯一例外：环境变量 <c>CADPARTSPLITTER_EXE</c> 显式指定的路径（调试时临时指向别的版本用，
+    /// 不设就走上面那个位置；不会去上级目录 / 分割工程自己的 bin 目录里找）。
     ///
     /// 对调用方的约定：
     ///   * 输出目录：<c>&lt;输入文件夹&gt;\AiAppData\&lt;图纸名&gt;</c>（不传第二个参数，由 exe 自己推导）；
@@ -70,7 +69,7 @@ namespace MSIFAITOOLS.Services
         /// <summary>外部执行程序的名称。</summary>
         public const string ExeFileName = "CadPartSplitter.exe";
 
-        /// <summary>显式指定 CadPartSplitter.exe 路径的环境变量（优先级最高）。</summary>
+        /// <summary>可选：显式指定 CadPartSplitter.exe 路径的环境变量（不设就用 &lt;程序目录&gt;\CadPartSplitter\ 下那一份）。</summary>
         public const string ExePathEnvironmentVariable = "CADPARTSPLITTER_EXE";
 
         /// <summary>exe 默认所在子目录名（&lt;程序目录&gt;\CadPartSplitter\）。</summary>
@@ -83,12 +82,14 @@ namespace MSIFAITOOLS.Services
         private const int TailLineCount = 8;
 
         /// <summary>
-        /// 查找要执行的 <c>CadPartSplitter.exe</c>（顺序见本类型注释）。
+        /// 取要执行的 <c>CadPartSplitter.exe</c>：默认（也是唯一）的位置是
+        /// <c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c>（见本类型注释），
+        /// 若设了环境变量 <c>CADPARTSPLITTER_EXE</c> 则用它的路径。
         /// 找不到时返回 null，由 <see cref="RunBatch"/> 转成「已跳过第 1 步」的警告。
         /// </summary>
         public static string FindExePath()
         {
-            // 1. 环境变量优先：便于临时指向别的版本 / 别的目录
+            // 可选覆盖：设了 CADPARTSPLITTER_EXE 就用它（调试时临时指向别的版本），不设走默认位置
             string configured = null;
 
             try
@@ -97,7 +98,7 @@ namespace MSIFAITOOLS.Services
             }
             catch (Exception)
             {
-                // 读不到环境变量就按默认规则继续找
+                // 读不到环境变量就用下面的默认位置
             }
 
             if (!string.IsNullOrWhiteSpace(configured))
@@ -119,32 +120,22 @@ namespace MSIFAITOOLS.Services
 
             string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
 
-            // 2. 默认位置（<程序目录>\CadPartSplitter\CadPartSplitter.exe）
-            // 3. 同级（<程序目录>\CadPartSplitter.exe）
-            // 4. 开发目录兜底（输出目录被改到别处时的老工程设置）
-            string[] candidates = new string[]
-            {
-                Path.Combine(baseDirectory, ExeFolderName, ExeFileName),
-                Path.Combine(baseDirectory, ExeFileName),
-                Path.Combine(baseDirectory, "..", ExeFolderName, ExeFileName),
-                Path.Combine(baseDirectory, "..", "..", ExeFolderName, "bin", "Debug", ExeFileName),
-                Path.Combine(baseDirectory, "..", "..", ExeFolderName, "bin", "Release", ExeFileName),
-                Path.Combine(baseDirectory, "..", "..", "..", ExeFolderName, "bin", "Debug", ExeFileName)
-            };
+            // 默认（也是唯一）位置：<程序目录>\CadPartSplitter\CadPartSplitter.exe
+            // 即 VS 生成后的 MSIFAITOOLS\bin\Debug\CadPartSplitter\CadPartSplitter.exe
+            // （分割工程的 OutputPath 就是 ..\MSIFAITOOLS\bin\Debug\CadPartSplitter\）。
+            // 不做任何兜底猜测（上级目录 / Release 目录 / 同级 exe 都不找）：找不到就跳过第 1 步。
+            string expected = Path.Combine(baseDirectory, ExeFolderName, ExeFileName);
 
-            for (int i = 0; i < candidates.Length; i++)
+            try
             {
-                try
+                if (File.Exists(expected))
                 {
-                    if (File.Exists(candidates[i]))
-                    {
-                        return Path.GetFullPath(candidates[i]);
-                    }
+                    return Path.GetFullPath(expected);
                 }
-                catch (Exception)
-                {
-                    // 路径非法就跳过
-                }
+            }
+            catch (Exception)
+            {
+                // 路径非法（极少见）就当没找到
             }
 
             return null;
@@ -255,7 +246,7 @@ namespace MSIFAITOOLS.Services
                     onLine("[INFO] 零件分割：启动外部程序 " + exePath);
                     onLine("[INFO] 命令行：\"" + exePath + "\" " + startInfo.Arguments);
                     onLine("[INFO] 输出根目录："
-                           + CadPartSplitter.DetectorOptions.GetDefaultBatchOutputDirectory(folder));
+                           + GetDefaultBatchOutputDirectory(folder));
 
                     using (Process process = new Process())
                     {
@@ -312,6 +303,51 @@ namespace MSIFAITOOLS.Services
             }
 
             return result;
+        }
+
+        /// <summary>输出根目录的子文件夹名（与 CadPartSplitter 的 <c>DetectorOptions.AiAppDataFolderName</c> 一致）。</summary>
+        private const string AiAppDataFolderName = "AiAppData";
+
+        /// <summary>
+        /// 复刻 <c>CadPartSplitter.DetectorOptions.GetDefaultBatchOutputDirectory</c>：
+        /// 把输入文件夹转成完整路径后拼上 <c>AiAppData</c>。
+        /// <para>
+        /// 命令行只传「输入文件夹」、不传输出目录，exe 自己就是按这个规则落地的，
+        /// 所以日志里显示的目录必须用同一套推导，才不会和实际输出位置对不上。
+        /// 路径非法（空 / 含非法字符 / 过长）时退回当前工作目录。
+        /// </para>
+        /// </summary>
+        /// <param name="inputDirectory">用户选择的 PDF 文件夹。</param>
+        private static string GetDefaultBatchOutputDirectory(string inputDirectory)
+        {
+            string dir = null;
+
+            if (!string.IsNullOrWhiteSpace(inputDirectory))
+            {
+                try
+                {
+                    dir = Path.GetFullPath(inputDirectory);
+                }
+                catch (ArgumentException)
+                {
+                    dir = null;
+                }
+                catch (NotSupportedException)
+                {
+                    dir = null;
+                }
+                catch (PathTooLongException)
+                {
+                    dir = null;
+                }
+            }
+
+            if (string.IsNullOrEmpty(dir))
+            {
+                dir = Environment.CurrentDirectory;
+            }
+
+            return Path.Combine(dir, AiAppDataFolderName);
         }
 
         /// <summary>

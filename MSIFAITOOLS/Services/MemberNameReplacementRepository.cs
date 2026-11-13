@@ -1,130 +1,138 @@
 using System;
 using System.Collections.Generic;
-using System.Configuration;
-using System.Data.SQLite;
+using System.Data;
+using System.Data.SqlClient;
 using System.Globalization;
-using System.IO;
 
 namespace MSIFAITOOLS.Services
 {
     /// <summary>
-    /// 部材名置换表的 1 行：把「置换前」（图纸 / <c>parts_info.json</c> 上的部材名，例：<c>鴨居</c>）
-    /// 换成「置换后」（希望登录进部品基本信息表的部材名，例：<c>上枠</c>）。
+    /// 部材名置换表的 1 行（SQL Server 表 <c>DL_BuhinBuzaiMapping</c>）：
+    /// <c>BuhinName</c>（部品名）= 图纸上的部材名（例：<c>鴨居</c>），
+    /// <c>BuzaiName</c>（部材名）= 希望登录进部品基本信息表的名字（例：<c>上枠</c>）。
     /// </summary>
     internal sealed class MemberNameReplacement
     {
         public MemberNameReplacement(string source, string target)
+            : this(source, target, string.Empty)
+        {
+        }
+
+        public MemberNameReplacement(string source, string target, string note)
         {
             Source = (source ?? string.Empty).Trim();
             Target = (target ?? string.Empty).Trim();
+            Note = (note ?? string.Empty).Trim();
         }
 
-        /// <summary>置换前（表里的主键；空值的行不会被采用）。</summary>
+        /// <summary>部品名 = <c>BuhinName</c>（置换前；空值的行不会被采用）。</summary>
         public string Source { get; private set; }
 
-        /// <summary>置换后（空值的行不会被采用）。</summary>
+        /// <summary>部材名 = <c>BuzaiName</c>（置换后；空值的行不会被采用）。</summary>
         public string Target { get; private set; }
+
+        /// <summary>備考 = <c>Remarks</c>（可选）。</summary>
+        public string Note { get; private set; }
     }
 
     /// <summary>
-    /// 部材名置换表的 SQLite 仓储（维护画面 <see cref="MemberNameReplacementForm"/> 用）。
+    /// 部材名置换表的 SQL Server 仓储（维护画面 <see cref="MemberNameReplacementForm"/> 用）。
     ///
     /// <para>
-    /// <b>数据库位置</b>：与部材部品マスタ<b>同一个库</b>（<c>D:\MSIFDB\MSIF_MemberParts.db</c>），
-    /// 只多一张表 <see cref="TableName"/>。解析顺序与 <see cref="MemberPartRepository"/> 完全一致
-    /// （<see cref="ResolveDatabasePath(string)"/>）：① 传入值 → ② 环境变量
-    /// <c>MSIF_MEMBER_PARTS_DB</c> → ③ App.config 的 <c>MemberPartDatabasePath</c> →
-    /// ④ 默认 <c>D:\MSIFDB\MSIF_MemberParts.db</c>（D 盘不可用时
-    /// <c>&lt;程序目录&gt;\Data\MSIF_MemberParts.db</c>）。
+    /// <b>表</b>：<c>DL_BuhinBuzaiMapping</c>（<c>BuhinName</c> 部品名 / <c>BuzaiName</c> 部材名 /
+    /// <c>Remarks</c> 備考 / <c>UpdatedAt</c> 更新日時；主键 = <c>(BuhinName, BuzaiName)</c>）。
+    /// 连接信息由 <see cref="MemberMappingDbSettingsStore"/> 解析
+    /// （维护画面 <see cref="MemberMappingDbSettingsForm"/>）。
     /// </para>
     ///
     /// <para>
-    /// <b>表结构</b>：<c>部材名置换</c>（<c>置换前</c> TEXT 主键、<c>置换后</c> TEXT、<c>登录时间</c> TEXT）。
-    /// 打开（不存在时创建）数据库并 <c>CREATE TABLE IF NOT EXISTS</c>，所以第一次打开会自动建表，无需手工准备。
+    /// <b>保存规则</b>（<see cref="Save"/>）：按主键 <c>(BuhinName, BuzaiName)</c> 精确同步 ——
+    /// 画面里删掉的行 → <c>DELETE</c>；新加的行 → <c>INSERT</c>；其它 → <c>UPDATE</c>（并刷新 <c>UpdatedAt</c>）。
+    /// 所以 <c>Remarks</c>（備考）也能在画面上维护，且不会把别的行冲掉。
     /// </para>
     /// </summary>
     internal sealed class MemberNameReplacementRepository : IDisposable
     {
         /// <summary>表名。</summary>
-        public const string TableName = "部材名置换";
+        public const string TableName = "DL_BuhinBuzaiMapping";
 
-        /// <summary>「置换前」列名（主键 = 图纸上的部材名）。</summary>
-        public const string SourceColumnName = "置换前";
+        /// <summary>「部品名」列名（置换前 = 图纸上的部材名；主键之一）。</summary>
+        public const string SourceColumnName = "BuhinName";
 
-        /// <summary>「置换后」列名（登录进部品基本信息表的部材名）。</summary>
-        public const string TargetColumnName = "置换后";
+        /// <summary>「部材名」列名（置换后 = 登录进部品基本信息表的部材名；主键之一）。</summary>
+        public const string TargetColumnName = "BuzaiName";
 
-        /// <summary>「登录时间」列名（保存时自动写入，便于排查是哪一次改的）。</summary>
-        public const string RegisteredAtColumnName = "登录时间";
+        /// <summary>「備考」列名（可选）。</summary>
+        public const string NoteColumnName = "Remarks";
 
-        /// <summary>默认数据库文件夹（与 <see cref="MemberPartRepository"/> 相同：<c>D:\MSIFDB</c>）。</summary>
-        public const string DefaultDatabaseFolder = MemberPartRepository.DefaultDatabaseFolder;
+        /// <summary>「更新日時」列名（保存时自动刷新；DATETIME2）。</summary>
+        public const string UpdatedAtColumnName = "UpdatedAt";
 
-        /// <summary>默认数据库文件名（与 <see cref="MemberPartRepository"/> 同一个库，只多一张表）。</summary>
-        public const string DefaultDatabaseFileName = MemberPartRepository.DefaultDatabaseFileName;
+        /// <summary>部品名列的长度（对应 NVARCHAR(100)）。</summary>
+        public const int SourceColumnMaxLength = 100;
 
-        /// <summary>D 盘不可用时的备选子文件夹名（相对程序目录）。</summary>
-        public const string FallbackDatabaseFolderName = MemberPartRepository.FallbackDatabaseFolderName;
+        /// <summary>部材名列的长度（对应 NVARCHAR(100)）。</summary>
+        public const int TargetColumnMaxLength = 100;
 
-        /// <summary>App.config 中指定数据库位置的键（与 部材部品 共用，保证一定是同一个库）。</summary>
-        public const string DatabasePathSettingKey = MemberPartRepository.DatabasePathSettingKey;
+        /// <summary>備考列的长度（对应 NVARCHAR(255)）。</summary>
+        public const int NoteColumnMaxLength = 255;
 
-        /// <summary>可指定数据库位置的环境变量（与 部材部品 共用）。</summary>
-        public const string DatabasePathEnvironmentVariable = MemberPartRepository.DatabasePathEnvironmentVariable;
+        /// <summary>读出全部行（按「部品名」+「部材名」排序）。</summary>
+        private const string SelectSql =
+            "SELECT [" + SourceColumnName + "], [" + TargetColumnName + "], [" + NoteColumnName +
+            "] FROM [" + TableName + "] ORDER BY [" + SourceColumnName + "], [" + TargetColumnName + "];";
 
-        /// <summary>「登录时间」的格式。</summary>
-        private const string TimestampFormat = "yyyy-MM-dd HH:mm:ss";
-
-        private readonly string _databasePath;
-        private readonly SQLiteConnection _connection;
+        private readonly MemberMappingDbSettings _settings;
+        private readonly SqlConnection _connection;
+        private readonly string _targetDescription;
 
         /// <summary>
-        /// 打开（不存在时创建）数据库并确保表结构存在。
+        /// 用当前生效的连接信息连数据库（环境变量 → 维护画面保存的用户配置 → App.config → 内置默认值）。
         /// </summary>
-        /// <param name="databasePath">数据库文件完整路径；为空时按 <see cref="ResolveDatabasePath()"/> 解析。</param>
-        public MemberNameReplacementRepository(string databasePath)
+        public MemberNameReplacementRepository()
+            : this(null)
         {
-            _databasePath = ResolveDatabasePath(databasePath);
+        }
 
-            string folder = Path.GetDirectoryName(_databasePath);
+        /// <summary>
+        /// 用指定的连接信息连数据库；<paramref name="settings"/> 为 <c>null</c> 时按
+        /// <see cref="MemberMappingDbSettingsStore.Resolve"/> 解析。
+        /// </summary>
+        public MemberNameReplacementRepository(MemberMappingDbSettings settings)
+        {
+            _settings = settings ?? MemberMappingDbSettingsStore.Resolve();
+            _targetDescription = _settings.DescribeTarget() + " / 表 " + TableName;
 
-            if (!string.IsNullOrEmpty(folder) && !Directory.Exists(folder))
-            {
-                Directory.CreateDirectory(folder);
-            }
-
-            SQLiteConnectionStringBuilder builder = new SQLiteConnectionStringBuilder();
-            builder.DataSource = _databasePath;
-            builder.FailIfMissing = false;
-            builder.Version = 3;
-
-            _connection = new SQLiteConnection(builder.ConnectionString);
+            _connection = new SqlConnection(_settings.BuildConnectionString());
             _connection.Open();
-            EnsureSchema();
         }
 
-        /// <summary>实际使用的数据库文件路径（维护画面上显示给用户看）。</summary>
-        public string DatabasePath
+        /// <summary>实际使用的连接目标（维护画面上显示给用户看）。</summary>
+        public string TargetDescription
         {
-            get { return _databasePath; }
+            get { return _targetDescription; }
         }
 
-        /// <summary>按「置换前」排序读出全部行。</summary>
+        /// <summary>实际使用的连接信息（画面显示用）。</summary>
+        public MemberMappingDbSettings Settings
+        {
+            get { return _settings; }
+        }
+
+        /// <summary>读出全部行（按「部品名」+「部材名」排序）。</summary>
         public IList<MemberNameReplacement> Query()
         {
             List<MemberNameReplacement> rows = new List<MemberNameReplacement>();
 
-            string sql = "SELECT [" + SourceColumnName + "], [" + TargetColumnName + "] FROM [" +
-                TableName + "] ORDER BY [" + SourceColumnName + "];";
-
-            using (SQLiteCommand command = new SQLiteCommand(sql, _connection))
-            using (SQLiteDataReader reader = command.ExecuteReader())
+            using (SqlCommand command = new SqlCommand(SelectSql, _connection))
+            using (SqlDataReader reader = command.ExecuteReader())
             {
                 while (reader.Read())
                 {
                     rows.Add(new MemberNameReplacement(
                         reader.IsDBNull(0) ? string.Empty : reader.GetString(0),
-                        reader.IsDBNull(1) ? string.Empty : reader.GetString(1)));
+                        reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                        reader.IsDBNull(2) ? string.Empty : reader.GetString(2)));
                 }
             }
 
@@ -132,56 +140,202 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 整表覆盖写：先删除全部行，再按顺序插入（维护画面点【保存】时调用）。
-        /// 空主键 / 空目标值的行直接跳过（不会写进库）。
+        /// 按「部品名」（<c>BuhinName</c>）查对应的「部材名」（<c>BuzaiName</c>）一览
+        /// （「选择部材名」窗口按部品名提示部材名 用；按 <c>BuzaiName</c> 排序，没有时返回空列表）。
+        /// 主键是 <c>(BuhinName, BuzaiName)</c>，所以同一个部品名 可能对应多个部材名（全部返回）。
         /// </summary>
-        public void Replace(IList<MemberNameReplacement> rows)
+        /// <param name="source">部品名（精确匹配；前后空白会被去掉）。</param>
+        public IList<string> QueryTargets(string source)
         {
-            string timestamp = DateTime.Now.ToString(TimestampFormat, CultureInfo.InvariantCulture);
+            List<string> targets = new List<string>();
+            string value = (source ?? string.Empty).Trim();
 
-            using (SQLiteTransaction transaction = _connection.BeginTransaction())
+            if (value.Length == 0)
             {
-                using (SQLiteCommand delete = new SQLiteCommand("DELETE FROM [" + TableName + "];", _connection, transaction))
+                return targets;
+            }
+
+            const string sql =
+                "SELECT [" + TargetColumnName + "] FROM [" + TableName + "] WHERE [" + SourceColumnName +
+                "] = @source ORDER BY [" + TargetColumnName + "];";
+
+            using (SqlCommand command = new SqlCommand(sql, _connection))
+            {
+                command.Parameters.Add("@source", SqlDbType.NVarChar, SourceColumnMaxLength).Value = value;
+
+                using (SqlDataReader reader = command.ExecuteReader())
                 {
-                    delete.ExecuteNonQuery();
-                }
-
-                string insertSql = "INSERT INTO [" + TableName + "] ([" + SourceColumnName + "], [" +
-                    TargetColumnName + "], [" + RegisteredAtColumnName +
-                    "]) VALUES (@source, @target, @registeredAt);";
-
-                using (SQLiteCommand insert = new SQLiteCommand(insertSql, _connection, transaction))
-                {
-                    SQLiteParameter sourceParameter = insert.Parameters.Add("@source", System.Data.DbType.String);
-                    SQLiteParameter targetParameter = insert.Parameters.Add("@target", System.Data.DbType.String);
-                    SQLiteParameter registeredAtParameter =
-                        insert.Parameters.Add("@registeredAt", System.Data.DbType.String);
-
-                    if (rows != null)
+                    while (reader.Read())
                     {
-                        foreach (MemberNameReplacement row in rows)
-                        {
-                            if (row == null || row.Source.Length == 0 || row.Target.Length == 0)
-                            {
-                                continue;
-                            }
+                        string target = reader.IsDBNull(0) ? string.Empty : reader.GetString(0).Trim();
 
-                            sourceParameter.Value = row.Source;
-                            targetParameter.Value = row.Target;
-                            registeredAtParameter.Value = timestamp;
-                            insert.ExecuteNonQuery();
+                        if (target.Length > 0 && !targets.Contains(target))
+                        {
+                            targets.Add(target);
                         }
                     }
                 }
+            }
+
+            return targets;
+        }
+
+        /// <summary>
+        /// 按主键 <c>(BuhinName, BuzaiName)</c> 精确同步（维护画面点【保存】时调用）：
+        /// 库里有、这次没提交的键 → <c>DELETE</c>；提交的键库里没有 → <c>INSERT</c>；
+        /// 其它 → <c>UPDATE</c>（同时刷新 <c>UpdatedAt</c>）。空「部品名」/ 空「部材名」的行跳过。
+        /// </summary>
+        public void Save(IList<MemberNameReplacement> rows)
+        {
+            using (SqlTransaction transaction = _connection.BeginTransaction())
+            {
+                HashSet<string> existingKeys = QueryKeys(transaction);
+                HashSet<string> submittedKeys = new HashSet<string>(StringComparer.Ordinal);
+
+                if (rows != null)
+                {
+                    foreach (MemberNameReplacement row in rows)
+                    {
+                        if (row != null && row.Source.Length > 0 && row.Target.Length > 0)
+                        {
+                            submittedKeys.Add(BuildKey(row.Source, row.Target));
+                        }
+                    }
+                }
+
+                DeleteMissingRows(transaction, existingKeys, submittedKeys);
+                UpsertRows(transaction, rows, existingKeys);
 
                 transaction.Commit();
             }
         }
 
+        /// <summary>把 1 行的主键拼成 1 个字符串（<c>BuhinName</c> + 分隔符 + <c>BuzaiName</c>）。</summary>
+        private static string BuildKey(string source, string target)
+        {
+            return (source ?? string.Empty) + "\u0001" + (target ?? string.Empty);
+        }
+
+        /// <summary>把主键字符串拆成 <c>@source</c> / <c>@target</c> 两个参数值。</summary>
+        private static void SplitKey(string key, SqlParameter source, SqlParameter target)
+        {
+            int separator = key.IndexOf('\u0001');
+
+            source.Value = separator < 0 ? key : key.Substring(0, separator);
+            target.Value = separator < 0 ? string.Empty : key.Substring(separator + 1);
+        }
+
+        /// <summary>读出现有行的主键（判断「删除 / 更新 / 插入」用）。</summary>
+        private HashSet<string> QueryKeys(SqlTransaction transaction)
+        {
+            HashSet<string> keys = new HashSet<string>(StringComparer.Ordinal);
+
+            using (SqlCommand command = new SqlCommand(
+                "SELECT [" + SourceColumnName + "], [" + TargetColumnName + "] FROM [" + TableName + "];",
+                _connection, transaction))
+            using (SqlDataReader reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    string source = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                    string target = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+
+                    keys.Add(BuildKey(source.Trim(), target.Trim()));
+                }
+            }
+
+            return keys;
+        }
+
+        /// <summary>删除「库里有、这次提交里没有」的行（= 画面里删掉的行）。</summary>
+        private void DeleteMissingRows(SqlTransaction transaction, HashSet<string> existingKeys,
+            HashSet<string> submittedKeys)
+        {
+            using (SqlCommand command = new SqlCommand(
+                "DELETE FROM [" + TableName + "] WHERE [" + SourceColumnName + "] = @source AND [" +
+                TargetColumnName + "] = @target;",
+                _connection, transaction))
+            {
+                SqlParameter source = command.Parameters.Add("@source", SqlDbType.NVarChar, SourceColumnMaxLength);
+                SqlParameter target = command.Parameters.Add("@target", SqlDbType.NVarChar, TargetColumnMaxLength);
+
+                foreach (string key in existingKeys)
+                {
+                    if (submittedKeys.Contains(key))
+                    {
+                        continue;
+                    }
+
+                    SplitKey(key, source, target);
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        /// <summary>更新 / 插入行（主键 <c>(BuhinName, BuzaiName)</c> 在库里存在 → UPDATE，否则 INSERT）。</summary>
+        private void UpsertRows(SqlTransaction transaction, IList<MemberNameReplacement> rows,
+            HashSet<string> existingKeys)
+        {
+            string updateSql = "UPDATE [" + TableName + "] SET [" + NoteColumnName + "] = @note, [" +
+                UpdatedAtColumnName + "] = GETDATE() WHERE [" + SourceColumnName + "] = @source AND [" +
+                TargetColumnName + "] = @target;";
+
+            string insertSql = "INSERT INTO [" + TableName + "] ([" + SourceColumnName + "], [" +
+                TargetColumnName + "], [" + NoteColumnName + "], [" + UpdatedAtColumnName +
+                "]) VALUES (@source, @target, @note, GETDATE());";
+
+            using (SqlCommand update = new SqlCommand(updateSql, _connection, transaction))
+            using (SqlCommand insert = new SqlCommand(insertSql, _connection, transaction))
+            {
+                AddValueParameters(update);
+                AddValueParameters(insert);
+
+                if (rows == null)
+                {
+                    return;
+                }
+
+                foreach (MemberNameReplacement row in rows)
+                {
+                    if (row == null || row.Source.Length == 0 || row.Target.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    SetValueParameters(row, update.Parameters);
+
+                    if (existingKeys.Contains(BuildKey(row.Source, row.Target)) &&
+                        update.ExecuteNonQuery() > 0)
+                    {
+                        continue;
+                    }
+
+                    SetValueParameters(row, insert.Parameters);
+                    insert.ExecuteNonQuery();
+                }
+            }
+        }
+
+        /// <summary>加 @source / @target / @note 三个参数。</summary>
+        private static void AddValueParameters(SqlCommand command)
+        {
+            command.Parameters.Add("@source", SqlDbType.NVarChar, SourceColumnMaxLength);
+            command.Parameters.Add("@target", SqlDbType.NVarChar, TargetColumnMaxLength);
+            command.Parameters.Add("@note", SqlDbType.NVarChar, NoteColumnMaxLength);
+        }
+
+        /// <summary>把 1 行写进参数（備考 为空时存 NULL）。</summary>
+        private static void SetValueParameters(MemberNameReplacement row, SqlParameterCollection parameters)
+        {
+            parameters["@source"].Value = row.Source;
+            parameters["@target"].Value = row.Target;
+            parameters["@note"].Value = row.Note.Length == 0 ? (object)DBNull.Value : row.Note;
+        }
+
         /// <summary>表里的行数（日志 / 画面提示用）。</summary>
         public int Count()
         {
-            using (SQLiteCommand command = new SQLiteCommand("SELECT COUNT(*) FROM [" + TableName + "];", _connection))
+            using (SqlCommand command = new SqlCommand("SELECT COUNT(*) FROM [" + TableName + "];", _connection))
             {
                 object value = command.ExecuteScalar();
 
@@ -191,18 +345,17 @@ namespace MSIFAITOOLS.Services
             }
         }
 
-        /// <summary>建表（已存在时不做事）。</summary>
-        private void EnsureSchema()
+        /// <summary>表是否存在于当前库（不存在时画面给出「请先建表」提示）。</summary>
+        public bool TableExists()
         {
-            string createTable =
-                "CREATE TABLE IF NOT EXISTS [" + TableName + "] (" +
-                "[" + SourceColumnName + "] TEXT NOT NULL PRIMARY KEY, " +
-                "[" + TargetColumnName + "] TEXT NOT NULL, " +
-                "[" + RegisteredAtColumnName + "] TEXT);";
-
-            using (SQLiteCommand command = new SQLiteCommand(createTable, _connection))
+            using (SqlCommand command = new SqlCommand(
+                "SELECT CASE WHEN OBJECT_ID(@name, N'U') IS NULL THEN 0 ELSE 1 END;", _connection))
             {
-                command.ExecuteNonQuery();
+                command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = TableName;
+                object value = command.ExecuteScalar();
+
+                return value != null && value != DBNull.Value &&
+                    Convert.ToInt32(value, CultureInfo.InvariantCulture) != 0;
             }
         }
 
@@ -216,112 +369,91 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 解析数据库文件路径（默认 = 部材部品マスタ 的库）。
+        /// 用当前生效的连接信息描述目标（日志 / 画面用），
+        /// 例：<c>SQL Server 10.103.126.209,1433 / DB MSIF / 表 DL_BuhinBuzaiMapping</c>。
         /// </summary>
-        public static string ResolveDatabasePath()
+        public static string DescribeTarget()
         {
-            return ResolveDatabasePath(null);
+            return ResolveTargetDescription(MemberMappingDbSettingsStore.Resolve());
+        }
+
+        /// <summary>用指定连接信息描述目标（画面用）。</summary>
+        public static string ResolveTargetDescription(MemberMappingDbSettings settings)
+        {
+            MemberMappingDbSettings resolved = settings ?? MemberMappingDbSettingsStore.Resolve();
+
+            return resolved.DescribeTarget() + " / 表 " + TableName;
         }
 
         /// <summary>
-        /// 解析数据库文件路径：① 传入值 → ② 环境变量 <see cref="DatabasePathEnvironmentVariable"/> →
-        /// ③ App.config 的 <see cref="DatabasePathSettingKey"/> → ④ 默认
-        /// <c>D:\MSIFDB\MSIF_MemberParts.db</c>（D 盘不可用时
-        /// <c>&lt;程序目录&gt;\Data\MSIF_MemberParts.db</c>）。
-        /// <para>配置值写文件夹也可以（自动补 <see cref="DefaultDatabaseFileName"/>），相对路径按程序目录解析。</para>
+        /// 【测试连接】：真的连一次库，并检查表 <see cref="TableName"/> 是否存在
+        /// （表不存在也算连上了，只是结果文字里提示建表）。
         /// </summary>
-        /// <param name="databasePath">显式指定的路径；为空时按环境变量 / App.config / 默认值解析。</param>
-        public static string ResolveDatabasePath(string databasePath)
+        /// <param name="settings">要测试的连接信息。</param>
+        /// <param name="message">结果文字（成功 / 失败原因）。</param>
+        public static bool TestConnection(MemberMappingDbSettings settings, out string message)
         {
-            if (!string.IsNullOrWhiteSpace(databasePath))
+            message = string.Empty;
+
+            if (settings == null)
             {
-                return databasePath.Trim();
+                message = "连接信息不能为空。";
+                return false;
             }
 
-            string fromEnvironment =
-                ResolveCandidate(Environment.GetEnvironmentVariable(DatabasePathEnvironmentVariable));
+            string validationError;
 
-            if (fromEnvironment.Length > 0)
+            if (!settings.Validate(out validationError))
             {
-                return fromEnvironment;
-            }
-
-            string fromConfiguration = string.Empty;
-
-            try
-            {
-                fromConfiguration = ResolveCandidate(ConfigurationManager.AppSettings[DatabasePathSettingKey]);
-            }
-            catch (ConfigurationErrorsException)
-            {
-                // App.config 读不出来时退回默认值（不终止）
-                fromConfiguration = string.Empty;
-            }
-
-            if (fromConfiguration.Length > 0)
-            {
-                return fromConfiguration;
-            }
-
-            string defaultPath = Path.Combine(DefaultDatabaseFolder, DefaultDatabaseFileName);
-
-            if (IsRootAvailable(defaultPath))
-            {
-                return defaultPath;
-            }
-
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
-                FallbackDatabaseFolderName, DefaultDatabaseFileName);
-        }
-
-        /// <summary>
-        /// 把配置值换成数据库文件路径：给的是文件夹（已存在或没有扩展名）时补上
-        /// <see cref="DefaultDatabaseFileName"/>；解析不了返回空串。
-        /// </summary>
-        private static string ResolveCandidate(string candidate)
-        {
-            if (string.IsNullOrWhiteSpace(candidate))
-            {
-                return string.Empty;
+                message = validationError;
+                return false;
             }
 
             try
             {
-                string path = candidate.Trim();
-
-                if (!Path.IsPathRooted(path))
+                using (SqlConnection connection = new SqlConnection(settings.BuildConnectionString()))
                 {
-                    path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, path);
+                    connection.Open();
+
+                    bool tableExists = false;
+                    int rowCount = 0;
+
+                    using (SqlCommand command = new SqlCommand(
+                        "SELECT CASE WHEN OBJECT_ID(@name, N'U') IS NULL THEN 0 ELSE 1 END;", connection))
+                    {
+                        command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = TableName;
+                        object value = command.ExecuteScalar();
+                        tableExists = value != null && value != DBNull.Value &&
+                            Convert.ToInt32(value, CultureInfo.InvariantCulture) != 0;
+                    }
+
+                    if (tableExists)
+                    {
+                        using (SqlCommand command = new SqlCommand(
+                            "SELECT COUNT(*) FROM [" + TableName + "];", connection))
+                        {
+                            object value = command.ExecuteScalar();
+                            rowCount = value == null || value == DBNull.Value
+                                ? 0
+                                : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+                        }
+                    }
+
+                    message = tableExists
+                        ? "连接成功：" + settings.DescribeTarget() + " / 表 " + TableName +
+                          "（" + rowCount + " 条）"
+                        : "连接成功，但库 " + settings.Database + " 里没有表 " + TableName +
+                          "。请先用建表 SQL 创建该表。";
+
+                    return true;
                 }
-
-                path = Path.GetFullPath(path);
-
-                if (Directory.Exists(path) || Path.GetExtension(path).Length == 0)
-                {
-                    path = Path.Combine(path, DefaultDatabaseFileName);
-                }
-
-                return path;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                return string.Empty;
-            }
-        }
-
-        /// <summary>路径所在盘的根目录是否存在（D 盘不可用时退回程序目录）。</summary>
-        private static bool IsRootAvailable(string path)
-        {
-            try
-            {
-                string root = Path.GetPathRoot(path);
-
-                return !string.IsNullOrEmpty(root) && Directory.Exists(root);
-            }
-            catch (Exception)
-            {
+                message = "连接失败：" + ex.Message;
                 return false;
             }
         }
+
     }
 }

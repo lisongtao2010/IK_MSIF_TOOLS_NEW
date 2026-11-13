@@ -16,11 +16,18 @@ namespace CadPartSplitter
     ///     「番号 / 部品名 / 枠区分 / 員数 / 基本寸法 / 切断寸法 / (空)」，明细最后一列写着 MDU762 …）——
     ///     这时按明细内容认列（那列出现「下表参照 / 左上表参照」，或过半格子是「字母 + 数字」的品番形态），
     ///     认出来的列在输出表头里改名成「部品コード」：品番不会再落到无名列上，写「下表参照」的行也照常展开；
-    ///   · 明细行里「部品コード」含「下表参照」→ 往后找第一张「表头含部品コード且有明细」的表（图纸上的「下表」）；
-    ///   · 含「左上表参照」→ 往前找同样条件的表（图纸上位于左上方，CSV 编号更小 —— 就是往前翻 CSV 文件）；
+    ///   · 明细行里「部品コード」含「下表参照」/「左上表参照」→ 先按**表头**找参照表：表头里同含
+    ///     `見込み` 与品番列名（部品コード / 部品番号 / 品番 / 型式 / 型番）的那张小表就是参照表 ——
+    ///     图纸上它的标题写着「見込み / 部品コード」（H467U10001 的 table_02 就是它，而且排在主表
+    ///     **后面**，「左上表参照」按方向往前翻是找不到的，那一行会原样留着 `左上表参照`）；
+    ///     找不到这种表时才退回按方向翻（「下表参照」往后、「左上表参照」往前，
+    ///     取第一张「表头含部品コード且有明细」的表）；
     ///   · 参照表有几条明细，这一行就拆成几条：只把「部品コード」换成参照表对应的值，
     ///     其余列（番号 / 部品名 / 枠区分 / 員数 / 寸法）沿用原行 —— 同一个部品的多个变体共用番号；
     ///   · 参照表找不到 / 明细全空 → 该行原样保留并写 WARN，不做猜测；
+    ///   · 品番前面粘着图纸上的**标注记号**（`△4` / `▲3` 这种指名视图的引用号）时，文字层常常只把
+    ///     数字漏出来、跟品番并进同一格（H467U10004 的 `MZC●●73` 读成 `4 MZC●●73`）—— 写出去的
+    ///     品番一律先剥掉这种「数字 + 空格」前缀（<see cref="StripPartCodeMark"/>，02 也共用同一份规则）；
     ///   · 输出表头里一定有「部品コード」列（主表没有这一列时在末尾补一列、值留空），
     ///     下游按固定列取数时不会因为缺列而错位。
     ///
@@ -48,14 +55,25 @@ namespace CadPartSplitter
         private const string LegacyOutputFileName = "LT_STEP1.csv";
 
         /// <summary>
-        /// 主表表头必须同时出现的列名。
+        /// 主表表头必须出现的「行番号」列名（图纸上写作 <c>番号</c>，值是 1 / 2 / 3 …）。
         ///
-        /// 「部品コード」不在其中：有的图纸的部品表只写 番号 / 部品名 / 枠区分 / 員数，没有品番列，
+        /// 「部品コード」不在必须列表里：有的图纸的部品表只写 番号 / 部品名 / 枠区分 / 員数，没有品番列，
         /// 这种表照样要收（下游要「一个部品一条记录」），只是输出的「部品コード」格留空。
         /// </summary>
-        private static readonly string[] PartsHeaders = { "番号", "部品名" };
+        private const string RowNumberHeader = "番号";
 
-        /// <summary>「部品コード」列名（也是参照表必须有的列）。</summary>
+        /// <summary>
+        /// 「部品名」列名 —— 图纸上也有写成 品名 / 名称 的（同义组 <see cref="HeaderNames.PartName"/>）。
+        /// 与 <see cref="RowNumberHeader"/> 同时出现，这张表才当部品表（主表）。
+        /// 「番号」必须按原字认：<c>NO</c> / <c>番</c> 这类放宽会把表題欄也认成部品表。
+        /// </summary>
+        private static readonly string[] PartNameHeaders = HeaderNames.PartName;
+
+        /// <summary>
+        /// 「部品コード」列名（也是参照表必须有的列）：**输出表头固定写这个**。
+        /// 源表里那一列的标题可能写成 部品番号 / 品番 / 型式 / 型番 —— 认列时按同义组
+        /// <see cref="HeaderNames.PartCode"/> 认，输出时统一改名成「部品コード」（下游按固定列取数）。
+        /// </summary>
         private const string PartCodeHeader = "部品コード";
 
         /// <summary>「部品コード」列出现这个字样时，表示要用「下表」的明细展开。</summary>
@@ -64,8 +82,24 @@ namespace CadPartSplitter
         /// <summary>
         /// 「部品コード」列出现这个字样时，表示要用「左上表」的明细展开：
         /// 参照表在图纸上位于左上方，CSV 编号比主表小 —— 于是「左上表参照」就是**往前翻** CSV 文件。
+        /// 这是**兜底**规则：先按参照表的表头找（见 <see cref="ReferenceHeaderKeyword"/>），
+        /// 只有找不到那样的表时才按方向翻。图纸上「左上 / 下表」只是画的位置，与 CSV 编号没有
+        /// 必然关系 —— H467U10001 的参照表就排在主表**后面**（主表 table_01、参照表 table_02）。
         /// </summary>
         private const string PreviousTableKeyword = "左上表参照";
+
+        /// <summary>
+        /// 参照表的标志列名：图纸上那张色展开表是「<c>見込み / 部品コード</c>」两列
+        /// （见 `見込み` 与 `部品コード` 两个标题）。表头里同时有这两个列名的表就是参照表 ——
+        /// 按表头认，不看它排在主表前面还是后面（`H467U10001` 的 `table_02.csv` 就是这种表，
+        /// 它排在主表 `table_01` 的**后面**，旧的「向前翻」规则找不到、那一行原样留着 `左上表参照`）。
+        /// </summary>
+        private const string ReferenceHeaderKeyword = "見込み";
+
+        /// <summary>
+        /// 找参照表表头时向下扫的行数（正常在第 1 行；个别图纸前面留了空行 / 合并表头压到第 2 行）。
+        /// </summary>
+        private const int ReferenceHeaderScanRows = 3;
 
         /// <summary>
         /// 按明细认品番列时，「这一列出现过下表参照 / 左上表参照」的得分 —— 比任何
@@ -78,6 +112,15 @@ namespace CadPartSplitter
         /// 认列时和字母 / 数字一样算「品番的合法字符」。
         /// </summary>
         private const string PartCodeVariantMarks = "□■○●△▲◇◆";
+
+        /// <summary>
+        /// 图纸上给部品加的**标注记号**（三角 / 圈 里写个数字，指到某个视图）。文字层会把它们跟
+        /// 同一格里的品番粘在一起：<c>H467U10004</c> 的 <c>MZC●●73</c> 前面就带着「△4」，
+        /// 落盘成 <c>4 MZC●●73</c>（三角没进文字层，只剩数字 + 空格）；图纸上分两行写时是
+        /// <c>△4~MZC●●73</c>（格内换行被 CSV 落盘压成 <c>~</c>）。
+        /// 与 <see cref="PartCodeVariantMarks"/> 不同：这些记号**不是品番的一部分**，要剥掉。
+        /// </summary>
+        internal const string PartCodeMarkChars = "△▲▽▼○●◎◇◆□■※＊";
 
         /// <summary>
         /// 扫描 <paramref name="outputDirectory"/> 下的 <c>tables\*.csv</c> 并合成
@@ -134,7 +177,7 @@ namespace CadPartSplitter
             // 文件名补零（table_01 … table_10），按名字排序即图纸上从上到下的顺序
             Array.Sort(files, StringComparer.OrdinalIgnoreCase);
 
-            List<Sheet> sheets = LoadSheets(files);
+            List<Sheet> sheets = LoadSheets(files, o);
 
             if (sheets.Count == 0)
             {
@@ -173,6 +216,19 @@ namespace CadPartSplitter
                 // 这样 MapToHeader 能把它对到输出表头的「部品コード」列，不会再落到无名列上。
                 string[] srcHeader = EffectiveHeader(sheet, codeCol);
 
+                // 品番那一列的标题写成同义写法（部品番号 / 品番 / 型式 / 型番）时，上面已把它改名成
+                // 「部品コード」；这里记一句，图纸上写的是哪种叫法一眼能看到（输出列名不变）。
+                if (codeCol >= 0 && codeCol < sheet.Header.Length)
+                {
+                    string written = CsvFile.Normalize(sheet.Header[codeCol]);
+
+                    if (written.Length > 0 && written != CsvFile.Normalize(PartCodeHeader))
+                    {
+                        o.Log("[INFO] 01_アッセンブリ図_部品機能情報：" + sheet.Name + " 品番那一列的表头写的是「"
+                              + written + "」→ 按同义写法当成「" + PartCodeHeader + "」（输出列名不变）。");
+                    }
+                }
+
                 if (outHeader == null)
                     outHeader = EnsurePartCodeColumn(srcHeader, sheet.Name, o);
 
@@ -195,33 +251,47 @@ namespace CadPartSplitter
 
                     if (!IsReferenceKeyword(code))
                     {
-                        output.Add(MapToHeader(row, srcHeader, outHeader));
+                        output.Add(MapRow(row, srcHeader, outHeader, outCodeCol, sheet.Name, r + 1, o));
                         continue;
                     }
 
-                    // 「下表参照」→ 往后翻（+1）；「左上表参照」→ 往前翻（-1，图纸上位于左上方、CSV 编号更小）。
-                    // 都取第一张「表头含部品コード且有明细」的表当参照表；两个词同时出现时按「左上表」处理。
+                    // 参照表**先按表头认**：图纸上那张色展开表写着「見込み / 部品コード」两个列名，
+                    // 与它在主表的前 / 后没有关系 —— 「左上表参照」指的是画在左上方，CSV 编号未必更小
+                    // （H467U10001：主表 table_01、参照表 table_02，按方向往前翻什么都找不到）。
+                    // 找不到这种表时才退回按方向翻（旧行为：「下表参照」往后、「左上表参照」往前）。
                     string flat = CsvFile.Normalize(code);
                     int step = flat.IndexOf(PreviousTableKeyword, StringComparison.Ordinal) >= 0 ? -1 : 1;
                     string refName;
 
-                    List<string> refCodes = FindReferenceCodes(sheets, i, step, out refName);
+                    List<string> refCodes = FindReferenceTableByHeader(sheets, i, out refName);
+
+                    if (refCodes != null)
+                    {
+                        o.Log("[INFO] 01_アッセンブリ図_部品機能情報：" + sheet.Name + " 第 " + (r + 1) + " 行（" + code
+                              + "）按表头「" + ReferenceHeaderKeyword + " / " + PartCodeHeader + "」认出参照表 "
+                              + refName + "（与主表前后位置无关）。");
+                    }
+                    else
+                    {
+                        refCodes = FindReferenceCodes(sheets, i, step, out refName);
+                    }
 
                     if (refCodes == null)
                     {
                         o.Log("[WARN] 01_アッセンブリ図_部品機能情報：" + sheet.Name + " 第 " + (r + 1) + " 行「" + code
                               + "」按" + (step < 0 ? "前（左上）" : "后（下）")
                               + "找不到可用的参照表，该行原样保留。");
-                        output.Add(MapToHeader(row, srcHeader, outHeader));
+                        output.Add(MapRow(row, srcHeader, outHeader, outCodeCol, sheet.Name, r + 1, o));
                         continue;
                     }
 
                     foreach (string refCode in refCodes)
                     {
-                        string[] clone = MapToHeader(row, srcHeader, outHeader);
+                        // 参照表搬过来的品番同样要清一次（标注记号也会落在参照表的格子里）
+                        string[] clone = MapRow(row, srcHeader, outHeader, outCodeCol, sheet.Name, r + 1, o);
 
                         if (outCodeCol >= 0)
-                            clone[outCodeCol] = refCode;
+                            clone[outCodeCol] = StripPartCodeMark(refCode);
 
                         output.Add(clone);
                         expandedRows++;
@@ -318,7 +388,14 @@ namespace CadPartSplitter
             }
         }
 
-        private static List<Sheet> LoadSheets(string[] files)
+        /// <summary>
+        /// 读 <c>tables\*.csv</c>（一个文件一张表）。读进来先过一遍 <see cref="CsvFile.FoldDoubleRows"/>：
+        /// CAD 把同一个字画了两遍时，表头会是 <c>部部品品ココーードド</c> 这种样子 ——
+        /// 按列名找不到「部品コード / 番号」，整张表会被当成「不认识的表」跳过（H467U10008）。
+        /// </summary>
+        /// <param name="files">tables 目录下的 CSV 文件（已按文件名排序）。</param>
+        /// <param name="o">参数 / 日志。</param>
+        private static List<Sheet> LoadSheets(string[] files, DetectorOptions o)
         {
             var sheets = new List<Sheet>();
 
@@ -338,11 +415,25 @@ namespace CadPartSplitter
                 if (rows.Count == 0)
                     continue;
 
+                // CAD 把同一个字画了两遍时（文字层重叠放置），表头会是 部部品品ココーードド 这种样子：
+                // 按列名找不到「部品コード / 番号」，整张表会被当成「不认识的表」跳过（H467U10008）。
+                // 先把这种格子还原，再往下判定。
+                int folded;
+                string sample;
+                CsvFile.FoldDoubleRows(rows, out folded, out sample);
+
+                if (folded > 0)
+                {
+                    o.Log("[INFO] 01_アッセンブリ図_部品機能情報：" + Path.GetFileName(file) + " 有 " + folded
+                          + " 格是同一个字被画了两遍（PDF 里文字重叠放置）→ 已还原（" + sample + "）。");
+                }
+
                 sheets.Add(new Sheet
                 {
                     Name = Path.GetFileName(file),
                     Rows = rows,
-                    CodeColumn = CsvFile.IndexOfHeader(rows[0], PartCodeHeader)
+                    // 品番列按同义组认：部品コード / 部品番号 / 品番 / 型式 / 型番
+                    CodeColumn = HeaderNames.IndexOf(rows[0], HeaderNames.PartCode)
                 });
             }
 
@@ -352,7 +443,7 @@ namespace CadPartSplitter
         // ── 判定 / 映射 ──────────────────────────────────────────────────────
 
         /// <summary>
-        /// 是否部品表（主表）：表头同时含「番号」「部品名」。
+        /// 是否部品表（主表）：表头同时含「番号」（按原字）与「部品名」（按同义组：部品名 / 品名 / 名称）。
         /// 「部品コード」可有可无 —— 没有这一列的部品表也收，输出时该列留空（见 <see cref="EnsurePartCodeColumn"/>）。
         /// </summary>
         private static bool IsPartsTable(string[] header)
@@ -360,34 +451,46 @@ namespace CadPartSplitter
             if (header == null)
                 return false;
 
-            foreach (string keyword in PartsHeaders)
-            {
-                if (CsvFile.IndexOfHeader(header, keyword) < 0)
-                    return false;
-            }
-
-            return true;
+            return CsvFile.IndexOfHeader(header, RowNumberHeader) >= 0
+                   && HeaderNames.IndexOf(header, PartNameHeaders) >= 0;
         }
 
         /// <summary>
         /// 取参照表的部品コード清单（按明细行顺序、去空、去重复表头、去链式参照行）。
+        /// 表头不在第一行（前面留了空行 / 合并表头压下来）时自己找一次表头行
+        /// （<see cref="FindReferenceHeaderRow"/>）。
         /// 没有部品コード列或没有有效值 → 返回 null（表示这张表不能当参照表）。
         /// </summary>
         private static List<string> CollectReferenceCodes(Sheet sheet)
         {
-            if (sheet.CodeColumn < 0)
+            if (sheet == null || sheet.Rows.Count == 0)
                 return null;
+
+            int codeColumn = sheet.CodeColumn;
+            int firstRow = 1;
+
+            if (codeColumn < 0)
+            {
+                // 表头不在第一行（前面留了空行 / 合并表头把它压到第 2 行）：自己找一次表头行
+                int headerRow = FindReferenceHeaderRow(sheet);
+
+                if (headerRow < 0)
+                    return null;
+
+                codeColumn = HeaderNames.IndexOf(sheet.Rows[headerRow], HeaderNames.PartCode);
+                firstRow = headerRow + 1;
+            }
 
             var codes = new List<string>();
 
-            for (int r = 1; r < sheet.Rows.Count; r++)
+            for (int r = firstRow; r < sheet.Rows.Count; r++)
             {
                 string[] row = sheet.Rows[r];
 
-                if (row.Length <= sheet.CodeColumn)
+                if (row == null || row.Length <= codeColumn)
                     continue;
 
-                string value = CsvFile.Normalize(row[sheet.CodeColumn]);
+                string value = CsvFile.Normalize(StripPartCodeMark(row[codeColumn]));
 
                 if (value.Length == 0)
                     continue;
@@ -395,8 +498,8 @@ namespace CadPartSplitter
                 if (IsReferenceKeyword(value))
                     continue;   // 参照表自己也在「下表参照 / 左上表参照」：不接第二层，避免越扯越乱
 
-                if (value.IndexOf(PartCodeHeader, StringComparison.Ordinal) >= 0)
-                    continue;   // 重复的表头行
+                if (HeaderNames.IsMatch(value, HeaderNames.PartCode))
+                    continue;   // 重复的表头行（部品コード / 部品番号 / 品番 …）
 
                 codes.Add(value);
             }
@@ -552,12 +655,17 @@ namespace CadPartSplitter
         }
 
         /// <summary>
-        /// 参与「按列名映射」的源表头：表头里没有「部品コード」这个名字、但明细里认出了品番列
-        /// （<see cref="FindPartCodeColumnByData"/>）时，返回一份把那一格命名成「部品コード」的副本，
-        /// 输出表头就能对上 —— 品番不会掉进「没有名字的那一列」。表头本来就有名字时原样返回。
+        /// 参与「按列名映射」的源表头：把品番那一列在表头里**统一命名成「部品コード」**，
+        /// 输出表头（下游按固定列名取数）就能对上 —— 品番不会掉进「名字不一样的那一列」。
+        ///
+        /// 两种情况都改名：
+        ///   · 表头没有「部品コード」这个名字、但明细里认出了品番列（<see cref="FindPartCodeColumnByData"/>）；
+        ///   · 表头那一格写着同义写法（「部品番号」「品番」「型式」「型番」）—— 图纸上只是换个叫法，
+        ///     输出仍统一成「部品コード」（H094U10008 那种图纸的品番列表头就写「部品番号」）。
+        /// 本来就写着「部品コード」时原样返回（不改动原数组）。
         /// </summary>
         /// <param name="sheet">主表。</param>
-        /// <param name="codeColumn">认出来的品番列号；-1 表示没有。</param>
+        /// <param name="codeColumn">品番列号；-1 表示没有。</param>
         /// <returns>按列名映射用的表头（可能是原数组，也可能是改名后的副本）。</returns>
         private static string[] EffectiveHeader(Sheet sheet, int codeColumn)
         {
@@ -569,8 +677,11 @@ namespace CadPartSplitter
             if (codeColumn < 0)
                 return header;
 
-            if (codeColumn < header.Length && CsvFile.Normalize(header[codeColumn]).Length > 0)
-                return header;   // 这一格本来就有名字（大多就是「部品コード」）：不动它
+            string key = CsvFile.Normalize(PartCodeHeader);
+            string current = codeColumn < header.Length ? CsvFile.Normalize(header[codeColumn]) : string.Empty;
+
+            if (current == key)
+                return header;   // 这一格本来就叫「部品コード」：不动它
 
             int length = codeColumn + 1 > header.Length ? codeColumn + 1 : header.Length;
             var copy = new string[length];
@@ -583,6 +694,89 @@ namespace CadPartSplitter
             copy[codeColumn] = PartCodeHeader;
 
             return copy;
+        }
+
+        /// <summary>
+        /// 按**表头**找参照表：表头（前 <see cref="ReferenceHeaderScanRows"/> 行内）同时含
+        /// <see cref="ReferenceHeaderKeyword"/>（<c>見込み</c>）与品番列名（<c>部品コード</c> 及其同义写法）
+        /// 的表就是参照表 —— 图纸上它的标题就写着「見込み / 部品コード」。挑离主表最近的那张
+        /// （同距离优先排在主表**后面**的），一张图有不止一张色展开表时不会串到别的主表的参照表上。
+        /// </summary>
+        /// <param name="sheets">全部表格（按文件名排序）。</param>
+        /// <param name="fromIndex">主表在 <paramref name="sheets"/> 里的下标。</param>
+        /// <param name="sheetName">命中的参照表文件名；没找到时写 null。</param>
+        /// <returns>参照表的部品コード清单；没有这种表 / 表里没有有效品番返回 null。</returns>
+        private static List<string> FindReferenceTableByHeader(List<Sheet> sheets, int fromIndex, out string sheetName)
+        {
+            sheetName = null;
+
+            if (sheets == null)
+                return null;
+
+            int best = -1;
+            int bestDistance = int.MaxValue;
+
+            for (int k = 0; k < sheets.Count; k++)
+            {
+                if (k == fromIndex || !IsReferenceTable(sheets[k]))
+                    continue;
+
+                int distance = Math.Abs(k - fromIndex);
+
+                // 同距离优先排在主表后面的那张（「下表参照」比「左上表参照」常见）
+                if (distance < bestDistance || (distance == bestDistance && k > best))
+                {
+                    best = k;
+                    bestDistance = distance;
+                }
+            }
+
+            if (best < 0)
+                return null;
+
+            List<string> found = CollectReferenceCodes(sheets[best]);
+
+            if (found == null)
+                return null;   // 认出了参照表却一条有效品番都没有 → 当成没找到，交给调用方写 WARN
+
+            sheetName = sheets[best].Name;
+
+            return found;
+        }
+
+        /// <summary>
+        /// 这张表是不是参照表（图纸上「<c>見込み / 部品コード</c>」两列的小表）——
+        /// 表头里同时出现 <see cref="ReferenceHeaderKeyword"/> 与品番列名（同义组 <see cref="HeaderNames.PartCode"/>）。
+        /// </summary>
+        private static bool IsReferenceTable(Sheet sheet)
+        {
+            return FindReferenceHeaderRow(sheet) >= 0;
+        }
+
+        /// <summary>
+        /// 在前 <see cref="ReferenceHeaderScanRows"/> 行里找「<c>見込み</c> + 品番列名」都出现的那一行
+        /// （表头正常就在第 1 行，个别图纸前面留了空行）；找不到返回 -1。
+        /// </summary>
+        private static int FindReferenceHeaderRow(Sheet sheet)
+        {
+            if (sheet == null || sheet.Rows.Count == 0)
+                return -1;
+
+            int scan = Math.Min(sheet.Rows.Count, ReferenceHeaderScanRows);
+
+            for (int r = 0; r < scan; r++)
+            {
+                string[] row = sheet.Rows[r];
+
+                if (row == null)
+                    continue;
+
+                if (CsvFile.IndexOfHeader(row, ReferenceHeaderKeyword) >= 0
+                    && HeaderNames.IndexOf(row, HeaderNames.PartCode) >= 0)
+                    return r;
+            }
+
+            return -1;
         }
 
         /// <summary>
@@ -640,6 +834,104 @@ namespace CadPartSplitter
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 去掉品番前后的分隔符：半角 / 全角空格、制表符，以及 <c>~</c> ——
+        /// <c>tables\*.csv</c> 落盘时把格内换行压成 <c>~</c>，图纸上「△4」和品番分成两行时就是
+        /// <c>△4~MZC●●73</c>。
+        /// </summary>
+        private static string TrimPartCode(string value)
+        {
+            return value.Trim().Trim('~').Trim();
+        }
+
+        /// <summary>
+        /// 剥掉品番前面的**标注记号**：<c>4 MZC●●73</c> → <c>MZC●●73</c>、<c>△4 MZC●●73</c> → <c>MZC●●73</c>。
+        ///
+        /// 图纸上给部品加了「△4 / ▲3」这类引用号，就在品番格子的左边：文字层把三角漏掉后就只剩
+        /// 「数字 + 空格」，落盘成 <c>4 MZC●●73</c>（分两行时是 <c>△4~MZC●●73</c>）。
+        /// 品番都以字母开头（MZC●●73 / TJ-3086 / LAVS-639），**数字（可带记号）+ 分隔符开头的一定不是品番**，
+        /// 前面那段一律剥掉。数字后面没有分隔符时不剥 —— 免得把 <c>2H100</c> 这种真的以数字开头的、
+        /// 或 <c>TJ-3086</c> 这种中间夹 `-` 的品番改坏（只有「记号 + 数字 + 字母」照剥：三角被认出来、
+        /// 却没留空格）。整格只有标注、没有品番时返回空串。
+        ///
+        /// <c>internal</c>：`02_要領図_部品機能情報.csv` 的品番也来自同一份文字层，
+        /// <see cref="LtStep2Builder"/> 用的是同一份规则（那边在摊平之后统一清一遍）。
+        /// </summary>
+        internal static string StripPartCodeMark(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return value;
+
+            string s = TrimPartCode(value);
+
+            while (s.Length > 0)
+            {
+                int i = 0;
+
+                // 标注记号本身（三角 / 圈 / 四角 …）
+                while (i < s.Length && PartCodeMarkChars.IndexOf(s[i]) >= 0)
+                    i++;
+
+                int digits = i;
+
+                while (i < s.Length && s[i] >= '0' && s[i] <= '9')
+                    i++;
+
+                if (i == digits)
+                    break;   // 开头既没有数字、也没有「记号 + 数字」→ 不是标注（MZC●●73 / TJ-3086）
+
+                // 数字后面是分隔符 → 这是标注；后面直接跟字母且前面带过记号（△4MZC●●73）也算；
+                // 否则数字是品番本身的一部分（2H100 / 3M-100），不动它
+                bool strip = i >= s.Length
+                             || char.IsWhiteSpace(s[i]) || s[i] == '~'
+                             || (digits > 0 && char.IsLetter(s[i]));
+
+                if (!strip)
+                    break;
+
+                s = TrimPartCode(s.Substring(i));
+            }
+
+            return s;
+        }
+
+        /// <summary>
+        /// <see cref="MapToHeader"/> 之后再清一次品番列：剥掉图纸标注留下的「数字 + 空格」前缀
+        /// （见 <see cref="StripPartCodeMark"/>），并记一行日志说明原值 / 新值（一眼能核对）。
+        /// </summary>
+        /// <param name="row">源明细行。</param>
+        /// <param name="srcHeader">源表头（认出来的品番列已改名成 `部品コード`）。</param>
+        /// <param name="dstHeader">输出表头。</param>
+        /// <param name="codeColumn">输出表头里 `部品コード` 所在列；-1 表示不处理。</param>
+        /// <param name="sheetName">主表文件名（日志里用）。</param>
+        /// <param name="rowNumber">这一行在 CSV 里的行号（含表头，1 起；日志里用）。</param>
+        /// <param name="o">参数 / 日志。</param>
+        private static string[] MapRow(string[] row, string[] srcHeader, string[] dstHeader, int codeColumn,
+                                       string sheetName, int rowNumber, DetectorOptions o)
+        {
+            string[] mapped = MapToHeader(row, srcHeader, dstHeader);
+
+            if (codeColumn < 0 || codeColumn >= mapped.Length)
+                return mapped;
+
+            string raw = mapped[codeColumn];
+
+            if (string.IsNullOrEmpty(raw))
+                return mapped;
+
+            string clean = StripPartCodeMark(raw);
+
+            if (clean != raw)
+            {
+                o.Log("[INFO] 01_アッセンブリ図_部品機能情報：" + sheetName + " 第 " + rowNumber + " 行 部品コード「"
+                      + raw + "」→「" + clean + "」（剥掉图纸上的标注记号）。");
+            }
+
+            mapped[codeColumn] = clean;
+
+            return mapped;
         }
 
         /// <summary>

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace CadPartSplitter
@@ -48,6 +49,12 @@ namespace CadPartSplitter
     /// 分列在同一行时按行配对（这一行必须**恰好** 1 个純 項目 格 + 1 个 図番，多一个都不猜）。
     /// 两条路径按 図番 去重（表格路径先跑，内联只补漏），光秃秃的 図番（表題欄等）不收。
     ///
+    /// 图纸上「項目」那一格**纵向合并了两行**时（文字写在两行正中间，H094U10003 那种写法），表格 CSV
+    /// 只把 <c>D</c> 写在第 5 行、第 6 行是空的 —— 这儿借 <c>tables_info.json</c> 里同一个单元格的
+    /// <c>row_span</c>（≥ 2）把被它盖住的行补上同一个 項目（要領図漢字 那一列同样处理）；
+    /// 读不到 JSON、或那格在框线层面没并成一块（<c>row_span</c> 仍是 1）时沿用上一行的 項目，结果一样。
+    /// 只有「図番」是 10 位的行才会补，表題欄之类的杂行不会被填。
+    ///
     /// 编码与其它清单一致：CSV 用带 BOM 的 UTF-8 + CRLF + RFC 4180 转义（Excel 双击即可打开），
     /// 一格一行（单元格内的换行压成 `~`）。多张表按文件名顺序追加到同一个文件；只读 <c>tables\*.csv</c>，
     /// 不改动任何已有产物（除了图面分类不符时删掉自己上一次写的同名文件）。
@@ -66,14 +73,34 @@ namespace CadPartSplitter
         /// </summary>
         public const string OutputFileName = "01_アッセンブリ図_要領図.csv";
 
-        /// <summary>「項目」列名（A、B、F … 或 <c>A,M</c> 这种合写；表头里一定有）。</summary>
+        /// <summary>「項目」列名（A、B、F … 或 <c>A,M</c> 这种合写；表头里一定有）—— 输出表头用这个名字。</summary>
         private const string ItemHeader = "項目";
 
-        /// <summary>「図番」列名：要領図的図番（表头里一定有，值固定 10 位）。</summary>
+        /// <summary>「図番」列名：要領図的図番（表头里一定有，值固定 10 位）—— 输出表头用这个名字。</summary>
         private const string NumberHeader = "図番";
 
         /// <summary>「要領図漢字」列名：**多数图纸这一列没有标题**，能找到更好，找不到就按位置推断。</summary>
         private const string NameHeader = "要領図漢字";
+
+        /// <summary>
+        /// 认表头时「項目」认的所有写法：图纸上也有写成「品目」的（同义组见 <see cref="HeaderNames.Item"/>）。
+        /// 输出表头仍然固定写「項目」（下游按这个名字取列）。
+        /// </summary>
+        private static readonly string[] ItemHeaders = HeaderNames.Item;
+
+        /// <summary>
+        /// 认表头时「図番」认的所有写法：図番 / 図面番号 / **部品番号** / 部品コード / 品番 / 型式 / 型番
+        /// （<see cref="HeaderNames.DrawingNumber"/>）。H094U10008 那种图纸这一列的标题写的是「部品番号」，
+        /// 只认「図番」两个字就会把整张要領図一覧当成「不认识的表」跳过 —— 于是一条都取不到、文件不生成。
+        /// 值仍然要过 10 位（<see cref="NumberLength"/>）这一关，所以部品表（品番 5~7 位）不会被误收。
+        /// </summary>
+        private static readonly string[] NumberHeaders = HeaderNames.DrawingNumber;
+
+        /// <summary>
+        /// 认「要領図漢字」列时认的所有写法：要領図漢字 / 要領図名称 / 図面名称 / 部品名 / 品名 / 名称
+        /// （<see cref="HeaderNames.YoryoName"/>）。这一列多数图纸没有标题，有标题也只是换个叫法。
+        /// </summary>
+        private static readonly string[] NameHeaders = HeaderNames.YoryoName;
 
         /// <summary>図番 的长度：<c>H310U10022</c> 这类固定 10 位；不是 10 位就说明数据区结束了。</summary>
         private const int NumberLength = 10;
@@ -92,6 +119,14 @@ namespace CadPartSplitter
         /// <summary>内联写法剥完饰词后，剩下的必须长这样才算 項目：<c>A</c> / <c>B</c> / <c>A,M</c>。</summary>
         private static readonly Regex ItemPattern =
             new Regex("^[A-Za-z](?:[,、][A-Za-z])*$", RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// 「要領図漢字」格子里应该有的字：漢字 / ひらがな / カタカナ（半角カナ也算）。
+        /// 項目 永远只是英文字母（<c>A</c> / <c>A,M</c>），要領図漢字 一定是漢字假名 ——
+        /// 两列取反了（項目 里蹦出漢字、要領図漢字 里只有 A,M）按这一条就能判出来。
+        /// </summary>
+        private static readonly Regex KanjiPattern =
+            new Regex("[\\u3040-\\u30FF\\u3400-\\u9FFF\\uFF66-\\uFF9F]", RegexOptions.CultureInvariant);
 
         /// <summary>
         /// 内联写法里夹在 項目 与 図番 之间的饰词（<c>A部詳細：</c> 的「詳細」「部」）：
@@ -170,6 +205,11 @@ namespace CadPartSplitter
             // 文件名补零（table_01 … table_10），按名字排序即图纸上从上到下的顺序
             Array.Sort(files, StringComparer.OrdinalIgnoreCase);
 
+            // tables_info.json 里的「合并单元格」信息：图纸上 項目 那一格纵向合并了 5、6 两行时
+            // （文字写在两行正中间），CSV 只在左上角那一行写着 D、第 6 行是空的 ——
+            // 靠 row_span 把被覆盖的行补上，明细才不会丢掉一个 項目。
+            Dictionary<string, TableMergeInfo> merges = LoadMergeInfo(outputDirectory, o);
+
             var output = new List<string[]>();
 
             // 内联写法按「項目 + 図番」去重：同一张要領図写了两遍只收一条，
@@ -189,17 +229,49 @@ namespace CadPartSplitter
                 if (table == null || table.Count == 0)
                     continue;
 
-                int headerRow = FindHeaderRow(table);
+                int itemColumn;
+                int numberColumn;
+                string itemHeader;
+                string numberHeader;
+                int headerRow = FindHeaderRow(table, out itemColumn, out numberColumn,
+                                              out itemHeader, out numberHeader);
                 int before = output.Count;
 
                 if (headerRow >= 0)
                 {
-                    // ① 结构化路径：表头同含「項目」+「図番」，三项各占一列
+                    // ① 结构化路径：表头同含「項目」+「図番」（都按同义组认），三项各占一列
                     headerTables++;
 
-                    int itemColumn   = CsvFile.IndexOfHeader(table[headerRow], ItemHeader);
-                    int numberColumn = CsvFile.IndexOfHeader(table[headerRow], NumberHeader);
-                    int nameColumn   = FindNameColumn(table, headerRow, itemColumn, numberColumn);
+                    int nameColumn = FindNameColumn(table, headerRow, itemColumn, numberColumn);
+
+                    // 表头的列号未必等于明细的列号：「項目」的标题常写在跨列合并的格子里，
+                    // 或表头行比明细行多几个行首空列（H467U10002 的 table_04：「A,M」在第 15 格、
+                    // 「項目」标题却落在第 17 格），照表头的列号去取，会把 要領図漢字 读成 項目、
+                    // 把 A,M 读成 要領図漢字 —— 整份清单两列内容反了。所以再拿几行明细按值的长相校一次。
+                    int headerItemColumn = itemColumn;
+                    int headerNameColumn = nameColumn;
+                    int headerNumberColumn = numberColumn;
+
+                    AlignColumnsBySample(table, headerRow, ref itemColumn, ref nameColumn, ref numberColumn);
+
+                    if (itemColumn != headerItemColumn || nameColumn != headerNameColumn
+                        || numberColumn != headerNumberColumn)
+                    {
+                        o.Log("[INFO] 01_アッセンブリ図_要領図：" + Path.GetFileName(file)
+                              + " 表头与明细的列号对不上（表头「" + itemHeader + "」在第 " + headerItemColumn
+                              + " 列、明细的项目值在第 " + itemColumn + " 列），已按值校正三列。");
+                    }
+
+                    // 这张表的合并单元格信息（tables_info.json）：CSV 的行与 JSON 的行怎么对应
+                    // 交给 MergeRowOf 判断，对不上时它返回 -1，那一行就走「沿用上一行的 項目」。
+                    TableMergeInfo merge;
+
+                    if (!merges.TryGetValue(Path.GetFileNameWithoutExtension(file), out merge))
+                        merge = null;
+
+                    int filledByMerge = 0;
+                    int swapped = 0;
+                    string lastItem = string.Empty;
 
                     for (int r = headerRow + 1; r < table.Count; r++)
                     {
@@ -212,17 +284,60 @@ namespace CadPartSplitter
 
                         headerNumbers.Add(number);
 
-                        output.Add(new[]
+                        string item = CsvFile.SingleLine(Cell(row, itemColumn).Trim());
+                        string name = CsvFile.SingleLine(Cell(row, nameColumn).Trim());
+                        bool itemFilled = false;
+                        int jsonRow = MergeRowOf(merge, table.Count, r);
+
+                        if (jsonRow > 0)
                         {
-                            CsvFile.SingleLine(Cell(row, itemColumn).Trim()),
-                            CsvFile.SingleLine(Cell(row, nameColumn).Trim()),
-                            number
-                        });
+                            if (item.Length == 0)
+                            {
+                                item = MergedText(merge, jsonRow, itemColumn);
+                                itemFilled = item.Length > 0;
+                            }
+
+                            if (name.Length == 0)
+                                name = MergedText(merge, jsonRow, nameColumn);
+                        }
+
+                        // 作完再查一遍：項目 一定是英文字母（A / A,M），要領図漢字 一定是漢字假名。
+                        // 两格明显反了（項目 格里是漢字、要領図漢字 格里只有 A,M）就对调 ——
+                        // 表头与明细错开得再多几格，也不会把 A,M 写进要領図漢字。
+                        if (name.Length > 0 && IsItem(name) && !IsItem(item))
+                        {
+                            string swap = item;
+                            item = name;
+                            name = swap;
+                            swapped++;
+                        }
+
+                        // 纵向合并的 項目 补不出来时（图纸上文字写在两行正中间，框线那边可能没并成一个
+                        // 单元格，tables_info.json 里两格的 row_span 都是 1）—— 沿用上一行的 項目。
+                        // 図番 是 10 位才走到这里，表題欄之类的杂行不会被填
+                        if (item.Length == 0 && lastItem.Length > 0)
+                        {
+                            item = lastItem;
+                            itemFilled = true;
+                        }
+
+                        if (itemFilled)
+                            filledByMerge++;
+
+                        if (item.Length > 0)
+                            lastItem = item;
+
+                        output.Add(new[] { item, name, number });
                     }
 
                     o.Log("[INFO] 01_アッセンブリ図_要領図：" + Path.GetFileName(file)
-                          + "（項目列 " + itemColumn + " / 要領図漢字列 " + (nameColumn < 0 ? "无" : nameColumn.ToString())
-                          + " / 図番列 " + numberColumn + "）取到 " + (output.Count - before) + " 条。");
+                          + "（項目列 " + itemColumn + "「" + itemHeader + "」/ 要領図漢字列 "
+                          + (nameColumn < 0 ? "无" : nameColumn.ToString())
+                          + " / 図番列 " + numberColumn + "「" + numberHeader + "」）取到 "
+                          + (output.Count - before) + " 条"
+                          + (filledByMerge > 0 ? "（其中 " + filledByMerge + " 条的 項目 按合并单元格补足）" : string.Empty)
+                          + (swapped > 0 ? "（其中 " + swapped + " 条的 項目 / 要領図漢字 按值判定对调）" : string.Empty)
+                          + "。");
                 }
 
                 // ② 内联路径：「A部詳細：H325U10011」/「A部・・・H325U10011」/
@@ -247,8 +362,9 @@ namespace CadPartSplitter
             {
                 if (headerTables == 0)
                 {
-                    o.Log("[INFO] 01_アッセンブリ図_要領図：tables\\*.csv 里既没有表头含「" + ItemHeader + "」+「"
-                          + NumberHeader + "」的表，也没有「A部詳細：H…」/「A部・・・」这类写法，"
+                    o.Log("[INFO] 01_アッセンブリ図_要領図：tables\\*.csv 里既没有表头含「"
+                          + string.Join(" / ", ItemHeaders) + "」+「"
+                          + string.Join(" / ", NumberHeaders) + "」的表，也没有「A部詳細：H…」/「A部・・・」这类写法，"
                           + "也没有「" + ItemHeader + "」与「" + NumberHeader + "」分列在同一行的写法，不生成 "
                           + OutputFileName + "。");
                 }
@@ -272,6 +388,309 @@ namespace CadPartSplitter
             return output.Count;
         }
 
+        // ── 合并单元格（tables_info.json） ────────────────────────────────────
+
+        /// <summary>
+        /// 一张表的「纵向合并单元格」信息，来自 <c>tables_info.json</c>：
+        /// 图纸上 項目 那一格纵向合并了 5、6 两行（文字写在两行正中间）时，
+        /// <c>tables\table_NN.csv</c> 只把文字写在左上角那一行、被覆盖的行是空的 —— 靠这里补足。
+        /// </summary>
+        private sealed class TableMergeInfo
+        {
+            /// <summary>可见行（未划线作废）的原始行号，顺序与 <c>table_NN.csv</c> 的行序一致。</summary>
+            public readonly List<int> VisibleRowIndexes = new List<int>();
+
+            /// <summary>跨行数 ≥ 2 且有文字的单元格。</summary>
+            public readonly List<MergedCell> MergedCells = new List<MergedCell>();
+        }
+
+        /// <summary>一个纵向合并的单元格：起始行 / 列 / 跨几行 / 文字。</summary>
+        private sealed class MergedCell
+        {
+            public int Row;
+            public int Column;
+            public int RowSpan;
+            public string Text;
+        }
+
+        /// <summary>
+        /// CSV 的第 <paramref name="csvRow"/> 行（从 0 起）对应 <c>tables_info.json</c> 的哪一行（从 1 起）；
+        /// 对应不上返回 -1（调用方退回「沿用上一行的 項目」）。
+        ///
+        /// CSV 的行就是「可见行」（划线作废的行两边都不输出），且 <c>ToVisibleGrid</c> 会给没有单元格的
+        /// 缺格带照旧留一行 —— 所以只在两边行数**完全相等**时才敢逐行对应；差一行（CSV 末尾空行、
+        /// 缺格带那种表）就返回 -1，宁可不补 `要領図漢字`，也不把别的行的文字搬过来。
+        /// </summary>
+        private static int MergeRowOf(TableMergeInfo merge, int csvRowCount, int csvRow)
+        {
+            if (merge == null || csvRow < 0)
+                return -1;
+
+            if (merge.VisibleRowIndexes.Count != csvRowCount)
+                return -1;
+
+            return merge.VisibleRowIndexes[csvRow];
+        }
+
+        /// <summary>
+        /// 取「覆盖这一行、这一列」的合并单元格文字；没有任何合并单元格盖住它 → 空串。
+        /// </summary>
+        /// <param name="merge">这张表的合并信息；null 表示读不到（调用方自己走退路）。</param>
+        /// <param name="jsonRow">这一行在 <c>tables_info.json</c> 里的原始行号（从 1 起）。</param>
+        /// <param name="column">要补的列号 —— <b>CSV 的列号，从 0 起</b>（<c>項目</c> / <c>要領図漢字</c>），
+        /// -1 表示没有这一列。<c>tables_info.json</c> 的 <c>column</c> 从 1 起，这里换算。</param>
+        private static string MergedText(TableMergeInfo merge, int jsonRow, int column)
+        {
+            if (merge == null || column < 0)
+                return string.Empty;
+
+            int jsonColumn = column + 1;
+
+            for (int i = 0; i < merge.MergedCells.Count; i++)
+            {
+                MergedCell cell = merge.MergedCells[i];
+
+                if (cell.Column == jsonColumn && jsonRow >= cell.Row && jsonRow < cell.Row + cell.RowSpan)
+                    return cell.Text;
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// 读 <c>tables_info.json</c> 里的合并单元格信息（逐行读本项目自己写出的固定格式，不引 JSON 库）：
+        /// 每张表记下「可见行的原始行号」（CSV 的行序 == 可见行序，划线作废的行两边都不输出）
+        /// 与 <c>row_span ≥ 2</c> 的单元格（起始行 / 列 / 跨行数 / 文字）。
+        ///
+        /// 文件不存在 / 读不动时返回空字典 —— 调用方会退回「沿用上一行的 項目」。
+        /// </summary>
+        private static Dictionary<string, TableMergeInfo> LoadMergeInfo(string outputDirectory, DetectorOptions o)
+        {
+            var result = new Dictionary<string, TableMergeInfo>(StringComparer.OrdinalIgnoreCase);
+
+            string path = Path.Combine(outputDirectory, "tables_info.json");
+
+            if (!File.Exists(path))
+                return result;
+
+            string[] lines;
+
+            try
+            {
+                lines = File.ReadAllLines(path);
+            }
+            catch (IOException)
+            {
+                return result;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return result;
+            }
+
+            TableMergeInfo current = null;
+            int row = -1;
+            int column = -1;
+            int rowSpan = 1;
+            int rowIndex = -1;
+            string value;
+            int number;
+            bool flag;
+
+            foreach (string raw in lines)
+            {
+                string line = raw.Trim();
+
+                // 一张表的开头（"name": "table_01",）
+                if (TryReadString(line, "\"name\"", out value))
+                {
+                    current = new TableMergeInfo();
+                    result[value] = current;
+                    row = -1;
+                    column = -1;
+                    rowSpan = 1;
+                    rowIndex = -1;
+                    continue;
+                }
+
+                if (current == null)
+                    continue;
+
+                // 行容器："index" 记原始行号，"struck" 决定它是否出现在 CSV 里
+                if (TryReadInt(line, "\"index\"", out number))
+                {
+                    rowIndex = number;
+                    continue;
+                }
+
+                if (TryReadBool(line, "\"struck\"", out flag))
+                {
+                    if (!flag && rowIndex >= 0)
+                        current.VisibleRowIndexes.Add(rowIndex);
+
+                    continue;
+                }
+
+                // 单元格：row / column / row_span / text（顺序与 RuledTableWriter 写出的一致）
+                if (TryReadInt(line, "\"row\"", out number))
+                {
+                    row = number;
+                    continue;
+                }
+
+                if (TryReadInt(line, "\"column\"", out number))
+                {
+                    column = number;
+                    continue;
+                }
+
+                if (TryReadInt(line, "\"row_span\"", out number))
+                {
+                    rowSpan = number;
+                    continue;
+                }
+
+                if (TryReadString(line, "\"text\"", out value))
+                {
+                    string text = CsvFile.SingleLine(value).Trim();
+
+                    if (rowSpan >= 2 && row >= 0 && column >= 0 && text.Length > 0)
+                    {
+                        current.MergedCells.Add(new MergedCell
+                        {
+                            Row = row,
+                            Column = column,
+                            RowSpan = rowSpan,
+                            Text = text
+                        });
+                    }
+
+                    continue;
+                }
+            }
+
+            int tablesWithMerge = 0;
+
+            foreach (TableMergeInfo info in result.Values)
+            {
+                if (info.MergedCells.Count > 0)
+                    tablesWithMerge++;
+            }
+
+            if (tablesWithMerge > 0)
+            {
+                o.Log("[INFO] 01_アッセンブリ図_要領図：tables_info.json 里 " + tablesWithMerge
+                      + " 张表有纵向合并单元格（row_span ≥ 2），被它盖住的行会用它左上角那格的文字补足。");
+            }
+
+            return result;
+        }
+
+        /// <summary>读一行里的 <c>"key": 123</c>（数字）；这行没有这个键返回 false。</summary>
+        private static bool TryReadInt(string line, string key, out int value)
+        {
+            value = 0;
+
+            int at = line.IndexOf(key + ":", StringComparison.Ordinal);
+
+            if (at < 0)
+                return false;
+
+            int start = at + key.Length + 1;
+
+            while (start < line.Length && line[start] == ' ')
+                start++;
+
+            int end = start;
+
+            while (end < line.Length && line[end] >= '0' && line[end] <= '9')
+                end++;
+
+            if (end == start)
+                return false;
+
+            return int.TryParse(line.Substring(start, end - start), out value);
+        }
+
+        /// <summary>
+        /// 读一行里的 <c>"key": "文字"</c>（字符串，反转义 <c>\\ \" \r \n \t</c>）；
+        /// 这行没有这个键（或值不是引号开头）返回 false。
+        /// </summary>
+        private static bool TryReadString(string line, string key, out string value)
+        {
+            value = null;
+
+            int at = line.IndexOf(key + ":", StringComparison.Ordinal);
+
+            if (at < 0)
+                return false;
+
+            int start = at + key.Length + 1;
+
+            while (start < line.Length && line[start] == ' ')
+                start++;
+
+            if (start >= line.Length || line[start] != '"')
+                return false;
+
+            int end = line.LastIndexOf('"');
+
+            value = end > start ? UnescapeJson(line.Substring(start + 1, end - start - 1)) : string.Empty;
+
+            return true;
+        }
+
+        /// <summary>读一行里的 <c>"key": true</c> / <c>"key": false</c>；这行没有这个键返回 false。</summary>
+        private static bool TryReadBool(string line, string key, out bool value)
+        {
+            value = false;
+
+            int at = line.IndexOf(key + ":", StringComparison.Ordinal);
+
+            if (at < 0)
+                return false;
+
+            int start = at + key.Length + 1;
+
+            while (start < line.Length && line[start] == ' ')
+                start++;
+
+            value = start + 4 <= line.Length
+                    && string.Compare(line, start, "true", 0, 4, StringComparison.OrdinalIgnoreCase) == 0;
+
+            return true;
+        }
+
+        /// <summary>反转义 <see cref="RuledTableWriter"/> 写出的 JSON 字符串（<c>\\ \" \r \n \t</c>）。</summary>
+        private static string UnescapeJson(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s.IndexOf('\\') < 0)
+                return s ?? string.Empty;
+
+            var sb = new StringBuilder(s.Length);
+
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (s[i] != '\\' || i + 1 >= s.Length)
+                {
+                    sb.Append(s[i]);
+                    continue;
+                }
+
+                char next = s[++i];
+
+                switch (next)
+                {
+                    case 'r': sb.Append('\r'); break;
+                    case 'n': sb.Append('\n'); break;
+                    case 't': sb.Append('\t'); break;
+                    default: sb.Append(next); break;   // \\ 与 \" → 原样一个字符
+                }
+            }
+
+            return sb.ToString();
+        }
+
         // ── CSV 读取 ─────────────────────────────────────────────────────────
 
         /// <summary>读一张表格 CSV；被 Excel 占用 / 读不动时返回 null（跳过这张，不影响其它表）。</summary>
@@ -292,9 +711,24 @@ namespace CadPartSplitter
         /// <summary>
         /// 找表头行：同一行里同时有「項目」和「図番」的那一行（-1 = 这张表不是要領図一覧）。
         /// 两个列名常隔着十几个空格子，但都落在表头这一行上，所以按行找。
+        ///
+        /// 两个列名都按**同义组**认（<see cref="ItemHeaders"/> / <see cref="NumberHeaders"/>）：
+        /// 図番 那一列写成「部品番号」「部品コード」「品番」「型式」的图纸也认（H094U10008 就是「部品番号」），
+        /// 項目 写成「品目」也认 —— 只是叫法不同，不是另一张表。
         /// </summary>
-        private static int FindHeaderRow(List<string[]> rows)
+        /// <param name="rows">一张 <c>table_NN.csv</c> 的全部行。</param>
+        /// <param name="itemColumn">項目 列号；没找到表头时也是 -1。</param>
+        /// <param name="numberColumn">図番 列号；没找到表头时也是 -1。</param>
+        /// <param name="itemHeader">表头上 項目 那一列实际写的字（<c>項目</c> / <c>品目</c> …），日志用。</param>
+        /// <param name="numberHeader">表头上 図番 那一列实际写的字（<c>図番</c> / <c>部品番号</c> …），日志用。</param>
+        private static int FindHeaderRow(List<string[]> rows, out int itemColumn, out int numberColumn,
+                                         out string itemHeader, out string numberHeader)
         {
+            itemColumn = -1;
+            numberColumn = -1;
+            itemHeader = ItemHeader;
+            numberHeader = NumberHeader;
+
             int last = Math.Min(rows.Count, MaxHeaderScanRows);
 
             for (int r = 0; r < last; r++)
@@ -304,11 +738,19 @@ namespace CadPartSplitter
                 if (row == null)
                     continue;
 
-                if (CsvFile.IndexOfHeader(row, ItemHeader) >= 0
-                    && CsvFile.IndexOfHeader(row, NumberHeader) >= 0)
-                {
-                    return r;
-                }
+                int item = HeaderNames.IndexOf(row, ItemHeaders);
+                int number = HeaderNames.IndexOf(row, NumberHeaders);
+
+                // 同一格同时命中两组（一格写着「項目 / 図番」）：不是三项分列的表，跳过这一行
+                if (item < 0 || number < 0 || item == number)
+                    continue;
+
+                itemColumn = item;
+                numberColumn = number;
+                itemHeader = HeaderNames.Match(row, item, ItemHeaders) ?? ItemHeader;
+                numberHeader = HeaderNames.Match(row, number, NumberHeaders) ?? NumberHeader;
+
+                return r;
             }
 
             return -1;
@@ -506,14 +948,15 @@ namespace CadPartSplitter
         }
 
         /// <summary>
-        /// 找「要領図漢字」列：① 表头里写了这个列名就直接用（少数图纸有标题）；
+        /// 找「要領図漢字」列：① 表头里写了这个列名（或同义写法：要領図名称 / 図面名称 / 部品名 / 品名 / 名称，
+        /// 见 <see cref="NameHeaders"/>）就直接用；
         /// ② 没标题时取「項目」与「図番」之间第一条有内容的列（图纸上它就夹在这两列中间，
         /// 中间常隔着一两个空格子）；③ 版式不同、夹在中间的都空着时，整行里找第一条有内容的列。
         /// -1 表示实在找不到（此时这一列留空，不猜）。
         /// </summary>
         private static int FindNameColumn(List<string[]> rows, int headerRow, int itemColumn, int numberColumn)
         {
-            int named = CsvFile.IndexOfHeader(rows[headerRow], NameHeader);
+            int named = HeaderNames.IndexOf(rows[headerRow], NameHeaders);
 
             if (named >= 0 && named != itemColumn && named != numberColumn)
                 return named;
@@ -527,6 +970,106 @@ namespace CadPartSplitter
                 return between;
 
             return FirstTextColumn(rows, headerRow, 0, int.MaxValue, itemColumn, numberColumn);
+        }
+
+        /// <summary>
+        /// 用明细的**值**把三列的位置再校一次：表头的列号与明细的列号未必一致 ——
+        /// 「項目」的标题常写在跨列合并的格子里，或表头行比明细行多几个行首空列
+        /// （H467U10002 的 <c>table_04</c>：<c>A,M</c> 在第 15 格、「項目」标题落在第 17 格、
+        /// 「枠 縦枠/小縦枠スペーサー取付要領図」正好压在「項目」标题那一格上）——
+        /// 照表头的列号去取，項目 就读到要領図漢字、要領図漢字 反而读到 <c>A,M</c>，整份清单两列反了。
+        ///
+        /// 所以看表头下面 <see cref="NameProbeRows"/> 行，按值的长相给每列计分：
+        ///   · 整格就是 <c>A</c> / <c>A,M</c>（<see cref="ItemPattern"/>）→ 項目 列；
+        ///   · 整格就是 10 位 図番（<see cref="IsWholeNumber"/>）→ 図番 列；
+        ///   · 含漢字 / 假名（<see cref="KanjiPattern"/>）→ 要領図漢字 列。
+        /// 項目 / 図番 有命中就按值改（值比标题可靠）；要領図漢字 只在这一列「明显不对」
+        /// （没找到、与 項目 / 図番 撞列、或那一列在明细里一个漢字都没有）时才换，
+        /// 免得把旁边的备注文字列抢过来。命中不了（明细还没写 / 合并单元格空着）就保持原样。
+        /// </summary>
+        private static void AlignColumnsBySample(List<string[]> rows, int headerRow,
+                                                 ref int itemColumn, ref int nameColumn, ref int numberColumn)
+        {
+            int last = Math.Min(headerRow + NameProbeRows, rows.Count - 1);
+
+            int maxColumns = 0;
+
+            for (int r = headerRow + 1; r <= last; r++)
+            {
+                string[] row = rows[r];
+
+                if (row != null && row.Length > maxColumns)
+                    maxColumns = row.Length;
+            }
+
+            if (maxColumns == 0)
+                return;
+
+            int[] itemScores = new int[maxColumns];
+            int[] nameScores = new int[maxColumns];
+            int[] numberScores = new int[maxColumns];
+
+            for (int c = 0; c < maxColumns; c++)
+            {
+                for (int r = headerRow + 1; r <= last; r++)
+                {
+                    string text = CsvFile.Normalize(Cell(rows[r], c));
+
+                    if (text.Length == 0)
+                        continue;
+
+                    if (IsItem(text))
+                        itemScores[c]++;
+                    else if (IsWholeNumber(text))
+                        numberScores[c]++;
+                    else if (KanjiPattern.IsMatch(text))
+                        nameScores[c]++;
+                }
+            }
+
+            int numberAt = BestColumn(numberScores);
+            int itemAt = BestColumn(itemScores);
+            int nameAt = BestColumn(nameScores);
+
+            if (numberAt >= 0)
+                numberColumn = numberAt;
+
+            if (itemAt >= 0 && itemAt != numberColumn)
+                itemColumn = itemAt;
+
+            bool nameIsWrong = nameColumn < 0
+                               || nameColumn == itemColumn
+                               || nameColumn == numberColumn
+                               || nameColumn >= maxColumns
+                               || nameScores[nameColumn] == 0;
+
+            if (nameAt >= 0 && nameIsWrong && nameAt != itemColumn && nameAt != numberColumn)
+                nameColumn = nameAt;
+        }
+
+        /// <summary>计分表里命中次数最多的列（并列取最左）；一个都没命中返回 -1。</summary>
+        private static int BestColumn(int[] scores)
+        {
+            int best = -1;
+
+            for (int c = 0; c < scores.Length; c++)
+            {
+                if (scores[c] > 0 && (best < 0 || scores[c] > scores[best]))
+                    best = c;
+            }
+
+            return best;
+        }
+
+        /// <summary>整格就是一个 図番（<c>H310U10022</c>），不是夹在一句话里。</summary>
+        private static bool IsWholeNumber(string text)
+        {
+            if (text.Length != NumberLength)
+                return false;
+
+            Match match = InlineNumberPattern.Match(text);
+
+            return match.Success && match.Index == 0 && match.Length == text.Length;
         }
 
         /// <summary>

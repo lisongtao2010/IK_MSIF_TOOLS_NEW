@@ -5,7 +5,7 @@ using System.IO;
 namespace CadPartSplitter
 {
     /// <summary>
-    /// 品種表整理：读 <c>tables\table_NN.csv</c>，把两种表摊平成一行一个部品的
+    /// 品種表整理：读 <c>tables\table_NN.csv</c>，把三种表摊平成一行一个部品的
     /// <c>02_要領図_部品機能情報.csv</c>：①「横向重复 N 组 (部品コード, 員数)」的多列重复品種表；
     /// ②图纸上普通的「単純部品表」（<c>部品名 / 枠区分</c>；<c>部品コード</c> 可缺）。
     ///
@@ -24,7 +24,7 @@ namespace CadPartSplitter
     /// 片引戸,小縦枠上部スペーサー,,MEACC428,2,,
     /// </code>
     ///
-    /// 收录两种表：
+    /// 收录三种表：
     /// <para>
     /// ①「多列重复的品種表」（上面那种）—— 两条同时满足才认：
     ///   · 表头区里有含「品種」的单元格 → 品種列；
@@ -48,13 +48,26 @@ namespace CadPartSplitter
     /// 不会因为缺列就把整张表跳过（与 <see cref="LtStep1Builder"/> 的「部品コード 可缺」一致）。
     /// </para>
     /// <para>
-    /// 两种表共有的一条「品番なし」规则：<c>部品コード</c> 那一格是 <c>－</c> 这类占位符
+    /// ③「部品情報表」—— 图纸右上角那种两列小表（<c>H094U10008要領図.pdf</c> 的 <c>table_01.csv</c>）：
+    /// </para>
+    /// <code>
+    /// No.,部品名称,部品番号
+    /// 1,ロットNO.ラベル,LAVS-639
+    /// </code>
+    /// 表头（前 6 行内）同含「部品名」「部品コード」、**且没有「枠区分」**即认这种表
+    /// （有「枠区分」的先按 ② 收，所以不会重）：一行一条明细，<c>品種 / 枠区分</c> 留空，
+    /// <c>部品名 / 部品コード</c> 按列名搬 → <c>,ロットNO.ラベル,,LAVS-639,,,</c>。
+    /// 表題欄那种「部品名称：ロットNO.ラベル」的标签-值写法不算表头（列名格里带着值），
+    /// 明细的 <c>部品コード</c> 还要含数字、不含漢字假名（表題欄的「承認日」之类当不成品番）。
+    /// </para>
+    /// <para>
+    /// 三种表共有的一条「品番なし」规则：<c>部品コード</c> 那一格是 <c>－</c> 这类占位符
     /// （整格只由破折号类字符组成 —— <c>－ - ー — – ― −</c> …，半角 / 全角空格不计）时，
     /// 这条明细不收：图纸上写「－」就是「这个部没有品番」。与「缺列」区分开：
     /// 整张表都没有 <c>部品コード</c> 列时照旧出明细（该格留空），只有列在、格子里写着「－」才丢这条。
     /// 丢掉的条数会打进日志。
     /// </para>
-    /// <para>两种都不是的表原样跳过（不改动）。</para>
+    /// <para>三种都不是的表原样跳过（不改动）。</para>
     ///
     /// 输出：<c>&lt;输出目录&gt;\02_要領図_部品機能情報.csv</c>（旧名 <c>LT_STEP2.csv</c>；
     /// 要領図 = 要領書，部品機能情報 = 部品表。UTF-8 带 BOM + CRLF + RFC 4180），
@@ -216,9 +229,24 @@ namespace CadPartSplitter
                 if (rows.Count == 0)
                     continue;
 
-                // 两种表都收：①多列重复的品種表（横向排开 N 组部品）
+                // CAD 把同一个字画了两遍时（文字层重叠放置），表头会落成 部部品品ココーードド 这种样子，
+                // 「部品コード / 部品名 / 員数」这些列名一个都认不出来（H467U10008 的 02 就是这样，
+                // 部品コード 整列空）。先把这种格子还原，再往下摊平。
+                int foldedCells;
+                string foldedSample;
+                CsvFile.FoldDoubleRows(rows, out foldedCells, out foldedSample);
+
+                if (foldedCells > 0)
+                {
+                    o.Log("[INFO] 02_要領図_部品機能情報：" + Path.GetFileName(file) + " 有 " + foldedCells
+                          + " 格是同一个字被画了两遍（PDF 里文字重叠放置）→ 已还原（" + foldedSample + "）。");
+                }
+
+                // 三种表都收：①多列重复的品種表（横向排开 N 组部品）
                 //             ②単純部品表（番号 / 部品名 / 枠区分 / 員数 / … [/ 部品コード]，品種留空）
-                // 部品コード 是「－」这类占位符（品番なし）的明细两种表都不收，只计数、在日志里报一句。
+                //             ③部品情報表（No. / 部品名称 / 部品番号 这种两列小表，图纸右上角
+                //               H094U10008 的 table_01 就是它，没有 枠区分 / 品種）
+                // 部品コード 是「－」这类占位符（品番なし）的明细三种表都不收，只计数、在日志里报一句。
                 int skipped;
                 List<string[]> detail = Expand(rows, out skipped);
                 string form = "多列重复的品種表";
@@ -227,6 +255,12 @@ namespace CadPartSplitter
                 {
                     detail = ExpandPartTable(rows, out skipped);
                     form = "単純部品表（部品名 / 枠区分）";
+                }
+
+                if (detail == null)
+                {
+                    detail = ExpandItemInfoTable(rows, out skipped);
+                    form = "部品情報表（部品名 / 部品コード）";
                 }
 
                 if (skipped > 0)
@@ -241,7 +275,7 @@ namespace CadPartSplitter
                     continue;   // 两种形式都不是（或表头下面一条明细都没有 / 全是占位符）→ 不动这张表
 
                 tables++;
-                output.AddRange(detail);
+                output.AddRange(CleanPartCodes(detail, Path.GetFileName(file), o));
 
                 o.Log("[INFO] 02_要領図_部品機能情報：" + Path.GetFileName(file) + " 是" + form + " → 摊平 "
                       + detail.Count + " 条明细。");
@@ -249,8 +283,9 @@ namespace CadPartSplitter
 
             if (tables == 0)
             {
-                o.Log("[INFO] 02_要領図_部品機能情報：未找到品種表（品種 + 列名重复）或単純部品表"
-                      + "（部品名 / 枠区分，部品コード 可缺），不生成 " + OutputFileName + "。");
+                o.Log("[INFO] 02_要領図_部品機能情報：未找到品種表（品種 + 列名重复）、単純部品表"
+                      + "（部品名 / 枠区分，部品コード 可缺）或部品情報表（部品名 / 部品コード 两列小表，"
+                      + "No. / 部品名称 / 部品番号 那种），不生成 " + OutputFileName + "。");
                 return 0;
             }
 
@@ -335,6 +370,56 @@ namespace CadPartSplitter
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// 摊平出来的明细里，<c>部品コード</c> 前面可能还粘着图纸上的**标注记号**（`△4` / `▲3` 这种
+        /// 指名视图的引用号）：文字层常常只把数字漏出来，落盘成 <c>4 MZC●●73</c>（`H467U10004.pdf` 就是），
+        /// 那不是品番的一部分。这里在写文件之前统一剥一遍，规则与 01 共用
+        /// （<see cref="LtStep1Builder.StripPartCodeMark"/>）：`4 MZC●●73` → `MZC●●73`。
+        /// </summary>
+        /// <param name="rows">摊平出来的一批明细（固定列，见 <see cref="OutHeader"/>）。</param>
+        /// <param name="fileName">这张表的文件名（日志里用）。</param>
+        /// <param name="o">参数 / 日志。</param>
+        private static List<string[]> CleanPartCodes(List<string[]> rows, string fileName, DetectorOptions o)
+        {
+            int column = Array.IndexOf(OutHeader, PartCodeKeyword);
+
+            if (rows == null || column < 0)
+                return rows;
+
+            int cleaned = 0;
+            string sample = null;
+
+            foreach (string[] row in rows)
+            {
+                if (row == null || column >= row.Length)
+                    continue;
+
+                string raw = row[column];
+
+                if (string.IsNullOrEmpty(raw))
+                    continue;
+
+                string clean = LtStep1Builder.StripPartCodeMark(raw);
+
+                if (clean == raw)
+                    continue;
+
+                row[column] = clean;
+                cleaned++;
+
+                if (sample == null)
+                    sample = "「" + raw + "」→「" + clean + "」";
+            }
+
+            if (cleaned > 0 && o != null)
+            {
+                o.Log("[INFO] 02_要領図_部品機能情報：" + fileName + " 有 " + cleaned
+                      + " 条明细的 部品コード 带着图纸上的标注记号（" + sample + "）→ 已剥掉。");
+            }
+
+            return rows;
         }
 
         // ── 摊平 ─────────────────────────────────────────────────────────────
@@ -423,7 +508,7 @@ namespace CadPartSplitter
                 {
                     string child = CsvFile.Normalize(rows[blockRow][c]);
 
-                    if (codeOffset < 0 && child.IndexOf(PartCodeKeyword, StringComparison.Ordinal) >= 0)
+                    if (codeOffset < 0 && HeaderNames.IsMatch(child, HeaderNames.PartCode))
                         codeOffset = c - start;
 
                     if (quantityOffset < 0 && child.IndexOf(QuantityKeyword, StringComparison.Ordinal) >= 0)
@@ -476,7 +561,7 @@ namespace CadPartSplitter
                         continue;
                     }
 
-                    if (codeNormalized.IndexOf(PartCodeKeyword, StringComparison.Ordinal) >= 0)
+                    if (HeaderNames.IsMatch(codeNormalized, HeaderNames.PartCode))
                         continue;   // 表中间重复出现的表头行
 
                     string quantity = CellOf(row, quantityColumns[b]);
@@ -536,13 +621,14 @@ namespace CadPartSplitter
 
             for (int r = 0; r < scan; r++)
             {
-                int name = FindColumn(rows[r], PartNameKeyword);
+                // 部品名 / 部品コード 都按同义组认：品名 / 名称、部品番号 / 品番 / 型式 / 型番
+                int name = HeaderNames.IndexOf(rows[r], HeaderNames.PartName);
                 int frame = FindColumn(rows[r], FrameKeyword);
 
                 if (name < 0 || frame < 0)
                     continue;
 
-                int code = FindColumn(rows[r], PartCodeKeyword);
+                int code = HeaderNames.IndexOf(rows[r], HeaderNames.PartCode);
                 int quantity = FindColumn(rows[r], QuantityKeyword);
                 int basicSize = FindColumn(rows[r], BasicSizeKeyword);
                 int cutSize = FindColumn(rows[r], CutSizeKeyword);
@@ -552,7 +638,7 @@ namespace CadPartSplitter
                 // （不把明细行拿来当表头）
                 if ((code < 0 || quantity < 0 || basicSize < 0 || cutSize < 0) && start < rows.Count)
                 {
-                    int nextCode = code < 0 ? FindColumn(rows[start], PartCodeKeyword) : -1;
+                    int nextCode = code < 0 ? HeaderNames.IndexOf(rows[start], HeaderNames.PartCode) : -1;
                     int nextQuantity = quantity < 0 ? FindColumn(rows[start], QuantityKeyword) : -1;
                     int nextBasicSize = basicSize < 0 ? FindColumn(rows[start], BasicSizeKeyword) : -1;
                     int nextCutSize = cutSize < 0 ? FindColumn(rows[start], CutSizeKeyword) : -1;
@@ -615,7 +701,7 @@ namespace CadPartSplitter
                         continue;
                     }
 
-                    if (CsvFile.Normalize(code).IndexOf(PartCodeKeyword, StringComparison.Ordinal) >= 0)
+                    if (HeaderNames.IsMatch(code, HeaderNames.PartCode))
                         continue;   // 表中间重复出现的表头行
                 }
                 else
@@ -624,7 +710,7 @@ namespace CadPartSplitter
                     if (name.Length == 0)
                         continue;   // 这一行没有部品名
 
-                    if (CsvFile.Normalize(name).IndexOf(PartNameKeyword, StringComparison.Ordinal) >= 0)
+                    if (HeaderNames.IsMatch(name, HeaderNames.PartName))
                         continue;   // 表中间重复出现的表头行（部品名 那一格）
                 }
 
@@ -642,6 +728,168 @@ namespace CadPartSplitter
             }
 
             return detail;
+        }
+
+        // ── 部品情報表（部品名 / 部品コード 两列） ─────────────────────────────
+
+        /// <summary>
+        /// 摊平第三种形式：「部品情報表」—— 图纸右上角那种两列小表
+        /// （<c>H094U10008</c> 的 <c>table_01.csv</c>）：
+        /// <code>
+        /// No.,部品名称,部品番号
+        /// 1,ロットNO.ラベル,LAVS-639
+        /// </code>
+        /// 表头里**同含「部品名」（<see cref="HeaderNames.PartName"/>：部品名 / 品名 / 名称）
+        /// 与「部品コード」（<see cref="HeaderNames.PartCode"/>：部品コード / 部品番号 / 品番 / 型式 / 型番）、
+        /// 且没有「枠区分」**时认这种表（有枠区分的是上面那种「単純部品表」，先认那个）：
+        /// 一行一条明细，<c>品種 / 枠区分</c> 留空、<c>部品名 / 部品コード</c> 按列名搬
+        /// （<c>員数 / 基本寸法 / 切断寸法</c> 有列就搬、没有就留空）。
+        ///
+        /// 表題欄那种「部品名称：ロットNO.ラベル」的标签-值写法不算表头（列名格里带着值，
+        /// 有 <c>：</c> / <c>:</c>）—— 否则一整块表題欄会被当成部品表、把下面的自由行当明细。
+        /// 明细的 <c>部品コード</c> 还要过 <see cref="LooksLikePartCode"/>（含数字、不是漢字假名），
+        /// 表題欄的「承認日」「尺度」之类不会被当成品番。
+        /// 不是这种表 → 返回 null（调用方跳过，不动这张表）。
+        /// </summary>
+        /// <param name="rows">一张 <c>tables\table_NN.csv</c> 的全部行。</param>
+        /// <param name="skipped">因 <c>部品コード</c> 是占位符（<c>－</c> 等）而没收的行数。</param>
+        private static List<string[]> ExpandItemInfoTable(List<string[]> rows, out int skipped)
+        {
+            skipped = 0;
+
+            if (rows == null || rows.Count == 0)
+                return null;
+
+            int headerRow = -1;
+            int nameColumn = -1;
+            int codeColumn = -1;
+            int quantityColumn = -1;
+            int basicSizeColumn = -1;
+            int cutSizeColumn = -1;
+
+            int scan = Math.Min(MaxHeaderScanRows, rows.Count);
+
+            for (int r = 0; r < scan; r++)
+            {
+                string[] row = rows[r];
+
+                if (row == null)
+                    continue;
+
+                int name = HeaderNames.IndexOf(row, HeaderNames.PartName);
+                int code = HeaderNames.IndexOf(row, HeaderNames.PartCode);
+
+                if (name < 0 || code < 0 || name == code)
+                    continue;
+
+                // 有「枠区分」的是上面那种「単純部品表」，那边已经收过（认不出才轮到本方法）
+                if (FindColumn(row, FrameKeyword) >= 0)
+                    continue;
+
+                // 表題欄的「部品名称：ロットNO.ラベル」是标签 + 值，不是列名 → 不是表头
+                if (HasLabelValue(Cell(row, name)) || HasLabelValue(Cell(row, code)))
+                    continue;
+
+                headerRow = r;
+                nameColumn = name;
+                codeColumn = code;
+                quantityColumn = FindColumn(row, QuantityKeyword);
+                basicSizeColumn = FindColumn(row, BasicSizeKeyword);
+                cutSizeColumn = FindColumn(row, CutSizeKeyword);
+
+                break;
+            }
+
+            if (headerRow < 0)
+                return null;
+
+            var detail = new List<string[]>();
+
+            for (int r = headerRow + 1; r < rows.Count; r++)
+            {
+                string[] row = rows[r];
+
+                if (CsvFile.IsEmptyRow(row))
+                    continue;   // 合并单元格 / 表格线造成的空行
+
+                string code = Cell(row, codeColumn).Trim();
+                string name = Cell(row, nameColumn).Trim();
+
+                if (code.Length == 0 || name.Length == 0)
+                    continue;
+
+                if (IsPlaceholderCode(code))
+                {
+                    skipped++;  // 部品コード 是「－」这类占位符 → 这条明细不收
+                    continue;
+                }
+
+                // 表中间重复出现的表头行
+                if (HeaderNames.IsMatch(code, HeaderNames.PartCode) || HeaderNames.IsMatch(name, HeaderNames.PartName))
+                    continue;
+
+                // 品番的样子（含数字、不是漢字假名）—— 表題欄的自由行不会混进来
+                if (!LooksLikePartCode(code))
+                    continue;
+
+                // 这种表没有品種 / 枠区分 列 → 两格留空
+                detail.Add(new string[]
+                {
+                    string.Empty, name, string.Empty, code,
+                    CellOf(row, quantityColumn), CellOf(row, basicSizeColumn), CellOf(row, cutSizeColumn)
+                });
+            }
+
+            return detail;
+        }
+
+        /// <summary>
+        /// 这一格是不是「列名 + 值」的标签写法（<c>部品名称：ロットNO.ラベル</c> / <c>部品番号:LAVS-639</c>）——
+        /// 表題欄那种写法不是表头。列名格里带全角 / 半角冒号即算。
+        /// </summary>
+        private static bool HasLabelValue(string cell)
+        {
+            string s = CsvFile.Normalize(cell);
+
+            return s.IndexOf('：') >= 0 || s.IndexOf(':') >= 0;
+        }
+
+        /// <summary>
+        /// 这一格像不像部品番号：至少 3 个字、含数字、且不含漢字・假名
+        /// （<c>LAVS-639</c> / <c>MEACC428</c> / <c>TJ-3086</c> 都是；
+        /// 表題欄的「承認日」「加地謙一」「1/1」这类自由文字不是）。
+        /// </summary>
+        private static bool LooksLikePartCode(string code)
+        {
+            string s = CsvFile.Normalize(code);
+
+            if (s.Length < 3)
+                return false;
+
+            bool digit = false;
+
+            for (int i = 0; i < s.Length; i++)
+            {
+                char ch = s[i];
+
+                if (ch >= '0' && ch <= '9')
+                {
+                    digit = true;
+                    continue;
+                }
+
+                // 漢字（CJK）・平假名・片假名・半角片假名 出现即不是品番
+                if ((ch >= '\u3040' && ch <= '\u30FF')
+                    || (ch >= '\u3400' && ch <= '\u9FFF')
+                    || (ch >= '\uFF66' && ch <= '\uFF9F'))
+                    return false;
+
+                // 全角の句読点・記号（「：」「／」など）も品番には出ない
+                if (ch >= '\u3000' && ch <= '\u303F')
+                    return false;
+            }
+
+            return digit;
         }
 
         /// <summary>

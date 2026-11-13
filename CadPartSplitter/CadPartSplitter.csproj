@@ -62,7 +62,13 @@
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
+    <!--
+      与 Debug 保持一致：输出到主程序目录下的 CadPartSplitter 子文件夹。
+      主程序【开始分解】只在 <程序目录>\CadPartSplitter\CadPartSplitter.exe 找这个 exe
+      （Debug 运行时 = MSIFAITOOLS\bin\Debug\CadPartSplitter\，Release 运行时 = MSIFAITOOLS\bin\Release\CadPartSplitter\），
+      所以 Release 也必须落在对应位置，否则主程序会「跳过 CadPartSplitter 零件分割」。
+    -->
+    <OutputPath>..\MSIFAITOOLS\bin\Release\CadPartSplitter\</OutputPath>
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
@@ -104,6 +110,7 @@
     <Compile Include="RuledTableExtractor.cs" />
     <Compile Include="RuledTableWriter.cs" />
     <Compile Include="CsvFile.cs" />
+    <Compile Include="HeaderNames.cs" />
     <Compile Include="LtStep1Builder.cs" />
     <Compile Include="LtStep2Builder.cs" />
     <Compile Include="AssemblyYoryoBuilder.cs" />

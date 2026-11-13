@@ -92,6 +92,97 @@ namespace CadPartSplitter
                     .Trim();
         }
 
+        /// <summary>
+        /// 「同一个字被画了两遍」的还原：CAD 导出的 PDF 偶尔把文字**重复放置一次**（两个字形框几乎重合），
+        /// 文字层落进 CSV 就成了 <c>部部品品ココーードド</c> —— 表头因此认不出「部品コード」这一列，
+        /// 02 的 <c>部品コード</c> 整列空（H467U10008 就是）。
+        ///
+        /// 判据（要求整格都满足，宁可漏折也不误伤真值）：
+        ///   ① 去掉半角 / 全角空格与换行后长度 ≥ 4、且为偶数；
+        ///   ② 每两位相同（<c>部部</c> / <c>品品</c> / <c>ーー</c> …）；
+        ///   ③ 不是「交替重复」（<c>ＡＢＡＢ</c> 这种真值凑巧每两位相同，但 <c>s[0] == s[2]</c>）——
+        ///      真双写时 <c>s[0]</c> 与 <c>s[2]</c> 是两个不同的字（<c>部</c> / <c>品</c>）。
+        /// 折半后仍满足再折一次（「写三遍」也能还原）。
+        ///
+        /// 不满足任何一条时**原样返回**（连空格都不动），所以 <c>MZC○○63</c>（长度 7）、
+        /// <c>TI-3086</c>、<c>2H100</c> 这些带重复字 / 数字的真品番不会被改。
+        /// </summary>
+        public static string FoldDouble(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+                return s;
+
+            string flat = Normalize(s);     // 去掉半角 / 全角空格与换行，"部 部 品 品" 也能判
+
+            if (flat.Length < 4 || flat.Length % 2 != 0)
+                return s;
+
+            for (int i = 0; i < flat.Length; i += 2)
+            {
+                if (flat[i] != flat[i + 1])
+                    return s;
+            }
+
+            // 「ＡＢＡＢ」这类交替重复不是「每字写两遍」（双写时 s[0] 与 s[2] 不同），别动它
+            if (flat[0] == flat[2])
+                return s;
+
+            var sb = new StringBuilder(flat.Length / 2);
+
+            for (int i = 0; i < flat.Length; i += 2)
+                sb.Append(flat[i]);
+
+            string folded = sb.ToString();
+
+            return folded.Length < flat.Length ? FoldDouble(folded) : s;
+        }
+
+        /// <summary>
+        /// 整张表逐格过一遍 <see cref="FoldDouble"/>（文字重叠绘制的兜底），
+        /// 顺手统计折了几格、第一例长什么样 —— 调用方记进日志，跑完就知道这张图有没有这个毛病。
+        /// 就地改 <paramref name="rows"/> 里的格子，返回同一个列表。
+        /// </summary>
+        /// <param name="rows">一张 CSV 的全部行。</param>
+        /// <param name="folded">输出：被还原的格子数（0 = 这张表没这个问题）。</param>
+        /// <param name="sample">输出：第一例的「原样」→「还原后」，没有则为 null。</param>
+        public static List<string[]> FoldDoubleRows(List<string[]> rows, out int folded, out string sample)
+        {
+            folded = 0;
+            sample = null;
+
+            if (rows == null)
+                return null;
+
+            for (int r = 0; r < rows.Count; r++)
+            {
+                string[] row = rows[r];
+
+                if (row == null)
+                    continue;
+
+                for (int c = 0; c < row.Length; c++)
+                {
+                    string cell = row[c];
+
+                    if (string.IsNullOrEmpty(cell))
+                        continue;
+
+                    string clean = FoldDouble(cell);
+
+                    if (string.Equals(clean, cell, StringComparison.Ordinal))
+                        continue;
+
+                    row[c] = clean;
+                    folded++;
+
+                    if (sample == null)
+                        sample = "「" + cell + "」→「" + clean + "」";
+                }
+            }
+
+            return rows;
+        }
+
         /// <summary>整行都是空白（尾部空行、Excel 留下的空行、合并单元格造成的空行）。</summary>
         public static bool IsEmptyRow(string[] row)
         {

@@ -27,9 +27,10 @@
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <!--
-      必须 x64：合并进来的零件分割源码用 OpenCvSharp4，而 OpenCvSharp4.runtime.win
-      只带 win-x64 原生库；AnyCPU 下在 32 位进程里会抛 BadImageFormatException。
-      Prefer32Bit 也要显式关掉，否则 AnyCPU 的 exe 默认以 32 位启动。
+      保持 x64：主程序自己用 SQLite（System.Data.SQLite）与 PdfiumViewer 的原生库，
+      AnyCPU 在 32 位进程里会抛 BadImageFormatException；Prefer32Bit 也要显式关掉，
+      否则 AnyCPU 的 exe 默认以 32 位启动。
+      （原注释里「合并进来的零件分割源码」已不再编译，见文件下方 CadPartSplitter.exe 的说明。）
     -->
     <PlatformTarget>x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
@@ -100,6 +101,12 @@
     <Compile Include="MemberNameReplacementForm.Designer.cs">
       <DependentUpon>MemberNameReplacementForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="MemberMappingDbSettingsForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="MemberMappingDbSettingsForm.Designer.cs">
+      <DependentUpon>MemberMappingDbSettingsForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="MemberNamePickerForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -147,46 +154,25 @@
     <Compile Include="Services\MemberNamePromptStore.cs" />
     <Compile Include="Services\MemberPartCatalog.cs" />
     <Compile Include="Services\MemberPartRepository.cs" />
+    <Compile Include="Services\MemberMappingDbSettings.cs" />
     <Compile Include="Services\MemberNameReplacementRepository.cs" />
     <Compile Include="Services\MemberNameReplacementCatalog.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <!--
-    CadPartSplitter 工程的部分源码以「链接」方式编译进本程序（DetectorOptions 等选项类型 / 常量），
-    保证两边只有一份源码，改一处即生效。
+    【开始分解】第 1 步执行的是外部 CadPartSplitter.exe
+    （默认 <程序目录>\CadPartSplitter\CadPartSplitter.exe，见 Services\CadPartSplitterRunner.cs）。
 
-    注意：【开始分解】实际执行的是外部 CadPartSplitter.exe
-    （默认 <程序目录>\CadPartSplitter\CadPartSplitter.exe，见 Services\CadPartSplitterRunner.cs），
-    这里的链接只用于复用它的选项类型，省得在主程序里再抄一份「输出目录怎么推导」之类的逻辑。
-
-    排除项及原因：
-      Program.cs                  → 自带 Main，会和本程序 Program.cs 的 Main 冲突（CS0017）
-      CommandLineRunner.cs        → 命令行模式（参数解析 + Console 输出），界面里用不到
-      MainForm.cs / .Designer.cs  → 分割工程自带的窗口（本程序用 Form1）
-      PdfInfoEditorForm.*         → 上面那个窗口的部品表编辑对话框
-                                    （GuiSettings.cs 不排除：它只依赖 DetectorOptions，
-                                      不含窗口代码，SplitApi 的调用示例也会用到它）
-      PdfRenderer.cs              → 用 Docnet.Core 渲染；本工程改用 PdfiumViewer 重写
-                                    （见本工程 CadPartSplitter\PdfRenderer.cs），
-                                    否则 Docnet.Core 与 PdfiumViewer 的同名原生库
-                                    pdfium.dll 会在输出目录里互相覆盖
+    本工程**不再链接 / 编译分割工程的源码**（原先这里用 ..\CadPartSplitter\*.cs 链接进来）：
+    图像处理（OpenCvSharp4）、PDF 渲染（pdfium.dll）、部品表导出全都在那个 exe 里，
+    升级分割逻辑时只替换 exe，本程序不用重新编译；两个程序各自一份原生库，也不会互相覆盖。
+    分割逻辑的说明见 CadPartSplitter 工程与 docs\分割原理.md。
+    （本工程目录下的 CadPartSplitter\PdfRenderer.cs 是当时为了链接源码而写的渲染器，现在也不编译了，
+      可以直接把这个文件夹删掉；外部 exe 仍在 <程序目录>\CadPartSplitter\ 下，不要混为一谈。）
   -->
   <ItemGroup>
-    <!-- 合并后本工程自己的渲染实现（PdfiumViewer），API 与原 Docnet.Core 版一致 -->
-    <Compile Include="CadPartSplitter\PdfRenderer.cs" />
-    <Compile Include="..\CadPartSplitter\*.cs" Exclude="..\CadPartSplitter\Program.cs;..\CadPartSplitter\CommandLineRunner.cs;..\CadPartSplitter\MainForm.cs;..\CadPartSplitter\MainForm.Designer.cs;..\CadPartSplitter\PdfInfoEditorForm.cs;..\CadPartSplitter\PdfInfoEditorForm.Designer.cs;..\CadPartSplitter\PdfRenderer.cs">
-      <Link>CadPartSplitter\%(Filename)%(Extension)</Link>
-    </Compile>
     <!-- 【CMD 分析】第 0 步 · 特注品.json 维护：Excel 整表原文导出（.xls/.xlsx/.xlsm → 文本送 AI） -->
     <Compile Include="Services\ExcelSheetDumper.cs" />
-    <!-- Excel 部品表 AI 判定的提示语：编译进 exe 作兜底，同时复制到输出目录（可运行时修改、不用重新编译） -->
-    <EmbeddedResource Include="..\CadPartSplitter\Prompts\TzJsonAi.Prompt.txt">
-      <LogicalName>CadPartSplitter.Prompts.TzJsonAi.Prompt.txt</LogicalName>
-    </EmbeddedResource>
-    <None Include="..\CadPartSplitter\Prompts\TzJsonAi.Prompt.txt">
-      <Link>Prompts\TzJsonAi.Prompt.txt</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
@@ -240,7 +226,12 @@
     <PackageReference Include="PdfiumViewer.Native.x86.v8-xfa" Version="2018.4.8.256" />
     <PackageReference Include="PdfiumViewer.Native.x86_64.v8-xfa" Version="2018.4.8.256" />
     <PackageReference Include="System.Data.SQLite.Core" Version="1.0.119" />
-    <!-- 合并进来的零件分割（原 CadPartSplitter 工程）：图像处理 + 部品表 Excel 读取 -->
+    <!--
+      ExcelDataReader：本工程自己的 ExcelSheetDumper / XlsxSheetReader 用（【CMD 分析】读部品表）。
+      OpenCvSharp4 这两条是「把分割源码链接进来」时期的遗留：【开始分解】现在只调外部
+      CadPartSplitter.exe，主程序已不编译任何分割源码。确认主程序不用 OpenCvSharp（当前代码没有引用）
+      后可以删掉这两条，输出目录里就不会再多出 OpenCvSharpExtern.dll。
+    -->
     <PackageReference Include="OpenCvSharp4" Version="4.10.0.20240616" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.10.0.20240616" />
     <PackageReference Include="ExcelDataReader" Version="3.6.0" />

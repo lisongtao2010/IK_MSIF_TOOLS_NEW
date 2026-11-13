@@ -17,8 +17,10 @@ namespace MSIFAITOOLS
     /// <para>
     /// <b>表格操作</b>：单击 = 只选中<b>这一格</b>（不再整行选中）并<b>直接进入编辑、内容全选</b>，
     /// 再打一次字就替换掉原来的值（见 <see cref="DgvParts_CellClick"/>）。
-    /// 「部材名」这一格单击时改为弹出输入辅助窗口 <see cref="MemberNamePickerForm"/>
-    /// （候选项 = 部材部品マスタ 的常用部材名；多选用 <c>|</c> 连接，与【CMD 分析】写库的写法一致）。
+    /// 「部材名」这一格单击时改为打开「选择部材名」窗口 <see cref="MemberNamePickerForm"/>
+    /// （<b>非模态</b>：开着也能操作本画面；单击里面的一项就立刻写进这一格，不用复选框 / 不用确定）。
+    /// 窗口顶部会按同一行的「部品名」（<c>colPartName</c>）去置换表
+    /// （SQL Server 表 <c>DL_BuhinBuzaiMapping</c>）查出对应的部材名，点那一行就直接写入。
     /// 删除 / 追加行以<b>选中单元格所在的行</b>为基准（<see cref="GetSelectedRows"/>）。
     /// </para>
     /// </summary>
@@ -65,18 +67,37 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 「部材名」列的名字（<c>colMemberName</c>）：多值用 <c>|</c> 连接的那一列，
-        /// 单击时弹出输入辅助窗口（<see cref="MemberNamePickerForm"/>）。
+        /// 单击时打开「选择部材名」窗口（<see cref="MemberNamePickerForm"/>）。
         /// </summary>
         private const string MemberNameColumnName = "colMemberName";
 
         /// <summary>
-        /// 部材部品マスタ（部材名 → 部品名）索引：给「部材名」辅助窗口当候选列表用。
+        /// 「部品名」列的名字（<c>colPartName</c>）：打开「选择部材名」窗口
+        /// （<see cref="MemberNamePickerForm"/>）时传给窗口，
+        /// 用来去置换表 <c>DL_BuhinBuzaiMapping</c> 查对应的部材名（<c>BuzaiName</c>）显示出来。
+        /// </summary>
+        private const string PartNameColumnName = "colPartName";
+
+        /// <summary>
+        /// 部材部品マスタ（部材名 → 部品名）索引：给「选择部材名」窗口当候选列表用。
         /// 第一次点「部材名」单元格时读一次（数据库优先，其次 <c>部材部品\部材部品.csv</c>），之后整画面复用。
         /// </summary>
         private MemberPartCatalog _memberNameCatalog;
 
         /// <summary>是否已经尝试读过部材部品マスタ（读不到也只试一次，不反复读盘）。</summary>
         private bool _memberNameCatalogLoaded;
+
+        /// <summary>
+        /// 「选择部材名」窗口（<see cref="MemberNamePickerForm"/>，<b>非模态</b>）：
+        /// 窗口打开期间本画面照常操作（不会被挡住）；单击里面的一项就立刻写回当前「部材名」单元格。
+        /// </summary>
+        private MemberNamePickerForm _memberNamePicker;
+
+        /// <summary>
+        /// 「选择部材名」窗口这次要写入的单元格：窗口是非模态的，期间可能换行 / 换格，
+        /// 所以记单元格引用而不是行号；行被删掉 / 换了図番以后引用会失效，写之前会再校验一次。
+        /// </summary>
+        private DataGridViewCell _memberNamePickerCell;
 
         /// <summary>
         /// 整行背景色（淡绿色）：这一行来自 <b>アッセンブリ図</b> 自身的部品表
@@ -224,6 +245,9 @@ namespace MSIFAITOOLS
             {
                 return;
             }
+
+            // 换図番后表格会整个重填：先关掉「选择部材名」窗口，免得写到下一个図番的行上
+            CloseMemberNamePicker();
 
             string newPath = pdfFilePath == null ? string.Empty : pdfFilePath.Trim();
             bool drawingChanged = !string.Equals(_pdfPath, newPath, StringComparison.OrdinalIgnoreCase);
@@ -1651,7 +1675,7 @@ namespace MSIFAITOOLS
         /// 单击单元格：只选中<b>这一格</b>（不再整行选中），并<b>直接进入编辑、把内容全选</b>
         /// （EditMode 是 <c>EditOnKeystrokeOrF2</c>，不手动 BeginEdit 的话要点两次才可以改）。
         /// <list type="bullet">
-        ///   <item>「部材名」→ 弹出输入辅助窗口（<see cref="ShowMemberNamePicker"/>），不进入普通编辑；</item>
+        ///   <item>「部材名」→ 打开「选择部材名」窗口（<see cref="ShowMemberNamePicker"/>），不进入普通编辑；</item>
         ///   <item>只读列（No / 参照元 / 数据来源 / 登录时间）→ 只选中单元格；</item>
         ///   <item>其它列 → 选中 + 进入编辑 + 全选（再打一个字就替换掉原来的值）。</item>
         /// </list>
@@ -1683,7 +1707,7 @@ namespace MSIFAITOOLS
 
             if (IsMemberNameColumn(cell.OwningColumn))
             {
-                // 部材名 是「多个候选用 | 连接」的列 → 用辅助窗口选择，而不是让用户手打
+                // 部材名 是「从常用部材名 里挑一个」的列 → 用选择窗口写，而不是让用户手打
                 ShowMemberNamePicker(cell);
                 return;
             }
@@ -1768,10 +1792,10 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 点「部材名」单元格时弹出输入辅助窗口（<see cref="MemberNamePickerForm"/>）：
-        /// 候选项 = 部材部品マスタ 的常用部材名；单元格原来的值如果是 <c>|</c> 分开的多项，
-        /// 那些项也加进候选并预先勾选。确定后把勾选的项用 <c>|</c> 连接写回单元格
-        /// （一项 = 单值，一项都没勾 = 清空；在窗口里手工输入的文字原样写入）。
+        /// 点「部材名」单元格时打开「选择部材名」窗口（<see cref="MemberNamePickerForm"/>）。
+        /// 窗口是<b>非模态</b>的：开着的时候本画面照常操作（改别的格子 / 换行 / 看图纸都不受影响）；
+        /// 单击窗口里的一项，就立刻把这一项写进这一格（见 <see cref="MemberNamePicker_MemberNamePicked"/>），
+        /// 不用勾选、也不用点确定。窗口已经开着时只把「写入目标」换成这一次点的格子。
         /// </summary>
         private void ShowMemberNamePicker(DataGridViewCell cell)
         {
@@ -1780,31 +1804,119 @@ namespace MSIFAITOOLS
                 return;
             }
 
+            _memberNamePickerCell = cell;
+
             string currentValue = GetCellText(cell.OwningRow, cell.OwningColumn.Name);
 
-            using (MemberNamePickerForm picker =
-                new MemberNamePickerForm(GetMemberNameCatalog(), currentValue))
+            // 同一行的「部品名」= 置换表 DL_BuhinBuzaiMapping 的 BuhinName：
+            // 窗口用它查出对应的部材名（BuzaiName）显示在顶部，点那一行就能直接写入
+            string partName = GetCellText(cell.OwningRow, PartNameColumnName);
+
+            if (_memberNamePicker == null || _memberNamePicker.IsDisposed)
             {
-                if (picker.ShowDialog(this) != DialogResult.OK)
-                {
-                    return;
-                }
+                MemberNamePickerForm picker =
+                    new MemberNamePickerForm(GetMemberNameCatalog(), currentValue, partName);
 
-                string selectedValue = picker.SelectedValue ?? string.Empty;
+                picker.MemberNamePicked += MemberNamePicker_MemberNamePicked;
+                picker.FormClosed += MemberNamePicker_FormClosed;
+                _memberNamePicker = picker;
 
-                if (string.Equals(selectedValue, currentValue, StringComparison.Ordinal))
-                {
-                    // 值没变 → 不产生「有未保存的修改」
-                    return;
-                }
+                // 非模态（Show 而不是 ShowDialog）：开着窗口也能操作本画面；
+                // Owned 窗口会跟着本画面一起关闭，省掉手工收尾。
+                picker.Show(this);
+                return;
+            }
 
-                if (dgvParts.IsCurrentCellInEditMode)
+            // 已经开着：切换写入目标（列表里选中这一格现在的值 + 顶部换成这一行的部品名 对应的部材名），
+            // 不重新读マスタ
+            _memberNamePicker.SetTarget(currentValue, partName);
+
+            if (!_memberNamePicker.Visible)
+            {
+                _memberNamePicker.Show(this);
+            }
+
+            _memberNamePicker.Activate();
+        }
+
+        /// <summary>
+        /// 「选择部材名」窗口单击了某一项 / 点了【写入】：立刻把值写进目标单元格
+        /// （值没变时不产生「有未保存的修改」；空串 = 清空这一格）。
+        /// </summary>
+        /// <param name="memberName">选中的部材名（或手工输入的内容）。</param>
+        private void MemberNamePicker_MemberNamePicked(string memberName)
+        {
+            DataGridViewCell cell = _memberNamePickerCell;
+
+            if (cell == null || cell.OwningRow == null ||
+                !ReferenceEquals(cell.OwningRow.DataGridView, dgvParts))
+            {
+                // 目标行已经被删掉 / 换了図番（窗口还开着）：不写，免得写到别的行
+                return;
+            }
+
+            string selectedValue = memberName == null ? string.Empty : memberName.Trim();
+            string currentValue = GetCellText(cell.OwningRow, cell.OwningColumn.Name);
+
+            if (string.Equals(selectedValue, currentValue, StringComparison.Ordinal))
+            {
+                // 值没变 → 不产生「有未保存的修改」
+                return;
+            }
+
+            if (dgvParts.IsCurrentCellInEditMode)
+            {
+                if (ReferenceEquals(dgvParts.CurrentCell, cell))
                 {
-                    // 弹窗前已经进入编辑状态：先退出编辑，免得编辑框把旧值写回去
+                    // 正在编辑的就是这一格：先退出编辑，免得编辑框把旧值写回去
                     dgvParts.CancelEdit();
                 }
+                else
+                {
+                    // 正在编辑别的格子（窗口开着也能改表格）：先把那一格提交，别丢掉用户打的字
+                    try
+                    {
+                        dgvParts.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                    }
+                    catch (Exception)
+                    {
+                        // 提交失败（没有默认处理）时保持原样，继续写「部材名」
+                    }
+                }
+            }
 
-                cell.Value = selectedValue;
+            cell.Value = selectedValue;
+        }
+
+        /// <summary>「选择部材名」窗口关闭后清掉引用（下次点「部材名」会重新创建）。</summary>
+        private void MemberNamePicker_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            MemberNamePickerForm picker = sender as MemberNamePickerForm;
+
+            if (picker != null)
+            {
+                picker.MemberNamePicked -= MemberNamePicker_MemberNamePicked;
+                picker.FormClosed -= MemberNamePicker_FormClosed;
+            }
+
+            _memberNamePicker = null;
+            _memberNamePickerCell = null;
+        }
+
+        /// <summary>
+        /// 关掉「选择部材名」窗口（换図番 / 关闭本画面时用）：
+        /// 已经写进单元格的值不受影响，只是这次的选择目标作废。
+        /// </summary>
+        private void CloseMemberNamePicker()
+        {
+            MemberNamePickerForm picker = _memberNamePicker;
+
+            _memberNamePicker = null;
+            _memberNamePickerCell = null;
+
+            if (picker != null && !picker.IsDisposed)
+            {
+                picker.Close();
             }
         }
 
@@ -1952,6 +2064,9 @@ namespace MSIFAITOOLS
         {
             PdfPreviewForm preview = _previewForm;
             _previewForm = null;
+
+            // 「选择部材名」窗口是 Owned 窗口（正常情况下会随本画面一起关闭），这里再显式收一次尾
+            CloseMemberNamePicker();
 
             // Close() 会触发 FormClosed，所以先把引用取到局部变量再关闭
             if (preview != null && !preview.IsDisposed)

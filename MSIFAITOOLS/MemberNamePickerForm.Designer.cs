@@ -26,6 +26,7 @@ namespace MSIFAITOOLS
         private void InitializeComponent()
         {
             this.lblHint = new System.Windows.Forms.Label();
+            this.lblMapping = new System.Windows.Forms.Label();
             this.lblFilter = new System.Windows.Forms.Label();
             this.txtFilter = new System.Windows.Forms.TextBox();
             this.lvNames = new System.Windows.Forms.ListView();
@@ -48,14 +49,31 @@ namespace MSIFAITOOLS
             this.lblHint.Name = "lblHint";
             this.lblHint.Size = new System.Drawing.Size(472, 46);
             this.lblHint.TabIndex = 0;
-            this.lblHint.Text = "勾选要用的部材名（可多选，确定后用「|」连接）。\r\n" +
-                "这一格里原本用「|」分开的项已经勾上；列表里没有的名字，写在下面的「手工输入」里。";
+            this.lblHint.Text = "单击列表里的部材名，就会写入主画面的「部材名」这一格（替换原来的值）。\r\n" +
+                "窗口开着也可以照常操作主画面；列表里没有的名字，写在下面的「手工输入」里再点【写入】。";
+            // 
+            // lblMapping
+            // 
+            this.lblMapping.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblMapping.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(242)))), ((int)(((byte)(244)))), ((int)(((byte)(247)))));
+            this.lblMapping.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.lblMapping.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.lblMapping.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
+            this.lblMapping.Location = new System.Drawing.Point(14, 60);
+            this.lblMapping.Name = "lblMapping";
+            this.lblMapping.Padding = new System.Windows.Forms.Padding(6, 0, 6, 0);
+            this.lblMapping.Size = new System.Drawing.Size(472, 28);
+            this.lblMapping.TabIndex = 9;
+            this.lblMapping.Text = "部品名 → 部材名（从 DL_BuhinBuzaiMapping 查）";
+            this.lblMapping.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            this.lblMapping.Click += new System.EventHandler(this.LblMapping_Click);
             // 
             // lblFilter
             // 
             this.lblFilter.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblFilter.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.lblFilter.Location = new System.Drawing.Point(14, 66);
+            this.lblFilter.Location = new System.Drawing.Point(14, 96);
             this.lblFilter.Name = "lblFilter";
             this.lblFilter.Size = new System.Drawing.Size(52, 22);
             this.lblFilter.TabIndex = 1;
@@ -67,7 +85,7 @@ namespace MSIFAITOOLS
             this.txtFilter.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
             this.txtFilter.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.txtFilter.Location = new System.Drawing.Point(70, 63);
+            this.txtFilter.Location = new System.Drawing.Point(70, 93);
             this.txtFilter.Name = "txtFilter";
             this.txtFilter.Size = new System.Drawing.Size(416, 26);
             this.txtFilter.TabIndex = 2;
@@ -78,7 +96,6 @@ namespace MSIFAITOOLS
             this.lvNames.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
             | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.lvNames.CheckBoxes = true;
             this.lvNames.Columns.AddRange(new System.Windows.Forms.ColumnHeader[] {
             this.colMemberName,
             this.colPartNames});
@@ -86,15 +103,14 @@ namespace MSIFAITOOLS
             this.lvNames.FullRowSelect = true;
             this.lvNames.HeaderStyle = System.Windows.Forms.ColumnHeaderStyle.Nonclickable;
             this.lvNames.HideSelection = false;
-            this.lvNames.Location = new System.Drawing.Point(14, 96);
-            this.lvNames.MultiSelect = true;
+            this.lvNames.Location = new System.Drawing.Point(14, 126);
+            this.lvNames.MultiSelect = false;
             this.lvNames.Name = "lvNames";
-            this.lvNames.Size = new System.Drawing.Size(472, 320);
+            this.lvNames.Size = new System.Drawing.Size(472, 290);
             this.lvNames.TabIndex = 3;
             this.lvNames.UseCompatibleStateImageBehavior = false;
             this.lvNames.View = System.Windows.Forms.View.Details;
-            this.lvNames.ItemChecked += new System.Windows.Forms.ItemCheckedEventHandler(this.LvNames_ItemChecked);
-            this.lvNames.MouseDoubleClick += new System.Windows.Forms.MouseEventHandler(this.LvNames_MouseDoubleClick);
+            this.lvNames.MouseClick += new System.Windows.Forms.MouseEventHandler(this.LvNames_MouseClick);
             // 
             // colMemberName
             // 
@@ -119,7 +135,7 @@ namespace MSIFAITOOLS
             this.lblPreview.Padding = new System.Windows.Forms.Padding(6, 0, 6, 0);
             this.lblPreview.Size = new System.Drawing.Size(472, 34);
             this.lblPreview.TabIndex = 4;
-            this.lblPreview.Text = "将写入：";
+            this.lblPreview.Text = "单击左边列表里的部材名，就会写入主画面（还没选）。";
             this.lblPreview.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
             // lblCustom
@@ -143,14 +159,12 @@ namespace MSIFAITOOLS
             this.txtCustom.Name = "txtCustom";
             this.txtCustom.Size = new System.Drawing.Size(398, 26);
             this.txtCustom.TabIndex = 6;
-            this.txtCustom.TextChanged += new System.EventHandler(this.TxtCustom_TextChanged);
             // 
             // btnOk
             // 
             this.btnOk.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.btnOk.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(232)))), ((int)(((byte)(237)))), ((int)(((byte)(243)))));
             this.btnOk.Cursor = System.Windows.Forms.Cursors.Hand;
-            this.btnOk.DialogResult = System.Windows.Forms.DialogResult.OK;
             this.btnOk.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(199)))), ((int)(((byte)(208)))), ((int)(((byte)(219)))));
             this.btnOk.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(217)))), ((int)(((byte)(226)))), ((int)(((byte)(236)))));
             this.btnOk.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
@@ -160,7 +174,7 @@ namespace MSIFAITOOLS
             this.btnOk.Name = "btnOk";
             this.btnOk.Size = new System.Drawing.Size(96, 32);
             this.btnOk.TabIndex = 7;
-            this.btnOk.Text = "确定";
+            this.btnOk.Text = "写入";
             this.btnOk.UseVisualStyleBackColor = false;
             this.btnOk.Click += new System.EventHandler(this.BtnOk_Click);
             // 
@@ -169,7 +183,6 @@ namespace MSIFAITOOLS
             this.btnCancel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.btnCancel.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(232)))), ((int)(((byte)(237)))), ((int)(((byte)(243)))));
             this.btnCancel.Cursor = System.Windows.Forms.Cursors.Hand;
-            this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
             this.btnCancel.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(199)))), ((int)(((byte)(208)))), ((int)(((byte)(219)))));
             this.btnCancel.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(217)))), ((int)(((byte)(226)))), ((int)(((byte)(236)))));
             this.btnCancel.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
@@ -179,8 +192,9 @@ namespace MSIFAITOOLS
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(96, 32);
             this.btnCancel.TabIndex = 8;
-            this.btnCancel.Text = "取消";
+            this.btnCancel.Text = "关闭";
             this.btnCancel.UseVisualStyleBackColor = false;
+            this.btnCancel.Click += new System.EventHandler(this.BtnClose_Click);
             // 
             // MemberNamePickerForm
             // 
@@ -189,6 +203,7 @@ namespace MSIFAITOOLS
             this.CancelButton = this.btnCancel;
             this.ClientSize = new System.Drawing.Size(500, 552);
             this.Controls.Add(this.lblHint);
+            this.Controls.Add(this.lblMapping);
             this.Controls.Add(this.lblFilter);
             this.Controls.Add(this.txtFilter);
             this.Controls.Add(this.lvNames);
@@ -212,6 +227,7 @@ namespace MSIFAITOOLS
         }
 
         private System.Windows.Forms.Label lblHint;
+        private System.Windows.Forms.Label lblMapping;
         private System.Windows.Forms.Label lblFilter;
         private System.Windows.Forms.TextBox txtFilter;
         private System.Windows.Forms.ListView lvNames;

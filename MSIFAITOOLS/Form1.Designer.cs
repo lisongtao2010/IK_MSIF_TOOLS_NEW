@@ -104,6 +104,9 @@ namespace MSIFAITOOLS
             this.pnlHeader.Controls.Add(this.lblVersion);
             this.pnlHeader.Controls.Add(this.lblAppSub);
             this.pnlHeader.Controls.Add(this.lblAppTitle);
+            // 标题栏右上角：AI 设置 / 部材名置换表 两个全局入口（随窗体宽度一同右移）
+            this.pnlHeader.Controls.Add(this.btnMemberNameMap);
+            this.pnlHeader.Controls.Add(this.btnAiSettings);
             this.pnlHeader.Controls.Add(this.pnlHeaderAccent);
             this.pnlHeader.Dock = System.Windows.Forms.DockStyle.Top;
             this.pnlHeader.Location = new System.Drawing.Point(0, 0);
@@ -118,7 +121,7 @@ namespace MSIFAITOOLS
             this.lblVersion.BackColor = System.Drawing.Color.Transparent;
             this.lblVersion.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblVersion.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(140)))), ((int)(((byte)(170)))), ((int)(((byte)(200)))));
-            this.lblVersion.Location = new System.Drawing.Point(824, 20);
+            this.lblVersion.Location = new System.Drawing.Point(836, 28);
             this.lblVersion.Name = "lblVersion";
             this.lblVersion.Size = new System.Drawing.Size(41, 17);
             this.lblVersion.TabIndex = 2;
@@ -435,7 +438,6 @@ namespace MSIFAITOOLS
             this.grpAction.Controls.Add(this.btnCmdStep6);
             this.grpAction.Controls.Add(this.lblCmdStepNote);
             this.grpAction.Controls.Add(this.chkCmdStep0);
-            this.grpAction.Controls.Add(this.btnAiSettings);
             this.grpAction.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.grpAction.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
             this.grpAction.Location = new System.Drawing.Point(20, 126);
@@ -693,18 +695,20 @@ namespace MSIFAITOOLS
             // 
             // btnAiSettings
             // 
-            this.btnAiSettings.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(240)))), ((int)(((byte)(242)))), ((int)(((byte)(245)))));
+            this.btnAiSettings.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnAiSettings.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(37)))), ((int)(((byte)(74)))), ((int)(((byte)(118)))));
             this.btnAiSettings.Cursor = System.Windows.Forms.Cursors.Hand;
-            this.btnAiSettings.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(199)))), ((int)(((byte)(208)))), ((int)(((byte)(219)))));
-            this.btnAiSettings.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(226)))), ((int)(((byte)(232)))), ((int)(((byte)(240)))));
+            this.btnAiSettings.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(74)))), ((int)(((byte)(116)))), ((int)(((byte)(163)))));
+            this.btnAiSettings.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(24)))), ((int)(((byte)(50)))), ((int)(((byte)(84)))));
+            this.btnAiSettings.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(92)))), ((int)(((byte)(140)))));
             this.btnAiSettings.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnAiSettings.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.btnAiSettings.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.btnAiSettings.Location = new System.Drawing.Point(590, 34);
+            this.btnAiSettings.ForeColor = System.Drawing.Color.White;
+            this.btnAiSettings.Location = new System.Drawing.Point(474, 22);
             this.btnAiSettings.Name = "btnAiSettings";
-            this.btnAiSettings.Size = new System.Drawing.Size(96, 46);
+            this.btnAiSettings.Size = new System.Drawing.Size(80, 28);
             this.btnAiSettings.TabIndex = 4;
-            this.btnAiSettings.Text = "AI 设置";
+            this.btnAiSettings.Text = "AI 設定";
             this.btnAiSettings.UseVisualStyleBackColor = false;
             this.btnAiSettings.Click += new System.EventHandler(this.BtnAiSettings_Click);
             // 
@@ -717,7 +721,6 @@ namespace MSIFAITOOLS
             this.grpInput.Controls.Add(this.txtFolder);
             this.grpInput.Controls.Add(this.lblFolder);
             this.grpInput.Controls.Add(this.chkCadSplit);
-            this.grpInput.Controls.Add(this.btnMemberNameMap);
             this.grpInput.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.grpInput.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
             this.grpInput.Location = new System.Drawing.Point(20, 16);
@@ -785,18 +788,20 @@ namespace MSIFAITOOLS
             // 
             // btnMemberNameMap
             // 
-            this.btnMemberNameMap.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(240)))), ((int)(((byte)(242)))), ((int)(((byte)(245)))));
+            this.btnMemberNameMap.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnMemberNameMap.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(37)))), ((int)(((byte)(74)))), ((int)(((byte)(118)))));
             this.btnMemberNameMap.Cursor = System.Windows.Forms.Cursors.Hand;
-            this.btnMemberNameMap.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(199)))), ((int)(((byte)(208)))), ((int)(((byte)(219)))));
-            this.btnMemberNameMap.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(226)))), ((int)(((byte)(232)))), ((int)(((byte)(240)))));
+            this.btnMemberNameMap.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(74)))), ((int)(((byte)(116)))), ((int)(((byte)(163)))));
+            this.btnMemberNameMap.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(24)))), ((int)(((byte)(50)))), ((int)(((byte)(84)))));
+            this.btnMemberNameMap.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(92)))), ((int)(((byte)(140)))));
             this.btnMemberNameMap.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnMemberNameMap.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.btnMemberNameMap.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.btnMemberNameMap.Location = new System.Drawing.Point(520, 64);
+            this.btnMemberNameMap.ForeColor = System.Drawing.Color.White;
+            this.btnMemberNameMap.Location = new System.Drawing.Point(562, 22);
             this.btnMemberNameMap.Name = "btnMemberNameMap";
-            this.btnMemberNameMap.Size = new System.Drawing.Size(322, 26);
+            this.btnMemberNameMap.Size = new System.Drawing.Size(250, 28);
             this.btnMemberNameMap.TabIndex = 15;
-            this.btnMemberNameMap.Text = "部材名置换表（例：鴨居 → 上枠）…";
+            this.btnMemberNameMap.Text = "部材名置換表（例：鴨居 → 上枠）…";
             this.btnMemberNameMap.UseVisualStyleBackColor = false;
             this.btnMemberNameMap.Click += new System.EventHandler(this.BtnMemberNameMap_Click);
             // 

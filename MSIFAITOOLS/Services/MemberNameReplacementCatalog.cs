@@ -9,7 +9,8 @@ namespace MSIFAITOOLS.Services
     ///
     /// <para>
     /// 用途：图上 / <c>parts_info.json</c> 里的文字不一定是想要的部材名（例：<c>鴨居</c> 要登录成 <c>上枠</c>），
-    /// 维护画面（<see cref="MemberNameReplacementForm"/>）里配好「置换前 → 置换后」后，
+    /// 维护画面（<see cref="MemberNameReplacementForm"/>）在 SQL Server 表 <c>DL_BuhinBuzaiMapping</c>
+    /// 里配好「部品名（BuhinName）→ 部材名（BuzaiName）」后，
     /// 写进 <see cref="PartBasicInfo.MemberName"/> 的部材名会按这张表自动置换。
     /// </para>
     ///
@@ -41,8 +42,11 @@ namespace MSIFAITOOLS.Services
         /// <summary>是否已经读过数据库（第一次 <see cref="Replace"/> 时惰性加载）。</summary>
         private static bool _loaded;
 
-        /// <summary>当前使用的数据库文件（解析失败时是解析出来的目标路径）。</summary>
-        private static string _databasePath = string.Empty;
+        /// <summary>
+        /// 当前使用的连接目标
+        /// （例：<c>SQL Server 10.103.126.209,1433 / DB MSIF / 表 DL_BuhinBuzaiMapping</c>；解析失败时是解析出来的目标）。
+        /// </summary>
+        private static string _targetDescription = string.Empty;
 
         /// <summary>上一次读取数据库失败的原因（成功时为空串）。</summary>
         private static string _lastError = string.Empty;
@@ -58,15 +62,21 @@ namespace MSIFAITOOLS.Services
             }
         }
 
-        /// <summary>当前使用的数据库文件路径（日志 / 维护画面显示用）。</summary>
-        public static string DatabasePath
+        /// <summary>当前使用的连接目标（日志 / 维护画面显示用）。</summary>
+        public static string TargetDescription
         {
             get
             {
                 EnsureLoaded();
 
-                return _databasePath;
+                return _targetDescription;
             }
+        }
+
+        /// <summary>兼容旧调用方：值与 <see cref="TargetDescription"/> 相同（已经不再是文件路径）。</summary>
+        public static string DatabasePath
+        {
+            get { return TargetDescription; }
         }
 
         /// <summary>上一次读取数据库失败的原因（成功时为空串）。</summary>
@@ -133,18 +143,21 @@ namespace MSIFAITOOLS.Services
             return builder.ToString();
         }
 
-        /// <summary>读数据库（失败只记 <see cref="LastError"/>，置换表置空 → 不影响原值）。</summary>
+        /// <summary>
+        /// 读 SQL Server 表 <c>DL_BuhinBuzaiMapping</c>
+        /// （失败只记 <see cref="LastError"/>，置换表置空 → 不影响原值）。
+        /// </summary>
         private static void Load()
         {
             Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.Ordinal);
-            string path = MemberNameReplacementRepository.ResolveDatabasePath();
+            string target = MemberNameReplacementRepository.DescribeTarget();
             string error = string.Empty;
 
             try
             {
-                using (MemberNameReplacementRepository repository = new MemberNameReplacementRepository(path))
+                using (MemberNameReplacementRepository repository = new MemberNameReplacementRepository())
                 {
-                    path = repository.DatabasePath;
+                    target = repository.TargetDescription;
 
                     foreach (MemberNameReplacement row in repository.Query())
                     {
@@ -167,7 +180,7 @@ namespace MSIFAITOOLS.Services
                 error = ex.Message;
             }
 
-            _databasePath = path;
+            _targetDescription = target;
             _lastError = error;
             _map = map;
         }

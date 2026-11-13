@@ -50,6 +50,13 @@ namespace CadPartSplitter
         private const int MinTableChars = 2;
 
         /// <summary>
+        /// 两个词的框在 x / y 两个方向的重叠都超过「短边」的这个比例时，当成
+        /// 「同一个词被重叠画了两遍」（CAD 出图时文字层重复输出，两框几乎完全重合）。
+        /// 正常相邻的重复字符（品番 <c>MZC○○63</c> 里的两个 ○）是并排的，x 方向不重叠，不会被误判。
+        /// </summary>
+        private const double OverlapWordRatio = 0.6;
+
+        /// <summary>
         /// 提取一页上的全部有线表格。
         /// </summary>
         /// <param name="pdfPath">PDF 路径。</param>
@@ -118,6 +125,16 @@ namespace CadPartSplitter
                     // 文字层先读出来：识别「取り消し線（划掉整行的横线）」要靠它 ——
                     // 横线从字身中间穿过、又把字整个盖住，那是 CAD 图里「这一行作废」的画法，不是格子边
                     List<WordBox> words = ReadWords(page);
+
+                    int dupWords = CountOverlappingDuplicates(words);
+
+                    if (dupWords > 0)
+                    {
+                        write("[INFO] 表格文字：有 " + dupWords + " 个词是同一个词重叠画了两遍"
+                              + "（CAD 文字重复放置 —— 表头会落成 部部品品ココーードド 这种样子）"
+                              + "→ 拼接格内文字时只留一个。");
+                    }
+
                     var struckWords = new bool[words.Count];
 
                     int strikeLines = DropStrikeLines(
@@ -1121,6 +1138,99 @@ namespace CadPartSplitter
         }
 
         /// <summary>
+        /// 剔掉「同一个词被重叠画了两遍」的重复（两框几乎完全重合）—— 否则一格里的
+        /// <c>部品コード</c> 会被拼成 <c>部部品品ココーードド</c>，下游按列名认不出这一列
+        /// （H467U10008 的 02 就是这么丢的「部品コード」）。
+        ///
+        /// 判据见 <see cref="OverlapWordRatio"/>：文本相同 + x / y 两个方向的重叠都超过短边 60%。
+        /// 只留最先出现的那一个；没有重复时原样返回（不改原有拼接结果）。
+        /// </summary>
+        private static List<WordBox> DropOverlapping(List<WordBox> words)
+        {
+            if (words.Count < 2) return words;
+
+            var keep = new List<WordBox>(words.Count);
+
+            foreach (var w in words)
+            {
+                bool dup = false;
+
+                for (int i = 0; i < keep.Count; i++)
+                {
+                    WordBox k = keep[i];
+
+                    if (!string.Equals(k.Text, w.Text, StringComparison.Ordinal)) continue;
+
+                    if (OverlapRatio(k.X1, k.X2, w.X1, w.X2) < OverlapWordRatio) continue;
+                    if (OverlapRatio(k.Y1, k.Y2, w.Y1, w.Y2) < OverlapWordRatio) continue;
+
+                    dup = true;
+                    break;
+                }
+
+                if (!dup) keep.Add(w);
+            }
+
+            return keep.Count == words.Count ? words : keep;
+        }
+
+        /// <summary>
+        /// 统计该页有多少个词是「同一个词被重叠画了两遍」（判据与 <see cref="DropOverlapping"/> 一致）。
+        /// 只用于日志 —— 图纸有这个问题时，跑完一眼能看到是哪一页、影响了多少词。
+        /// </summary>
+        private static int CountOverlappingDuplicates(List<WordBox> words)
+        {
+            if (words.Count < 2) return 0;
+
+            var byText = new Dictionary<string, List<WordBox>>(StringComparer.Ordinal);
+
+            foreach (var w in words)
+            {
+                List<WordBox> list;
+                if (!byText.TryGetValue(w.Text, out list))
+                {
+                    list = new List<WordBox>();
+                    byText[w.Text] = list;
+                }
+
+                list.Add(w);
+            }
+
+            int dup = 0;
+
+            foreach (var list in byText.Values)
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    WordBox a = list[i];
+
+                    for (int j = i + 1; j < list.Count; j++)
+                    {
+                        WordBox b = list[j];
+
+                        if (OverlapRatio(a.X1, a.X2, b.X1, b.X2) < OverlapWordRatio) continue;
+                        if (OverlapRatio(a.Y1, a.Y2, b.Y1, b.Y2) < OverlapWordRatio) continue;
+
+                        dup++;      // 同一个词画了几遍都只算一次
+                        break;
+                    }
+                }
+            }
+
+            return dup;
+        }
+
+        /// <summary>两个区间重叠的长度占「短的那一个」的比例（并排时为 0，完全重合时为 1）。</summary>
+        private static double OverlapRatio(double a1, double a2, double b1, double b2)
+        {
+            double shorter = Math.Min(a2 - a1, b2 - b1);
+
+            if (shorter <= 0) return 0;
+
+            return (Math.Min(a2, b2) - Math.Max(a1, b1)) / shorter;
+        }
+
+        /// <summary>
         /// 把一格内的词拼成文字：先按行（y 中心相近）分组、行内按 x 排序，
         /// 词间距明显（一般大于字高 1/4）时补一个空格，换行也补一个空格。
         ///
@@ -1130,7 +1240,8 @@ namespace CadPartSplitter
         /// </summary>
         internal static string ComposeText(List<WordBox> words)
         {
-            var ordered = new List<WordBox>(words);
+            // 同一个词被重叠画了两遍时只留一个（否则「部品コード」会拼成 部部品品ココーードド）
+            var ordered = DropOverlapping(new List<WordBox>(words));
 
             ordered.Sort((a, b) =>
             {
@@ -1186,7 +1297,9 @@ namespace CadPartSplitter
                 hasPrev = true;
             }
 
-            return sb.ToString();
+            // 兜底：重复画的若是「一个词里的每个字符」（词级判据看不到），整格双写的串在这里还原一次
+            // （部部品品ココーードド → 部品コード；判据见 CsvFile.FoldDouble，重复字 / 数字的真品番不受影响）
+            return CsvFile.FoldDouble(sb.ToString());
         }
     }
 }
