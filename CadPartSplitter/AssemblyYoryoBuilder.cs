@@ -64,7 +64,8 @@ namespace CadPartSplitter
     /// </code>
     /// 这种图上 `tables\*.csv` 一条也没有（连表題欄都没框线），所以除了表格路径，本类还读**整页文字行**
     /// （<see cref="PartTextExtractor.ReadTextLines"/>，与 <c>parts_text.txt</c> 同一套分行 / 拼字规则）
-    /// 再抽一遍：`項目` 按图纸上写的**保留到「部」**（`A部` / `B部` …，表格路径那种剥成 `A` 的规则不适用），
+    /// 再抽一遍：`項目` 先按图纸上写的**保留到「部」**来配对（`A部` / `B部` …，与表格路径剥成 `A` 不同），
+    /// **写文件前再把「部」去掉**（`StripItemBu`：`A部` → `A`、`A,B部` → `A,B`，与表格路径一致），
     /// `要領図漢字` 留空，`図番` 仍是 10 位。
     /// 抽法是「先把 `～部` 与 10 位 `図番` 分别找出来、再按位置配对」（<see cref="ReadFreeTextIndex"/>）：
     /// 两者之间写什么（`詳細` / `：` / `・・・` / 空格 / 汉字注释）都不影响，`A部詳細：` 与 `図番` 折成两行
@@ -171,8 +172,9 @@ namespace CadPartSplitter
         /// 页面**自由文字**里的「項目」写法（图纸上没画表格时用，见 <see cref="ReadFreeTextIndex"/>）：
         /// <c>A部</c> / <c>A,B部</c> / <c>A、B部</c> / <c>A・B部</c> / <c>A～C部</c>（范围照原样保留）。
         ///
-        /// 与表格路径的内联写法不同：那里剥掉 `部` 只留字母（`A`），这里按需求**保留到「部」**（`A部` / `B部`），
-        /// 因为图纸上原文就是这么写的（`A部詳細：H325U10011`），下游要的 `項目` 也就是 `A部`。
+        /// 与表格路径的内联写法不同：那里剥掉 `部` 只留字母（`A`），这里先**保留到「部」**（`A部` / `B部`），
+        /// 因为图纸上原文就是这么写的（`A部詳細：H325U10011`），保留着才按「～部」找得到；
+        /// **写文件前再统一去掉「部」**（<see cref="StripItemBu"/>），所以输出里 `項目` 仍然只是 `A` / `A,B`。
         ///
         /// 认之前整行先过 <see cref="NormalizeFreeText"/>（Unicode FormKC），全角 <c>Ａ</c> / <c>，</c> / <c>～</c>
         /// 会化成半角，所以这里只写半角形式；用全角字母画的图纸也认。
@@ -231,7 +233,7 @@ namespace CadPartSplitter
         ///      <c>下記に示す図面を参照のこと。</c> + <c>A部詳細：H325U10011</c>…<c>G部詳細：H325U10016</c>
         ///      （H527U10001 就是这种）。这时读整页文字行
         ///      （<see cref="PartTextExtractor.ReadTextLines"/>），按 <see cref="FreeTextPairPattern"/> 抽
-        ///      「`A部` + 10 位 図番」；`項目` 按需求**保留到「部」**（`A部` / `B部` …）、`要領図漢字` 留空。
+        ///      「`A部` + 10 位 図番」；`項目` 先保留到「部」配对、**写出前去掉「部」**（`A部` → `A`）、`要領図漢字` 留空。
         ///      这种图上没有表格 → 表題欄也判不出图面分类，所以「分类未识别 + 页面上有这种索引」时
         ///      也按アッセンブリ図处理（否则这类图纸永远出不了这份清单）。
         ///
@@ -506,6 +508,17 @@ namespace CadPartSplitter
                 }
 
                 return 0;
+            }
+
+            // 項目 不带「部」：页面自由文字那条路是按图纸原文**保留到「部」**的（`A部` / `B部`，
+            // 保留着才配得上号），表格里万一也把 `A部` 写进那一格同样处理 ——
+            // 写出前统一去掉「部」，与内联写法剥出来的 `A` / `A,M` 一致。
+            int strippedItems = StripItemBu(output);
+
+            if (strippedItems > 0)
+            {
+                o.Log("[INFO] 01_アッセンブリ図_要領図：其中 " + strippedItems
+                      + " 条的 項目 带「部」（如 A部 / A,B部），已去掉「部」（→ A / A,B）。");
             }
 
             string path = Path.Combine(outputDirectory, OutputFileName);
@@ -1078,6 +1091,38 @@ namespace CadPartSplitter
             return text.Length > 0 && ItemPattern.IsMatch(text);
         }
 
+        /// <summary>項目 里要去掉的那个字：图纸上写 <c>A部</c>，输出只要 <c>A</c>（见 <see cref="StripItemBu"/>）。</summary>
+        private const char ItemBu = '部';
+
+        /// <summary>
+        /// 写出前统一 項目：把值里的「部」去掉（<c>A部</c> → <c>A</c>、<c>A,B部</c> → <c>A,B</c>），
+        /// 返回改了几条。
+        ///
+        /// 图纸上 項目 常写成 <c>A部</c> —— 页面自由文字那条路**故意**保留到「部」（按「～部」才找得到，
+        /// 见 <see cref="FreeTextItemPattern"/>），而下游要的 項目 只是字母；表格路径万一也把 <c>A部</c>
+        /// 写进那一格，同样在这里统一。只动第 1 列（項目）—— 要領図漢字 里的「部」
+        /// （<c>枠 縦枠部…</c>）原样保留。去掉「部」以后再 <c>Trim()</c>，
+        /// 免得文字层把 <c>A部</c> 拆成两个词时留下 <c>A 部</c> → <c>A </c> 这种尾随空格。
+        /// </summary>
+        private static int StripItemBu(List<string[]> rows)
+        {
+            int changed = 0;
+
+            foreach (string[] row in rows)
+            {
+                if (row == null || row.Length == 0 || string.IsNullOrEmpty(row[0]))
+                    continue;
+
+                if (row[0].IndexOf(ItemBu) < 0)
+                    continue;
+
+                row[0] = row[0].Replace(ItemBu.ToString(), string.Empty).Trim();
+                changed++;
+            }
+
+            return changed;
+        }
+
         /// <summary>
         /// 找「要領図漢字」列：① 表头里写了这个列名（或同义写法：要領図名称 / 図面名称 / 部品名 / 品名 / 名称，
         /// 见 <see cref="NameHeaders"/>）就直接用；
@@ -1259,7 +1304,9 @@ namespace CadPartSplitter
         ///     也让「一个 項目 下面跟两三个 図番」的写法都能收；
         ///   · 上面几行里也没有 項目 的 図番 不收（表題欄 / 変更履歴里的裸 図番）。
         ///
-        /// 項目 **保留到「部」**（输出 <c>A部</c> / <c>B部</c>，不剥成 <c>A</c>）、要領図漢字 留空。
+        /// 項目 先**保留到「部」**（<c>A部</c> / <c>B部</c>，这里不剥成 <c>A</c>）—— 写文件前由
+        /// <see cref="StripItemBu"/> 统一去掉「部」，所以最终的 <c>01_アッセンブリ図_要領図.csv</c> 里是 <c>A</c> / <c>B</c>。
+        /// <c>要領図漢字</c> 留空。
         /// 整行先过 <see cref="NormalizeFreeText"/>（Unicode FormKC）：全角字母 / 数字 / 冒号 / 逗号化成半角。
         /// 这张組立图自己的 図番（<paramref name="drawingNumber"/>）不收，同一「項目 + 図番」只收一条
         /// （同一个 図番 挂在两个 項目 上时两条都留 —— 图纸上确实会这样写）。
@@ -1387,7 +1434,7 @@ namespace CadPartSplitter
             if (found.Count > 0)
             {
                 o.Log("[INFO] 01_アッセンブリ図_要領図：页面文字行里找到「A部詳細：H…」这种要領図索引 "
-                      + found.Count + " 条（項目 保留到「部」，如 " + found[0][0] + "）。");
+                      + found.Count + " 条（項目 取到「部」，如 " + found[0][0] + "；写出前会去掉「部」）。");
             }
 
             return found;
