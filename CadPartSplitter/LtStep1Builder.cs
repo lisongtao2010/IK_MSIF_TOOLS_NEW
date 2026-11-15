@@ -189,6 +189,7 @@ namespace CadPartSplitter
             string[] outHeader = null;
             int mainSheets = 0;
             int expandedRows = 0;
+            int emptyCodeRows = 0;
 
             for (int i = 0; i < sheets.Count; i++)
             {
@@ -248,6 +249,12 @@ namespace CadPartSplitter
                         continue;
 
                     string code = codeCol >= 0 && codeCol < row.Length ? row[codeCol] : string.Empty;
+
+                    // 图纸上「部品コード」那一格被划线作废时，tables\*.csv 里这一格是空的
+                    // （RuledTableExtractor 的两档语义：只划掉品番那一格 → 格子留空、行保留）。
+                    // 这一条明细仍然有效（番号 / 部品名 / 員数 都在）→ 照常输出，品番留空即可。
+                    if (codeCol >= 0 && string.IsNullOrWhiteSpace(code))
+                        emptyCodeRows++;
 
                     if (!IsReferenceKeyword(code))
                     {
@@ -318,6 +325,10 @@ namespace CadPartSplitter
 
             o.Log("[INFO] 01_アッセンブリ図_部品機能情報：" + mainSheets + " 张主表 → 展开 " + expandedRows + " 行 → 共 "
                   + output.Count + " 条明细，已保存：" + path);
+
+            if (emptyCodeRows > 0)
+                o.Log("[INFO] 01_アッセンブリ図_部品機能情報：其中 " + emptyCodeRows + " 行的「" + PartCodeHeader
+                      + "」是空的（图纸上那一格被划线作废，或本来就没写品番）→ 明细照收、品番留空。");
 
             return output.Count;
         }

@@ -26,7 +26,13 @@ namespace CadPartSplitter
     ///      —— 这样得到的每个矩形就是一个**四面都有线**的单元格；
     ///   ④ 相邻单元格（共用边界且方向上有重叠）并成一张表，行列号直接由边界坐标给出，
     ///      因此合并单元格的 RowSpan / ColumnSpan 是准确的；
-    ///   ⑤ 文字层里的词按「词中心落在哪个格子」填料，不看间距。
+    ///   ⑤ 文字层里的词按「词中心落在哪个格子」填料，不看间距；
+    ///   ⑥ 落在「三角形注記符号（△1 / △2）」里的数字**不算格子内容**
+    ///      （<see cref="MarkTriangleMarks"/>）：三角形是矢量图形、里面的数字在文字层里，
+    ///      不认出来就会混进那一格的文字（`H986U10002` 的 切断寸法 读成 `100 1`）。
+    ///
+    /// 划线（取り消し線）的两档语义见 <see cref="MarkStruck"/>：整行划掉（≥2 格被划）→ 行作废；
+    /// 只划掉品番那一格（部品コード）→ 只清空该格、明细照收。
     ///
     /// 只读、不参与分割；位图输入（无矢量路径）不产出任何表格。任何异常只写日志。
     /// </summary>
@@ -106,7 +112,13 @@ namespace CadPartSplitter
 
                     var horizontals = new List<Seg>();
                     var verticals = new List<Seg>();
-                    int pathCount = CollectLineSegments(page, tol, minLine, horizontals, verticals);
+
+                    // 斜边不进框线集合，只用来认「三角形注記符号（△1 这种提醒记号）」：
+                    // 三角形是矢量图形、里面的数字却在文字层里，不认出来就会被当成格子内容
+                    // （H986U10002 的 切断寸法「100」旁边有个 △1 → 拼成「100 1」）
+                    var diagonals = new List<Diag>();
+
+                    int pathCount = CollectLineSegments(page, tol, minLine, horizontals, verticals, diagonals);
 
                     MergeCollinear(horizontals, tol);
                     MergeCollinear(verticals, tol);
@@ -157,7 +169,19 @@ namespace CadPartSplitter
 
                     if (struckWordsCount > 0)
                         write("[INFO] 表格文字：" + struckWordsCount + " 个词被 取り消し線 划掉"
-                              + "（图纸上表示该行作废，不写进 tables\\*.csv）");
+                              + "（整行划掉 → 该行作废、不写进 tables\\*.csv；只划掉品番那一格 → 只清空该格，明细照收）");
+
+                    // 三角形注記符号（△1 / △2 这种提醒记号）里的数字：图形在矢量层、数字在文字层，
+                    // 不认出来就会被当成格子内容（H986U10002 的 切断寸法 读成「100 1」）
+                    bool[] markWords = MarkTriangleMarks(words, diagonals);
+
+                    int markCount = 0;
+                    foreach (bool b in markWords) if (b) markCount++;
+
+                    if (markCount > 0)
+                        write("[INFO] 表格文字：" + markCount
+                              + " 个词是「三角形注記符号里的数字」（△1 / △2 这种提醒记号："
+                              + "三角形是矢量图形、数字在文字层里）→ 不计入格内文字。");
 
                     List<Cell> cells = FindCells(horizontals, verticals, tol, minCell, maxRowGap);
                     int rawCells = cells.Count;
@@ -179,7 +203,7 @@ namespace CadPartSplitter
 
                     int assignedWords = 0;
                     foreach (var c in byAreaAsc)
-                        assignedWords += FillCell(c, words, used, struckWords);
+                        assignedWords += FillCell(c, words, used, struckWords, markWords);
 
                     List<List<Cell>> groups = GroupCells(cells, tol);
 
@@ -198,12 +222,13 @@ namespace CadPartSplitter
                         // 名称按位置序号编，两位补零：tables\table_01.csv … 在资源管理器 / Excel 里也按顺序排
                         tables[i].Name = "table_" + (i + 1).ToString("00");
 
-                    int cellTotal = 0, textCellTotal = 0, struckRowTotal = 0;
+                    int cellTotal = 0, textCellTotal = 0, struckRowTotal = 0, struckCellTotal = 0;
                     foreach (var t in tables)
                     {
                         cellTotal += t.CellCount;
                         textCellTotal += t.TextCellCount;
                         struckRowTotal += t.StruckRowCount;
+                        struckCellTotal += t.StruckCellCount;
                     }
 
                     write("[INFO] 表格内容：闭合矩形 " + rawCells + " 个 → 有效单元格 " + cells.Count
@@ -215,16 +240,25 @@ namespace CadPartSplitter
                           + " 个（有文字 " + textCellTotal + " 个，共填入 " + assignedWords + " 个词）"
                           + (struckRowTotal > 0
                               ? "；划线作废 " + struckRowTotal + " 行（不写进 tables\\*.csv）"
+                              : string.Empty)
+                          + (struckCellTotal > 0
+                              ? "；品番作废 " + struckCellTotal + " 格（只清空该格，明细照收）"
                               : string.Empty));
 
                     foreach (var t in tables)
                     {
+                        string strikeNote = string.Empty;
+
+                        if (t.StruckRowCount > 0)
+                            strikeNote = "划线作废 " + t.StruckRowCount + " 行 → 实出 " + t.VisibleRowCount + " 行";
+
+                        if (t.StruckCellCount > 0)
+                            strikeNote += (strikeNote.Length > 0 ? "；" : string.Empty)
+                                          + "品番作废 " + t.StruckCellCount + " 格";
+
                         write("[TABLE] " + t.Name + "  行 " + t.RowCount + " / 列 " + t.ColumnCount
                               + " / 单元格 " + t.CellCount + "（有文字 " + t.TextCellCount + "）"
-                              + (t.StruckRowCount > 0
-                                  ? "【划线作废 " + t.StruckRowCount + " 行 → 实出 "
-                                    + t.VisibleRowCount + " 行】"
-                                  : string.Empty)
+                              + (strikeNote.Length > 0 ? "【" + strikeNote + "】" : string.Empty)
                               + "  绝对(x=" + t.PixelX + " y=" + t.PixelY
                               + " w=" + t.PixelW + " h=" + t.PixelH + ")");
                     }
@@ -252,11 +286,14 @@ namespace CadPartSplitter
         }
 
         /// <summary>
-        /// 遍历该页所有矢量路径，收集水平 / 竖直的边。
+        /// 遍历该页所有矢量路径：水平 / 竖直的边收进 <paramref name="horizontals"/> /
+        /// <paramref name="verticals"/>（围格子用），斜边收进 <paramref name="diagonals"/>
+        /// （只给「三角形注記符号」的判据用，见 <see cref="MarkTriangleMarks"/>）。
         /// </summary>
         /// <returns>处理过的矢量路径条数（仅用于日志）。</returns>
         private static int CollectLineSegments(
-            Page page, double tol, double minLine, List<Seg> horizontals, List<Seg> verticals)
+            Page page, double tol, double minLine, List<Seg> horizontals, List<Seg> verticals,
+            List<Diag> diagonals)
         {
             if (page.ExperimentalAccess == null)
                 return 0;
@@ -272,7 +309,10 @@ namespace CadPartSplitter
                     List<PdfPoint> pts = Flatten(sub, BezierSamples);
 
                     for (int i = 1; i < pts.Count; i++)
+                    {
                         AddSegment(pts[i - 1], pts[i], tol, minLine, horizontals, verticals);
+                        AddDiagonal(pts[i - 1], pts[i], tol, minLine, diagonals);
+                    }
                 }
             }
 
@@ -309,6 +349,26 @@ namespace CadPartSplitter
                     B = Math.Max(p.Y, q.Y)
                 });
             }
+        }
+
+        /// <summary>
+        /// 把一条**斜**边登记下来（两个方向都超过 <paramref name="tol"/>、长度不短于
+        /// <paramref name="minLine"/>）。水平 / 竖直的边由 <see cref="AddSegment"/> 收走，
+        /// 这里只收三角形注記符号（△1）的边 —— 字身笔画凑出来的短斜线被
+        /// <paramref name="minLine"/> 挡在外面（判据见 <see cref="MarkTriangleMarks"/>）。
+        /// </summary>
+        private static void AddDiagonal(
+            PdfPoint p, PdfPoint q, double tol, double minLine, List<Diag> diagonals)
+        {
+            if (diagonals == null) return;
+
+            double dx = Math.Abs(q.X - p.X);
+            double dy = Math.Abs(q.Y - p.Y);
+
+            if (dx <= tol || dy <= tol) return;                 // 水平 / 竖直线：不是三角形的边
+            if (Math.Sqrt(dx * dx + dy * dy) < minLine) return;  // 太短：文字笔画、箭头的小斜线
+
+            diagonals.Add(new Diag { X1 = p.X, Y1 = p.Y, X2 = q.X, Y2 = q.Y });
         }
 
         /// <summary>
@@ -590,6 +650,234 @@ namespace CadPartSplitter
             }
 
             return hit;
+        }
+
+        // ── 三角形注記符号（△1 这种提醒记号）──────────────────────────────────
+
+        /// <summary>
+        /// 一条斜边（三角形注記符号的边）。两端点为 PDF 单位坐标（Y 向上），与文字层同一口径。
+        ///
+        /// 表格识别本身只用水平 / 竖直的线（格子边），斜边只用来认「三角形里那个数字」——
+        /// 见 <see cref="MarkTriangleMarks"/>。
+        /// </summary>
+        private class Diag
+        {
+            public double X1;
+            public double Y1;
+            public double X2;
+            public double Y2;
+        }
+
+        /// <summary>
+        /// 三角形注記符号的边长相对字高的下限：三角形的边不会比里面的字还矮（&lt; 1 倍就不成立）。
+        /// </summary>
+        private const double TriangleMinSideRatio = 1.0;
+
+        /// <summary>
+        /// 三角形注記符号的边长相对字高的上限：再大就不是「把数字框起来的记号」了
+        /// （视图框 / 箭头 / 剖面符号都超过这个数）。
+        /// </summary>
+        private const double TriangleMaxSideRatio = 4.0;
+
+        /// <summary>
+        /// 认「三角形里作为提醒的数字」（△1 / △2 这种注記符号），返回与
+        /// <paramref name="words"/> 下标对齐的标记；标记为 true 的词**不算格子内容**。
+        ///
+        /// 为什么要认：三角形本身是**矢量图形**（画在图面上，不在文字层里），
+        /// 里面的数字却是文字层里的一个孤立数字词 —— 它落在哪个格子就被
+        /// <see cref="FillCell"/> 拼进那一格的文字。`H986U10002.pdf` 的部品表就是：
+        /// 切断寸法写着 `100`，旁边盖了个 △1，CSV 里成了 <c>100 1</c>，下游把注記記号
+        /// 当成了寸法。
+        ///
+        /// 判据（**全部满足**才算，宁可漏判也不误伤真数据）：
+        ///   ① 词本身是 1~3 位的纯数字（与 <see cref="CalloutExtractor"/> 认圈内数字同一约束）；
+        ///   ② 有两条斜边，长度都在字高的
+        ///      <see cref="TriangleMinSideRatio"/>~<see cref="TriangleMaxSideRatio"/> 倍之间；
+        ///   ③ 这两条斜边有一个公共端点（三角形的顶点，容差 1/4 字高）；
+        ///   ④ 另两个端点几乎等高（底边水平，容差 1/2 字高），底宽 1/2~3 倍字高，
+        ///      顶点到底边的高 0.8~4 倍字高；
+        ///   ⑤ 词的中心落在这个三角形里。
+        ///
+        /// 顶点重合 + 底边水平 + 字在三角形内 —— 文字笔画、引线、箭头都凑不出这个组合；
+        /// 实心画法的三角形（一条斜边导出成两条平行的长斜线）也走得通：两条平行线当不成
+        /// 「顶点 + 水平底边」，会被 ④ 的底宽判据挡掉。
+        /// </summary>
+        /// <param name="words">该页文字层的全部词。</param>
+        /// <param name="diagonals">该页矢量路径里的斜边（<see cref="AddDiagonal"/>）。</param>
+        /// <returns>与 <paramref name="words"/> 下标对齐的「落在三角形注記符号里」标记。</returns>
+        private static bool[] MarkTriangleMarks(List<WordBox> words, List<Diag> diagonals)
+        {
+            var marked = new bool[words.Count];
+
+            if (words.Count == 0 || diagonals == null || diagonals.Count < 2) return marked;
+
+            for (int i = 0; i < words.Count; i++)
+            {
+                if (!IsMarkNumber(words[i].Text)) continue;
+                if (InTriangle(words[i], diagonals)) marked[i] = true;
+            }
+
+            return marked;
+        }
+
+        /// <summary>
+        /// 三角形里那个「提醒数字」：1~3 位的纯数字（半角、全角都认）。
+        /// 品番 / 寸法 / 日文都不满足，因此不会被当成注記記号。
+        /// </summary>
+        private static bool IsMarkNumber(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+
+            string s = text.Trim();
+
+            if (s.Length == 0 || s.Length > 3) return false;
+
+            foreach (char ch in s)
+            {
+                bool digit = (ch >= '0' && ch <= '9')
+                             || (ch >= (char)0xFF10 && ch <= (char)0xFF19);   // 全角 ０~９
+
+                if (!digit) return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 这个词是否被某个三角形注記符号框住（判据见 <see cref="MarkTriangleMarks"/>）。
+        /// </summary>
+        private static bool InTriangle(WordBox w, List<Diag> diagonals)
+        {
+            double h = w.Y2 - w.Y1;
+            if (h <= 0) return false;
+
+            double cx = (w.X1 + w.X2) / 2.0;
+            double cy = (w.Y1 + w.Y2) / 2.0;
+
+            double minLen = h * TriangleMinSideRatio;
+            double maxLen = h * TriangleMaxSideRatio;
+            double join = h * 0.25;    // 两条斜边「顶点重合」的容差
+            double pad = h * 3.0;      // 顶点 / 底边端点的搜索窗口：词框外扩 3 倍字高
+
+            // 先挑出「长度像三角形边、两端又都在词框周围」的斜边，缩小下面两两配对的规模
+            var near = new List<Diag>();
+
+            foreach (var d in diagonals)
+            {
+                double dx = d.X2 - d.X1, dy = d.Y2 - d.Y1;
+                double len = Math.Sqrt(dx * dx + dy * dy);
+
+                if (len < minLen || len > maxLen) continue;
+                if (!NearBox(d.X1, d.Y1, w, pad)) continue;
+                if (!NearBox(d.X2, d.Y2, w, pad)) continue;
+
+                near.Add(d);
+            }
+
+            for (int i = 0; i < near.Count; i++)
+            {
+                for (int j = i + 1; j < near.Count; j++)
+                {
+                    double apexX, apexY, baseX1, baseY1, baseX2, baseY2;
+
+                    if (!TryApex(near[i], near[j], join,
+                                 out apexX, out apexY, out baseX1, out baseY1, out baseX2, out baseY2))
+                        continue;
+
+                    if (Math.Abs(baseY1 - baseY2) > h * 0.5) continue;      // 底边不水平
+
+                    double baseWidth = Math.Abs(baseX2 - baseX1);
+                    if (baseWidth < h * 0.5 || baseWidth > h * 3.0) continue;
+
+                    double triHeight = Math.Abs(apexY - (baseY1 + baseY2) / 2.0);
+                    if (triHeight < h * 0.8 || triHeight > h * 4.0) continue;
+
+                    if (PointInTriangle(cx, cy, apexX, apexY, baseX1, baseY1, baseX2, baseY2))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>点是否落在「词框外扩 <paramref name="pad"/>」的窗口里。</summary>
+        private static bool NearBox(double x, double y, WordBox w, double pad)
+        {
+            return x >= w.X1 - pad && x <= w.X2 + pad
+                   && y >= w.Y1 - pad && y <= w.Y2 + pad;
+        }
+
+        /// <summary>
+        /// 两条斜边若有公共端点（容差 <paramref name="join"/>）就当它是三角形的顶点，
+        /// 另外两个端点经 <paramref name="baseX1"/> … 带出（底边的两端）。
+        /// </summary>
+        private static bool TryApex(
+            Diag a, Diag b, double join,
+            out double apexX, out double apexY,
+            out double baseX1, out double baseY1, out double baseX2, out double baseY2)
+        {
+            if (Near(a.X1, a.Y1, b.X1, b.Y1, join))
+            {
+                apexX = a.X1; apexY = a.Y1;
+                baseX1 = a.X2; baseY1 = a.Y2;
+                baseX2 = b.X2; baseY2 = b.Y2;
+                return true;
+            }
+
+            if (Near(a.X1, a.Y1, b.X2, b.Y2, join))
+            {
+                apexX = a.X1; apexY = a.Y1;
+                baseX1 = a.X2; baseY1 = a.Y2;
+                baseX2 = b.X1; baseY2 = b.Y1;
+                return true;
+            }
+
+            if (Near(a.X2, a.Y2, b.X1, b.Y1, join))
+            {
+                apexX = a.X2; apexY = a.Y2;
+                baseX1 = a.X1; baseY1 = a.Y1;
+                baseX2 = b.X2; baseY2 = b.Y2;
+                return true;
+            }
+
+            if (Near(a.X2, a.Y2, b.X2, b.Y2, join))
+            {
+                apexX = a.X2; apexY = a.Y2;
+                baseX1 = a.X1; baseY1 = a.Y1;
+                baseX2 = b.X1; baseY2 = b.Y1;
+                return true;
+            }
+
+            apexX = apexY = baseX1 = baseY1 = baseX2 = baseY2 = 0;
+            return false;
+        }
+
+        /// <summary>两点是否在同一个容差内（同一个端点）。</summary>
+        private static bool Near(double x1, double y1, double x2, double y2, double tol)
+        {
+            return Math.Abs(x1 - x2) <= tol && Math.Abs(y1 - y2) <= tol;
+        }
+
+        /// <summary>点是否在三角形内（三条边的同侧判定，含边界）。</summary>
+        private static bool PointInTriangle(
+            double px, double py,
+            double x1, double y1, double x2, double y2, double x3, double y3)
+        {
+            double d1 = Side(px, py, x1, y1, x2, y2);
+            double d2 = Side(px, py, x2, y2, x3, y3);
+            double d3 = Side(px, py, x3, y3, x1, y1);
+
+            bool negative = d1 < 0 || d2 < 0 || d3 < 0;
+            bool positive = d1 > 0 || d2 > 0 || d3 > 0;
+
+            return !(negative && positive);
+        }
+
+        /// <summary>点相对有向边 (ax,ay)→(bx,by) 的方位（叉积符号）。</summary>
+        private static double Side(
+            double px, double py, double ax, double ay, double bx, double by)
+        {
+            return (px - bx) * (ay - by) - (ax - bx) * (py - by);
         }
 
         // ── 单元格枚举 ────────────────────────────────────────────────────────
@@ -948,16 +1236,145 @@ namespace CadPartSplitter
                 row.Cells.Add(cell);
             }
 
-            // 「整行划掉」= 作废行：行内只要有格子被划线就算（CAD 图里划线是整行画的，
-            // 各列文字高低不同，可能只有中间几列的字被线穿过）
-            foreach (var row in table.Rows)
-                foreach (var cell in row.Cells)
-                    if (cell.IsStruck) { row.IsStruck = true; break; }
-
             table.Rows.Sort((a, b) => a.Index.CompareTo(b.Index));
+
+            MarkStruck(table);
+
             FillRects(table, mmPerPx);
 
             return table;
+        }
+
+        /// <summary>
+        /// 划线（取り消し線）的两档语义 —— 「品番作废」不等于「明细作废」：
+        ///
+        ///   ① <b>整行划掉</b>：行内有 <b>≥2 格</b>被划线穿过（CAD 图里整行作废就是横着划一道，
+        ///      各列文字高低不同，一条线常同时盖住好几列）→ 该行作废（<see cref="RuledTableRow.IsStruck"/>），
+        ///      不写进 <c>tables\*.csv</c> / 二维表 —— 与旧行为一致；
+        ///   ② <b>只划掉品番那一格</b>：行内只有 1 格被划，且那一格写的是品番 / 図番形态的文字
+        ///      （见 <see cref="IsPartCodeCell"/>，典型就是 <c>部品コード</c> 列）→ 图纸上表示
+        ///      **这个品番作废、这一条明细仍然有效**：该格输出成空（原文存
+        ///      <see cref="RuledTableCell.StruckText"/>），行照常输出、<c>IsStruck</c> 保持 false。
+        ///      下游 <c>01_アッセンブリ図_部品機能情報.csv</c> 因此得到「部品コード 空、其余列都在」，
+        ///      而不是整条明细消失（H986U10001 就是这样）。
+        ///
+        /// 为什么不用「被划的格子是不是表头写着部品コード 的那一列」一条件：有的部品表那一列表头是空的
+        /// （合并表头 / 漏字），按形态判（字母 + 数字）更稳；两个判据是「或」的关系。
+        /// 为什么日文格不这么处理：<c>H310U10004</c> 表題欄的
+        /// 「枠 建て付け注意ラベル貼付要領図」被划掉是**整行作废**，那一格是日文、不像品番，
+        /// 仍按 ① 整行剔除。
+        /// </summary>
+        /// <param name="table">已按行归位、尚未填外接框的表。</param>
+        private static void MarkStruck(RuledTable table)
+        {
+            if (table == null || table.Rows.Count == 0) return;
+
+            int codeColStart, codeColEnd;
+            FindPartCodeColumn(table, out codeColStart, out codeColEnd);
+
+            foreach (var row in table.Rows)
+            {
+                List<RuledTableCell> struckCells = null;
+                int textCells = 0;
+
+                foreach (var cell in row.Cells)
+                {
+                    if (string.IsNullOrEmpty(cell.Text)) continue;
+
+                    textCells++;
+
+                    if (!cell.IsStruck) continue;
+
+                    if (struckCells == null) struckCells = new List<RuledTableCell>();
+                    struckCells.Add(cell);
+                }
+
+                if (struckCells == null) continue;
+
+                // ② 只划掉品番那一格 → 该格输出清空、行保留
+                if (struckCells.Count == 1 && textCells >= 2
+                    && IsPartCodeCell(struckCells[0], codeColStart, codeColEnd))
+                {
+                    RuledTableCell only = struckCells[0];
+
+                    // 原文留在 Text 里（JSON / txt 明细仍能看到划掉的是什么），
+                    // 下游输出（ToGrid → tables\*.csv、二维表）把它当空格子 —— 见 RuledTable.ToGrid
+                    only.StruckText = only.Text;
+                    continue;
+                }
+
+                // ① 其余情形：整行作废
+                row.IsStruck = true;
+            }
+        }
+
+        /// <summary>
+        /// 按表头认品番列时向下扫的行数：正常在第 1 行，合并表头把它压到第 2 / 3 行的图纸也有；
+        /// 只看表头这几行，避免明细格里出现的「型式」之类的词被当成列名。
+        /// </summary>
+        private const int PartCodeHeaderScanRows = 3;
+
+        /// <summary>
+        /// 按表头认「品番列」：整张表里最靠上的一格标题写成 部品コード / 部品番号 / 品番 / 型式 / 型番
+        /// （同义写法见 <see cref="HeaderNames.PartCode"/>）的那一列。
+        /// 认不出时两个输出都是 0（此时只看文字形态，见 <see cref="LooksLikePartCode"/>）。
+        /// </summary>
+        private static void FindPartCodeColumn(RuledTable table, out int colStart, out int colEnd)
+        {
+            colStart = 0;
+            colEnd = 0;
+
+            foreach (var row in table.Rows)
+            {
+                if (row.Index > PartCodeHeaderScanRows) break;
+
+                foreach (var cell in row.Cells)
+                {
+                    if (!HeaderNames.IsMatch(cell.Text, HeaderNames.PartCode)) continue;
+
+                    colStart = cell.Column;
+                    colEnd = cell.Column + Math.Max(1, cell.ColumnSpan) - 1;
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 这一格写的是不是「品番 / 図番」——决定「只划掉这一格」时要不要保留整行。
+        /// 判据任一即可：
+        ///   ① 这一列是表头认出来的品番列（<see cref="FindPartCodeColumn"/>）；
+        ///   ② 格内文字同时含英文字母和数字（<c>MDU762</c> / <c>MZC△△65</c> / <c>H310U10025</c>）——
+        ///      日文的部品名、員数、枠区分 都不满足，表題欄那种「整行划掉」的划线不会被误判。
+        /// </summary>
+        private static bool IsPartCodeCell(RuledTableCell cell, int colStart, int colEnd)
+        {
+            if (colStart > 0)
+            {
+                int left = cell.Column;
+                int right = cell.Column + Math.Max(1, cell.ColumnSpan) - 1;
+
+                if (right >= colStart && left <= colEnd) return true;
+            }
+
+            return LooksLikePartCode(cell.Text);
+        }
+
+        /// <summary>文字里同时有英文字母和数字 → 当成品番 / 図番形态。</summary>
+        private static bool LooksLikePartCode(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+
+            bool letter = false, digit = false;
+
+            foreach (char ch in text)
+            {
+                if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) letter = true;
+                else if (ch >= '0' && ch <= '9') digit = true;
+
+                if (letter && digit) return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -1104,9 +1521,12 @@ namespace CadPartSplitter
         /// 把尚未归属的词填进单元格：词中心落在格子内（四条边框之内）就归该格。
         /// 完全不看文字间距，因此空单元格不会错位、合并单元格也不会被拆开。
         /// 被划线（取り消し線）划掉的词数一并记下 —— 上层据此判定「整行作废」。
+        /// 「三角形注記符号里的数字」（<paramref name="inMark"/>，见 <see cref="MarkTriangleMarks"/>）
+        /// 不是格子内容：直接跳过，也不占用 <paramref name="used"/>。
         /// </summary>
         /// <returns>填进去的词数。</returns>
-        private static int FillCell(Cell cell, List<WordBox> words, bool[] used, bool[] struck)
+        private static int FillCell(
+            Cell cell, List<WordBox> words, bool[] used, bool[] struck, bool[] inMark)
         {
             List<WordBox> picked = null;
             int struckCount = 0;
@@ -1114,6 +1534,9 @@ namespace CadPartSplitter
             for (int i = 0; i < words.Count; i++)
             {
                 if (used[i]) continue;
+
+                // 三角形注記符号（△1）里的数字：图纸上的提醒记号，不是这一格的内容
+                if (inMark != null && i < inMark.Length && inMark[i]) continue;
 
                 WordBox w = words[i];
                 double cx = (w.X1 + w.X2) / 2.0;

@@ -136,6 +136,13 @@ namespace CadPartSplitter
                     opts.Log("[INFO] 位图输入没有文字层，跳过文字坐标提取（如需识别文字请接入 OCR）。");
                 }
 
+                // 把文字层里的字补画回零件图 PNG（默认开启，--no-burn-text 关闭）：
+                // 本批图纸的日文用内嵌 MS-PGothic 子集写成，PDFium 渲染时画不出这些字形 ——
+                // 同一位置上的圈内数字（④4）和圆圈都在，日文标注（鴨居 / G部 / 三方枠）却是空白，
+                // 于是裁出来的 Part_XX.png 只有线条、没有字。文字层本身是好的（PdfPig 读得到词与词框），
+                // 所以按词框把字烧回 PNG；渲染里已经画出字的词按框内墨迹占比跳过，不会画两遍。
+                PartTextBurner.Burn(parts, opts);
+
                 string jsonPath = Path.Combine(opts.OutputDirectory, "parts_info.json");
                 SavePartsJson(parts, jsonPath);
                 opts.Log("[INFO] Coordinates saved: " + jsonPath);
@@ -187,11 +194,20 @@ namespace CadPartSplitter
                     // 部品表「下表参照 / 左上表参照」展开 → 01_アッセンブリ図_部品機能情報.csv
                     // 只有分类清单判为「アッセンブリ図」的图纸才写，其余图类跳过。
                     LtStep1Builder.Build(opts.OutputDirectory, opts);
+                }
+                else
+                    opts.Log("[INFO] 表格内容：该页没有识别到有线表格，不生成 tables_* 文件。");
 
-                    // 「項目 / 要領図漢字 / 図番」表 → 01_アッセンブリ図_要領図.csv
-                    // 同样是只有アッセンブリ図才写：这张組立図用到了哪些要領図（図番 固定 10 位）。
-                    AssemblyYoryoBuilder.Build(opts.OutputDirectory, opts);
+                // 「項目 / 要領図漢字 / 図番」表 → 01_アッセンブリ図_要領図.csv
+                // 同样是只有アッセンブリ図才写：这张組立図用到了哪些要領図（図番 固定 10 位）。
+                // **有没有表格都要试一次**：有些組立図根本没画表格，只在页面上写着
+                // 「下記に示す図面を参照のこと。/ A部詳細：H325U10011 …」（H527U10001 那种），
+                // 这时表格路径一条也收不到，改由整页文字行兜底（項目 保留到「部」，要領図漢字 留空）。
+                AssemblyYoryoBuilder.Build(opts.OutputDirectory, opts, filePath, opts.PdfPageIndex,
+                                           imgWidth, imgHeight);
 
+                if (tables.Count > 0)
+                {
                     // 「品種 + 多列重复」表摊平 / 単純部品表展开 → 02_要領図_部品機能情報.csv
                     // （単純部品表只要求表头含 部品名 + 枠区分，部品コード 可缺、缺列时该格留空；
                     //   部品コード 写着「－」这类占位符 = 品番なし → 该条明细不收）
@@ -200,8 +216,6 @@ namespace CadPartSplitter
                     // 这里只固定「两张成品清单都在表格产物之后、且 02_… 最后出」的节奏。
                     LtStep2Builder.Build(opts.OutputDirectory, opts);
                 }
-                else
-                    opts.Log("[INFO] 表格内容：该页没有识别到有线表格，不生成 tables_* 文件。");
             }
 
             return parts;

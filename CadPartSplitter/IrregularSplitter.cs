@@ -22,6 +22,9 @@ namespace CadPartSplitter
     ///      包住整页的大框（分组框 / 图框残片，面积 &gt; 40% 页）不填，否则一填就把所有视图吞成一块。
     ///   ② <b>开运算剥细桥</b>：实体之间若还残留 1~3 px 的细桥，3×3 开运算即可断开；不够就逐级
     ///      加大到 17×17。开运算只影响「定位用的种子」的大小，最终掩膜仍取自原二值图，不会侵蚀图形。
+    ///   ②½ <b>按间距归并</b>：一个视图被尺寸线切成两三个闭合实体时，碎片之间的间距也在
+    ///      <see cref="DetectorOptions.ClusterGapMm"/>（默认 3 mm）以内 —— 按<b>单链聚类</b>并回一块，
+    ///      否则一个视图会被导成好几张 <c>Part_NN.png</c>（见 <c>MergeNearBodies</c>）。
     ///   ③ <b>外扩归属</b>：每个实体向四周外扩 <see cref="DetectorOptions.IrregularSplitReach"/> px，
     ///      范围内的线框 / 标注算它的；块与块重叠的区域按面积大的先占（占用表逐块累加）。
     ///   ④ <b>多边形掩膜</b>：每块取邻域内墨迹的最大外轮廓，<c>ApproxPolyDP</c> 简化成多边形；
@@ -29,7 +32,11 @@ namespace CadPartSplitter
     /// </para>
     ///
     /// <para>
-    /// 只在「矩形分割恰好只出 1 块」时启用（<see cref="DetectorOptions.IrregularSplitWhenSingle"/>），
+    /// 两个入口：
+    ///   ① 矩形分割<b>恰好只出 1 块</b>时兜底（<see cref="DetectorOptions.IrregularSplitWhenSingle"/>）；
+    ///   ② 「大块再拆」：矩形分割出了多块时，对<b>够大的块</b>（外接框面积占页 ≥
+    ///      <see cref="DetectorOptions.IrregularSplitLargeAreaRatio"/>）再拆一次，块里落进 ≥2 个实体就替换
+    ///      （<see cref="DetectorOptions.IrregularSplitLargeBlocks"/>，见 <c>PartDetector.TryRefineBlocks</c>）。
     /// 拆不出来就原样保留矩形结果，不会让正常图纸的产物变样。
     /// </para>
     /// </summary>
@@ -45,8 +52,10 @@ namespace CadPartSplitter
         private const double PolygonEpsilon = 2.0;
 
         /// <summary>
-        /// 填实前先做一次闭运算的核尺寸（像素）：CAD 视图的外轮廓常因「断口 / 被尺寸线打断」
+        /// 填实前先做一次闭运算的最小核尺寸（像素）：CAD 视图的外轮廓常因「断口 / 被尺寸线打断」
         /// 缺几个像素而闭合不成环，5×5 闭运算能把 ≤4 px 的断口接上，让视图变成可填充的闭合轮廓。
+        /// 开启毫米聚合规则（<see cref="DetectorOptions.ClusterGapMm"/> &gt; 0）时，
+        /// 实际核尺寸放大到「聚合间距」（默认 3 mm ⇒ 37 px），本值只作下限。
         /// </summary>
         private const int CloseGapPx = 5;
 
@@ -113,7 +122,23 @@ namespace CadPartSplitter
                     return regions;
                 }
 
-                if (bodies.Count == 1)
+                // ②½ 按「墨迹间距」把同一个视图的碎片归并回一块（单链聚类）：
+                //     一个视图被尺寸线 / 中心线切成两三个闭合实体时，碎片之间的间距同样在
+                //     ClusterGapMm 以内；不归并就会把一个视图导成好几张 Part_NN.png。
+                int gapRadius = opts.ClusterGapRadiusPx(opts.RenderDpi);
+                if (gapRadius > 0 && bodies.Count >= 2)
+                {
+                    int before = bodies.Count;
+                    bodies = MergeNearBodies(bodies, gapRadius, width, height);
+
+                    if (bodies.Count != before)
+                    {
+                        opts.Log($"[INFO] 不规则分割：按间距 ≤ {opts.ClusterGapMm:0.##} mm 归并实体碎片"
+                                  + $" {before} → {bodies.Count} 个");
+                    }
+                }
+
+                if (bodies.Count < 2)
                 {
                     opts.Log($"[INFO] 不规则分割：填充 + 开运算 {usedKernel}×{usedKernel} 后仍只有 1 块实体，"
                               + "拆不开（保留矩形结果）");
@@ -169,11 +194,18 @@ namespace CadPartSplitter
             double minArea  = Math.Max(2000.0, opts.MinContourArea * 0.20);
             double pageArea = width * (double)height;
 
+            // 填实前的「断口桥接」核：至少 CloseGapPx，开启毫米规则时放大到「聚合间距」
+            // （视图外轮廓常被尺寸线 / 引线打断 1~3 mm，3 mm 的缝也要能接上，否则填不出面积）
+            int  radius    = opts.ClusterGapRadiusPx(opts.RenderDpi);
+            int  closeSize = Math.Max(CloseGapPx, radius * 2 + 1);
+            if (closeSize % 2 == 0)
+                closeSize++;
+
             using (Mat bridged = new Mat())
             using (Mat closeKernel = Cv2.GetStructuringElement(
-                       MorphShapes.Rect, new Size(CloseGapPx, CloseGapPx)))
+                       MorphShapes.Ellipse, new Size(closeSize, closeSize)))
             {
-                // 先把 ≤4 px 的断口接上：视图外轮廓缺一小段线时也能闭合成可填充的环
+                // 先把断口接上：视图外轮廓缺一小段线时也能闭合成可填充的环
                 Cv2.MorphologyEx(binary, bridged, MorphTypes.Close, closeKernel);
 
                 using (Mat src = bridged.Clone())
@@ -247,6 +279,157 @@ namespace CadPartSplitter
             }
 
             return bodies;
+        }
+
+        /// <summary>
+        /// 按「墨迹间距」把相邻的实体种子归并成一块（单链聚类）。
+        ///
+        /// 同一个视图被尺寸线 / 中心线切成两三个闭合实体时，碎片之间的间距也在
+        /// <see cref="DetectorOptions.ClusterGapMm"/> 以内（图纸里线是连续的、文字离最近的线不超过几毫米）；
+        /// 不归并就会把一个视图导成好几张 <c>Part_NN.png</c>。
+        ///
+        /// 归并依据是<b>外接框间距</b>（≥ 实际墨迹间距，略偏保守），所以阈值取
+        /// <c>2 × 半径</c>（≈ <see cref="DetectorOptions.ClusterGapMm"/>）；同组碎片填进同一张掩膜后
+        /// 取最大外轮廓，得到合并后的实体。
+        /// </summary>
+        /// <param name="bodies">开运算得到的实体种子（页面坐标）。</param>
+        /// <param name="radius">聚合半径（像素），见 <see cref="DetectorOptions.ClusterGapRadiusPx"/>。</param>
+        /// <param name="width">页面宽（像素），用于建掩膜。</param>
+        /// <param name="height">页面高（像素），用于建掩膜。</param>
+        private static List<Point[]> MergeNearBodies(List<Point[]> bodies, int radius, int width, int height)
+        {
+            int n = bodies.Count;
+            if (radius <= 0 || n < 2)
+                return bodies;
+
+            var boxes  = new Rect[n];
+            var parent = new int[n];
+
+            for (int i = 0; i < n; i++)
+            {
+                boxes[i]  = Cv2.BoundingRect(bodies[i]);
+                parent[i] = i;
+            }
+
+            int gap = radius * 2;
+
+            for (int i = 0; i < n; i++)
+            {
+                for (int j = i + 1; j < n; j++)
+                {
+                    if (!WithinGap(boxes[i], boxes[j], gap))
+                        continue;
+
+                    int rootI = FindRoot(parent, i);
+                    int rootJ = FindRoot(parent, j);
+                    if (rootI != rootJ)
+                        parent[rootJ] = rootI;
+                }
+            }
+
+            // 按并查集的根分组；全都各自一组时直接返回原列表（不动产物）
+            var groups = new Dictionary<int, List<int>>();
+            for (int i = 0; i < n; i++)
+            {
+                int root = FindRoot(parent, i);
+
+                List<int> list;
+                if (!groups.TryGetValue(root, out list))
+                {
+                    list = new List<int>();
+                    groups[root] = list;
+                }
+
+                list.Add(i);
+            }
+
+            if (groups.Count == n)
+                return bodies;
+
+            var merged = new List<Point[]>(groups.Count);
+
+            foreach (List<int> group in groups.Values)
+            {
+                if (group.Count == 1)
+                {
+                    merged.Add(bodies[group[0]]);
+                    continue;
+                }
+
+                Point[] outer;
+                using (Mat mask = new Mat(height, width, MatType.CV_8UC1, Scalar.Black))
+                {
+                    foreach (int idx in group)
+                        Cv2.DrawContours(mask, new[] { bodies[idx] }, -1, Scalar.All(255), -1);
+
+                    outer = FindLargestContour(mask);
+                }
+
+                if (outer != null)
+                {
+                    merged.Add(outer);
+                }
+                else
+                {
+                    // 合并失败（理论上不会发生）：保持原样，宁可少并也不错并
+                    foreach (int idx in group)
+                        merged.Add(bodies[idx]);
+                }
+            }
+
+            return merged;
+        }
+
+        /// <summary>两个外接框的间距是否 ≤ <paramref name="gap"/>（像素）。</summary>
+        private static bool WithinGap(Rect a, Rect b, int gap)
+        {
+            if (a.X - gap >= b.X + b.Width)  return false;
+            if (b.X - gap >= a.X + a.Width)  return false;
+            if (a.Y - gap >= b.Y + b.Height) return false;
+            if (b.Y - gap >= a.Y + a.Height) return false;
+            return true;
+        }
+
+        /// <summary>并查集：找根（带路径压缩）。</summary>
+        private static int FindRoot(int[] parent, int i)
+        {
+            while (parent[i] != i)
+            {
+                parent[i] = parent[parent[i]];
+                i = parent[i];
+            }
+
+            return i;
+        }
+
+        /// <summary>取二值图里面积最大的外轮廓；一个轮廓都没有时返回 null。</summary>
+        private static Point[] FindLargestContour(Mat binary)
+        {
+            Point[] best     = null;
+            double  bestArea = 0.0;
+
+            using (Mat src = binary.Clone())
+            {
+                Point[][] contours;
+                HierarchyIndex[] hierarchy;
+
+                Cv2.FindContours(
+                    src, out contours, out hierarchy,
+                    RetrievalModes.External,
+                    ContourApproximationModes.ApproxSimple);
+
+                foreach (Point[] contour in contours)
+                {
+                    double area = Cv2.ContourArea(contour);
+                    if (area > bestArea)
+                    {
+                        bestArea = area;
+                        best     = contour;
+                    }
+                }
+            }
+
+            return best;
         }
 
         /// <summary>

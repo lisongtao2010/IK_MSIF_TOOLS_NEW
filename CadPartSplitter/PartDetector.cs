@@ -40,6 +40,9 @@ namespace CadPartSplitter
         /// </summary>
         private int _tableBandStartX = -1;
 
+        /// <summary>「视图聚合规则」日志只打一次（<see cref="DilateForGrouping"/> 可能被调用两轮）。</summary>
+        private bool _loggedClusterRule;
+
         /// <summary>
         /// 本次运行实际采用的右侧遮蔽起始列（像素，-1 表示尚未计算）。
         /// 该列右侧即「表格 / 标题栏区」，文字记录模块据此把零件框以外的文字
@@ -193,6 +196,22 @@ namespace CadPartSplitter
                     {
                         PrintNoResultHint();
                         return new List<PartInfo>();
+                    }
+
+                    // ── 大块再拆：矩形分割出了多块，但个别大块里可能还粘着多个视图 ──
+                    // 正面 / 侧面 / 断面之间由尺寸线、引线串着，形态学膨胀后连成一块，
+                    // 外接矩形只能「整块留下」。这里对整页再做一次「按像素归属」的拆分
+                    // （与上面「矩形分割只出 1 块」的兜底同一套算法），
+                    // 哪个矩形块里落进了 ≥2 个实体就换成这些实体的多边形掩膜，其余块保持矩形裁切。
+                    List<IrregularSplitter.Region> refinedBlocks =
+                        TryRefineBlocks(partRects, maskedKeep, imgWidth, imgHeight);
+
+                    if (refinedBlocks != null)
+                    {
+                        using (Mat refinedExport = ErasePageFrameOn(original))
+                        {
+                            return ExportIrregularParts(refinedExport, refinedBlocks, imgWidth, imgHeight);
+                        }
                     }
 
                     // 导出裁切用的是原始彩色图：把图框线一并擦掉。
@@ -546,15 +565,55 @@ namespace CadPartSplitter
             return new Rect(left, top, right - left, bottom - top);
         }
 
+        /// <summary>
+        /// 把碎散图元聚合成「一个视图一块」的连通域，交给轮廓提取。
+        ///
+        /// 两种规则：
+        ///   ① <b>毫米间距（默认）</b>：<see cref="DetectorOptions.ClusterGapMm"/> &gt; 0 时，
+        ///      用「边长 ≈ 阈值」的圆形核做闭运算 + 膨胀 —— 等价于单链聚类：
+        ///      两个黑点之间的间距 ≤ 阈值（默认 3 mm）就并进同一块。与 DPI 无关、横纵一致，
+        ///      不会出现「同一个 3 mm 的缝，横向并得起来、纵向并不起来」。
+        ///   ② <b>像素核（旧行为）</b>：阈值 ≤ 0 时用 <see cref="DetectorOptions.DilateKernelWidth"/> ×
+        ///      <see cref="DetectorOptions.DilateKernelHeight"/> 的矩形核（默认 60 × 10、2 次迭代）。
+        /// </summary>
         private Mat DilateForGrouping(Mat binary)
         {
-            Size kernelSize = new Size(_opts.DilateKernelWidth, _opts.DilateKernelHeight);
-            using (Mat kernel = Cv2.GetStructuringElement(MorphShapes.Rect, kernelSize))
+            int radius = _opts.ClusterGapRadiusPx(_opts.RenderDpi);
+
+            if (radius <= 0)
             {
+                Size kernelSize = new Size(_opts.DilateKernelWidth, _opts.DilateKernelHeight);
+                using (Mat kernel = Cv2.GetStructuringElement(MorphShapes.Rect, kernelSize))
+                {
+                    Mat legacy = new Mat();
+                    Cv2.MorphologyEx(binary, legacy, MorphTypes.Close, kernel,
+                                     iterations: _opts.DilateIterations);
+                    Cv2.Dilate(legacy, legacy, kernel, iterations: 1);
+                    return legacy;
+                }
+            }
+
+            // 边长 2r+1 的核：闭运算桥接距离 ≤ 2r 的两段墨迹（2r ≈ ClusterGapMm）
+            int size = radius * 2 + 1;
+
+            if (!_loggedClusterRule)
+            {
+                _loggedClusterRule = true;
+                _opts.Log($"[INFO] 视图聚合规则：墨迹间距 ≤ {_opts.ClusterGapMm:0.##} mm 视为同一张零件图"
+                          + $"（{_opts.RenderDpi:0} DPI ⇒ 核 {size}×{size} px，单链聚类）；"
+                          + "想切得更碎调小 --cluster-gap-mm，想糊成一张调大");
+            }
+
+            using (Mat kernel = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(size, size)))
+            {
+                // 闭运算 = 先桥接 ≤2r 的缝，再腐蚀回去（图形本身不被撑大）
                 Mat result = new Mat();
-                Cv2.MorphologyEx(binary, result, MorphTypes.Close, kernel,
-                                 iterations: _opts.DilateIterations);
+                Cv2.MorphologyEx(binary, result, MorphTypes.Close, kernel);
+
+                // 再统一膨胀 r：让「本来就挨着」的碎块并成一个圆滑连通域，
+                // 同时给裁切框留出 r 的余量（原像素核在这里也是膨胀，不是白留）。
                 Cv2.Dilate(result, result, kernel, iterations: 1);
+
                 return result;
             }
         }
@@ -846,27 +905,38 @@ namespace CadPartSplitter
             double mmPerPx = 25.4 / _opts.RenderDpi;
             var result     = new List<PartInfo>();
             var sorted     = partRects.OrderBy(r => r.Y).ToList();
+            var failed     = new List<string>();
+
+            _opts.Log($"[INFO] 导出零件图：共 {sorted.Count} 块（按 Y 从上到下编号；"
+                      + "保存失败的那张会跳过并顺延编号，不会留空号）");
 
             for (int i = 0; i < sorted.Count; i++)
             {
-                Rect   roi  = sorted[i];
-                string name = $"Part_{i + 1:D2}.png";
+                Rect roi = sorted[i];
+
+                // 编号按「已经成功的张数」走，而不是循环下标：
+                // 以前用 i + 1，某一张保存失败（文件被占用 / 只读）时后面整排照旧编号，
+                // 产物里就凭空出现「没有 Part_01.png / Part_02.png，从 Part_03.png 开始」的空号。
+                string name = $"Part_{result.Count + 1:D2}.png";
                 string path = Path.Combine(_opts.OutputDirectory, name);
+
+                if (_opts.SaveDebugImages)
+                    _opts.Log($"[RECT] {name} <- x={roi.X} y={roi.Y} w={roi.Width} h={roi.Height}");
 
                 using (Mat crop = new Mat(original, roi))
                 {
-                    bool ok = crop.SaveImage(path);
-                    if (!ok)
+                    if (!SavePartPng(crop, path))
                     {
-                        _opts.Log($"[WARN] 保存失败：{path}");
+                        failed.Add(name);
                         continue;
                     }
-                    _opts.Log($"[SAVE] {name}  ({roi.Width}×{roi.Height} px  Y={roi.Y})");
                 }
+
+                _opts.Log($"[SAVE] {name}  ({roi.Width}×{roi.Height} px  Y={roi.Y})");
 
                 result.Add(new PartInfo
                 {
-                    Index    = i + 1,
+                    Index    = result.Count + 1,
                     FileName = name,
                     PixelX   = roi.X,
                     PixelY   = roi.Y,
@@ -879,7 +949,118 @@ namespace CadPartSplitter
                 });
             }
 
+            ReportSaveFailures(failed);
+            CleanupStalePartImages(result.Count);
+
             return result;
+        }
+
+        /// <summary>
+        /// 「大块再拆」：矩形分割已经出了多块，但个别大块里可能还粘着多个视图
+        /// （正面 / 侧面 / 断面之间由尺寸线、引线串着，形态学膨胀后连成一块，外接矩形只能整块留下）。
+        ///
+        /// 做法与「矩形分割只出 1 块」时的兜底完全相同，只是作用范围从「整页唯一一块」
+        /// 变成「每个够大的块」：
+        ///   ① 对整页（已擦图框、已遮蔽表格的）二值图做一次 <see cref="IrregularSplitter.Split"/>；
+        ///   ② 把拆出来的实体按「外接框中心落在哪个矩形块里」归到各块；
+        ///   ③ 某块里落进 ≥2 个实体、且每个实体自己够得上一个零件
+        ///      （<see cref="IrregularSplitter.Region.InkArea"/> ≥ <see cref="DetectorOptions.MinContourArea"/>）时，
+        ///      用这些实体替换该块；否则保留原矩形块（整框导出）。
+        ///
+        /// 门槛为什么不放开：闭轮廓填充会把「视图的外框」本身也算成一个实体，
+        /// 门槛太低会把一个视图拆成「外框 + 内部图形」两块。
+        /// 只要有一个块被拆开就返回完整块列表（矩形块用 <c>Polygon = null</c> 标记）；
+        /// 一个都没拆开时返回 null，调用方走原来的矩形导出，产物与改动前完全一致。
+        /// </summary>
+        /// <param name="partRects">矩形分割的结果（已过筛除 / 合并）。</param>
+        /// <param name="maskedKeep">检测用的二值图（图框已擦、表格已遮蔽）；为 null 时不做。</param>
+        private List<IrregularSplitter.Region> TryRefineBlocks(List<Rect> partRects, Mat maskedKeep,
+                                                               int imgWidth, int imgHeight)
+        {
+            if (!_opts.IrregularSplitLargeBlocks || maskedKeep == null || partRects == null)
+                return null;
+
+            double pageArea = imgWidth * (double)imgHeight;
+            if (pageArea <= 0.0)
+                return null;
+
+            bool hasCandidate = false;
+            foreach (Rect rect in partRects)
+            {
+                double ratio = rect.Width * (double)rect.Height / pageArea;
+                if (ratio >= _opts.IrregularSplitLargeAreaRatio)
+                {
+                    hasCandidate = true;
+                    break;
+                }
+            }
+
+            if (!hasCandidate)
+                return null;
+
+            // 整页拆一次：坐标系与 partRects 完全一致（都是页面像素）
+            List<IrregularSplitter.Region> regions = IrregularSplitter.Split(maskedKeep, _opts);
+            if (regions.Count < 2)
+                return null;
+
+            var blocks = new List<IrregularSplitter.Region>();
+            var used   = new bool[regions.Count];
+            var inside = new List<int>();
+            int refinedBlocks = 0;
+
+            foreach (Rect rect in partRects.OrderBy(r => r.Y).ThenBy(r => r.X))
+            {
+                double ratio    = rect.Width * (double)rect.Height / pageArea;
+                bool isCandidate = ratio >= _opts.IrregularSplitLargeAreaRatio;
+
+                if (isCandidate)
+                {
+                    inside.Clear();
+
+                    for (int i = 0; i < regions.Count; i++)
+                    {
+                        if (used[i])
+                            continue;
+
+                        // 实体自己够不上一个零件 → 不算「一个视图」（多半是视图外框 / 局部符号）
+                        if (regions[i].InkArea < _opts.MinContourArea)
+                            continue;
+
+                        Rect b = regions[i].Bounds;
+                        int cx = b.X + b.Width / 2;
+                        int cy = b.Y + b.Height / 2;
+                        if (cx < rect.X || cx >= rect.X + rect.Width)
+                            continue;
+                        if (cy < rect.Y || cy >= rect.Y + rect.Height)
+                            continue;
+
+                        inside.Add(i);
+                    }
+                }
+
+                if (isCandidate && inside.Count >= 2)
+                {
+                    foreach (int i in inside)
+                    {
+                        used[i] = true;
+                        blocks.Add(regions[i]);
+                    }
+
+                    refinedBlocks++;
+                    continue;
+                }
+
+                // 没拆开（或本来就不是大块）：保留矩形块，导出时整框裁切
+                blocks.Add(new IrregularSplitter.Region { Bounds = rect, Polygon = null });
+            }
+
+            if (refinedBlocks == 0)
+                return null;
+
+            _opts.Log($"[INFO] 大块再拆：{refinedBlocks} 个块里粘着多个视图 → 按像素归属拆开"
+                      + $"（{partRects.Count} 块 → {blocks.Count} 块，其余块保持矩形裁切）");
+
+            return blocks;
         }
 
         /// <summary>
@@ -891,6 +1072,9 @@ namespace CadPartSplitter
         ///
         /// 文件名、编号规则、<see cref="PartInfo"/> 里的坐标口径与矩形分割完全一致
         /// （坐标仍记外接框，下游按矩形读图不会错位；掩膜外的空白是白底）。
+        ///
+        /// 「大块再拆」（<see cref="TryRefineBlocks"/>）用的是同一张列表：被拆细的块带多边形，
+        /// 没被拆细的块 <c>Polygon == null</c> → 整框导出（与 <see cref="ExportParts"/> 一致）。
         /// </summary>
         private List<PartInfo> ExportIrregularParts(Mat original, List<IrregularSplitter.Region> regions,
                                                    int imgWidth, int imgHeight)
@@ -898,33 +1082,51 @@ namespace CadPartSplitter
             double mmPerPx = 25.4 / _opts.RenderDpi;
             var result     = new List<PartInfo>();
             var sorted     = regions.OrderBy(r => r.Bounds.Y).ThenBy(r => r.Bounds.X).ToList();
+            var failed     = new List<string>();
 
             for (int i = 0; i < sorted.Count; i++)
             {
                 IrregularSplitter.Region region = sorted[i];
-                Rect roi  = region.Bounds;
-                string name = $"Part_{i + 1:D2}.png";
+                Rect roi = region.Bounds;
+
+                // 与 ExportParts 一致：编号按「已经成功的张数」走，保存失败不留空号
+                string name = $"Part_{result.Count + 1:D2}.png";
                 string path = Path.Combine(_opts.OutputDirectory, name);
+
+                bool hasPolygon = region.Polygon != null && region.Polygon.Length >= 3;
+
+                if (_opts.SaveDebugImages)
+                    _opts.Log($"[RECT] {name} <- x={roi.X} y={roi.Y} w={roi.Width} h={roi.Height}"
+                              + (hasPolygon ? $"  不规则掩膜 {region.Polygon.Length} 点" : string.Empty));
 
                 using (Mat crop   = new Mat(original, roi))
                 using (Mat output = new Mat(roi.Height, roi.Width, original.Type(), Scalar.All(255)))
-                using (Mat mask   = IrregularSplitter.BuildMask(region.Polygon, roi))
                 {
-                    crop.CopyTo(output, mask);
-
-                    if (!output.SaveImage(path))
+                    if (hasPolygon)
                     {
-                        _opts.Log($"[WARN] 保存失败：{path}");
-                        continue;
+                        using (Mat mask = IrregularSplitter.BuildMask(region.Polygon, roi))
+                            crop.CopyTo(output, mask);
+                    }
+                    else
+                    {
+                        // Polygon == null：这块没被拆细（「大块再拆」里的矩形块），整框导出
+                        crop.CopyTo(output);
                     }
 
-                    _opts.Log($"[SAVE] {name}  ({roi.Width}×{roi.Height} px  Y={roi.Y}  "
-                              + $"不规则掩膜 {region.Polygon.Length} 点)");
+                    if (!SavePartPng(output, path))
+                    {
+                        failed.Add(name);
+                        continue;
+                    }
                 }
+
+                _opts.Log(hasPolygon
+                    ? $"[SAVE] {name}  ({roi.Width}×{roi.Height} px  Y={roi.Y}  不规则掩膜 {region.Polygon.Length} 点)"
+                    : $"[SAVE] {name}  ({roi.Width}×{roi.Height} px  Y={roi.Y})");
 
                 result.Add(new PartInfo
                 {
-                    Index    = i + 1,
+                    Index    = result.Count + 1,
                     FileName = name,
                     PixelX   = roi.X,
                     PixelY   = roi.Y,
@@ -937,7 +1139,182 @@ namespace CadPartSplitter
                 });
             }
 
+            ReportSaveFailures(failed);
+            CleanupStalePartImages(result.Count);
+
             return result;
+        }
+
+        /// <summary>
+        /// 把裁好的零件图写成 PNG，失败时按「清只读属性 → 写临时文件再覆盖」重试两次，并把原因写进日志。
+        ///
+        /// 为什么要这么绕：以前只判 <see cref="Mat.SaveImage(string)"/> 的返回值、失败就直接
+        /// <c>continue</c>，于是产物里会<b>凭空少一张图</b>（典型症状：输出目录里没有
+        /// <c>Part_01.png</c> / <c>Part_02.png</c>，编号从 <c>Part_03.png</c> 才开始），
+        /// 日志里只有一行「保存失败」看不出原因。最常见的原因是<b>同名文件正被其它程序打开</b>
+        /// （看图软件 / Excel / 资源管理器缩略图预览），其次是文件带只读属性（从 ZIP 解压、网盘同步的目录常见）。
+        /// </summary>
+        /// <param name="image">已裁好（不规则分割时已按掩膜涂白）的零件图。</param>
+        /// <param name="path">目标 PNG 路径。</param>
+        /// <returns>true = 已落盘；false = 三次都失败（调用方顺延编号，不留空号）。</returns>
+        private bool SavePartPng(Mat image, string path)
+        {
+            if (image == null || image.Empty())
+            {
+                _opts.Log($"[WARN] 保存失败（图像为空）：{path}");
+                return false;
+            }
+
+            if (image.SaveImage(path))
+                return true;
+
+            string reason = DescribeSaveFailure(path);
+
+            // 只读属性已在上面的 DescribeSaveFailure 里清掉，这里再试一次
+            if (image.SaveImage(path))
+            {
+                _opts.Log($"[WARN] 保存重试成功：{Path.GetFileName(path)}（{reason}）");
+                return true;
+            }
+
+            // 最后的机会：先写临时文件，再覆盖目标（目标文件被别的进程占着写入句柄时也能成功）
+            string tempPath = path + ".tmp.png";
+            try
+            {
+                if (image.SaveImage(tempPath))
+                {
+                    File.Copy(tempPath, path, true);
+                    _opts.Log($"[WARN] 保存重试成功：{Path.GetFileName(path)}（{reason}；改用临时文件覆盖）");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                reason += "；临时文件覆盖也失败 - " + ex.GetType().Name + ": " + ex.Message;
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                        File.Delete(tempPath);
+                }
+                catch (IOException)
+                {
+                    // 临时文件删不掉不影响结果
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // 同上
+                }
+            }
+
+            _opts.Log($"[WARN] 保存失败：{path} —— {reason}。"
+                      + "关掉占用该文件的程序（看图软件 / Excel / 缩略图预览）或去掉只读属性后重跑即可；"
+                      + "本次这张图跳过，后面的编号自动顺延，不会留下空号。");
+            return false;
+        }
+
+        /// <summary>推测 PNG 保存失败的原因；顺手清掉「只读」属性（下次重试就能写进去）。</summary>
+        private static string DescribeSaveFailure(string path)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+
+                if (info.Exists && (info.Attributes & FileAttributes.ReadOnly) != 0)
+                {
+                    info.IsReadOnly = false;
+                    return "同名文件是只读的（已清掉只读属性后重试）";
+                }
+
+                if (info.Exists)
+                    return "同名文件可能正被其它程序打开（看图软件 / Excel / 资源管理器缩略图预览）";
+
+                string dir = Path.GetDirectoryName(path);
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+                    return "输出目录不存在";
+
+                return "输出目录可能不可写（权限 / 磁盘已满 / 网络盘掉线）";
+            }
+            catch (Exception ex)
+            {
+                return ex.GetType().Name + ": " + ex.Message;
+            }
+        }
+
+        /// <summary>导出结束后把「有几张没落盘」汇总成一行，避免只有一行「保存失败」被后面的 LOG 淹掉。</summary>
+        private void ReportSaveFailures(List<string> failed)
+        {
+            if (failed == null || failed.Count == 0)
+                return;
+
+            _opts.Log($"[WARN] 有 {failed.Count} 张零件图没能落盘：{string.Join("、", failed.ToArray())}"
+                      + "（原因见上面的「保存失败」一行；关掉占用文件的程序后重跑即可）");
+        }
+
+        /// <summary>
+        /// 删掉上一次运行遗留、本次没有对应零件图的多余 <c>Part_NN.png</c>。
+        ///
+        /// 例：上次拆出 12 张、这次只导出 10 张 → <c>Part_11.png</c> / <c>Part_12.png</c> 是上次的旧图，
+        /// 留着会让下游按文件名取到过期内容（看起来就像「这次的图跟上次不一样」）。
+        /// 只在本次至少导出一张时才清理，且只认「<c>Part_</c> + 纯数字」的文件名，
+        /// <c>Part_01_callouts.png</c> 这类核对图不会被误删。
+        /// </summary>
+        private void CleanupStalePartImages(int keptCount)
+        {
+            if (keptCount <= 0)
+                return;
+
+            string[] files;
+            try
+            {
+                files = Directory.GetFiles(_opts.OutputDirectory, "Part_*.png");
+            }
+            catch (Exception ex)
+            {
+                _opts.Log("[WARN] 清理旧零件图失败：" + ex.GetType().Name + ": " + ex.Message);
+                return;
+            }
+
+            var removed = new List<string>();
+
+            foreach (string file in files)
+            {
+                string stem = Path.GetFileNameWithoutExtension(file);
+                if (stem == null || !stem.StartsWith("Part_", StringComparison.Ordinal))
+                    continue;
+
+                // 只认 Part_01 / Part_012 这种「Part_ + 纯数字」，Part_01_callouts.png 之类跳过
+                string digits = stem.Substring(5);
+                if (digits.Length < 2)
+                    continue;
+
+                int no;
+                if (!int.TryParse(digits, out no))
+                    continue;
+
+                if (no <= keptCount)
+                    continue;
+
+                try
+                {
+                    File.Delete(file);
+                    removed.Add(stem + ".png");
+                }
+                catch (IOException)
+                {
+                    _opts.Log($"[WARN] 旧零件图删不掉（可能正被占用）：{stem}.png");
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    _opts.Log($"[WARN] 旧零件图删不掉（无权限）：{stem}.png");
+                }
+            }
+
+            if (removed.Count > 0)
+                _opts.Log($"[INFO] 清理上次残留的零件图：{string.Join("、", removed.ToArray())}"
+                          + $"（本次只导出 {keptCount} 张）");
         }
 
         private void SaveDebug(Mat img, string filename)

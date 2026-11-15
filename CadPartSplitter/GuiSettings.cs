@@ -44,6 +44,13 @@ namespace CadPartSplitter
         /// <summary>膨胀核高度（默认 25）。</summary>
         public int DilateKernelHeight { get; set; } = Defaults.DilateKernelHeight;
 
+        /// <summary>
+        /// 视图聚合的墨迹间距（毫米，默认 3.0，0 = 关闭并退回上面的像素核）。
+        /// 界面上没有对应控件，可在 <c>%APPDATA%\CadPartSplitter\settings.ini</c> 里手工调：
+        /// 调小切得更碎、调大更易糊成一张。详见 <see cref="DetectorOptions.ClusterGapMm"/>。
+        /// </summary>
+        public double ClusterGapMm { get; set; } = Defaults.ClusterGapMm;
+
         /// <summary>是否自动检测表格 / 标题栏起点作为遮蔽边界（默认开）。</summary>
         public bool AutoMaskRightColumn { get; set; } = Defaults.AutoMaskRightColumn;
 
@@ -178,6 +185,9 @@ namespace CadPartSplitter
                     case "dilatekernelheight":
                         settings.DilateKernelHeight = Clamp(ReadInt(value, settings.DilateKernelHeight), 1, 500);
                         break;
+                    case "clustergapmm":
+                        settings.ClusterGapMm = Clamp(ReadDouble(value, settings.ClusterGapMm), 0.0, 20.0);
+                        break;
                     case "automaskrightcolumn":
                         settings.AutoMaskRightColumn = ReadBool(value, settings.AutoMaskRightColumn);
                         break;
@@ -220,6 +230,8 @@ namespace CadPartSplitter
             sb.AppendLine("Padding="             + Padding.ToString(CultureInfo.InvariantCulture));
             sb.AppendLine("DilateKernelWidth="   + DilateKernelWidth.ToString(CultureInfo.InvariantCulture));
             sb.AppendLine("DilateKernelHeight="  + DilateKernelHeight.ToString(CultureInfo.InvariantCulture));
+            sb.AppendLine("# 视图聚合的墨迹间距（毫米）：黑点到最近黑点 ≤ 此值算同一张零件图；0 = 关闭，退回 KernelWidth/Height 像素核");
+            sb.AppendLine("ClusterGapMm="        + Format(ClusterGapMm));
             sb.AppendLine("AutoMaskRightColumn=" + (AutoMaskRightColumn ? "true" : "false"));
             sb.AppendLine("SaveDebugImages="     + (SaveDebugImages ? "true" : "false"));
             sb.AppendLine("DropTextHeavyParts="  + (DropTextHeavyParts ? "true" : "false"));
@@ -266,6 +278,7 @@ namespace CadPartSplitter
             options.Padding             = Padding;
             options.DilateKernelWidth   = Math.Max(1, DilateKernelWidth);
             options.DilateKernelHeight  = Math.Max(1, DilateKernelHeight);
+            options.ClusterGapMm        = Math.Max(0.0, ClusterGapMm);
             options.AutoMaskRightColumn = AutoMaskRightColumn;
             options.SaveDebugImages     = SaveDebugImages;
             options.DropTextHeavyParts  = DropTextHeavyParts;
@@ -285,6 +298,7 @@ namespace CadPartSplitter
             settings.Padding             = options.Padding;
             settings.DilateKernelWidth   = options.DilateKernelWidth;
             settings.DilateKernelHeight  = options.DilateKernelHeight;
+            settings.ClusterGapMm        = options.ClusterGapMm;
             settings.AutoMaskRightColumn = options.AutoMaskRightColumn;
             settings.SaveDebugImages     = options.SaveDebugImages;
             settings.DropTextHeavyParts  = options.DropTextHeavyParts;

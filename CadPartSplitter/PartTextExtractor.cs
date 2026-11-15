@@ -606,27 +606,8 @@ namespace CadPartSplitter
 
             try
             {
-                using (var doc = PdfDocument.Open(pdfPath))
-                {
-                    if (pageIndex < 0 || pageIndex >= doc.NumberOfPages)
-                        return boxes;
-
-                    var page = doc.GetPage(pageIndex + 1);   // PdfPig 页码从 1 开始
-                    if (page.Width <= 0 || page.Height <= 0)
-                        return boxes;
-
-                    int outside;
-                    var raw = ReadPageWords(page, page.Height,
-                                            imgWidth / page.Width, imgHeight / page.Height,
-                                            imgWidth, imgHeight, out outside);
-
-                    var texts = new List<PartText>(raw.Count);
-                    foreach (var w in raw)
-                        texts.Add(ToPartText(w, 1.0, 0, 0));   // mm 不参与计算，只取像素坐标
-
-                    foreach (var line in BuildLines(texts))
-                        boxes.Add(new PageRect(line.PixelX, line.PixelY, line.PixelW, line.PixelH));
-                }
+                foreach (var line in ReadTextLinesCore(pdfPath, pageIndex, imgWidth, imgHeight))
+                    boxes.Add(new PageRect(line.PixelX, line.PixelY, line.PixelW, line.PixelH));
             }
             catch (Exception ex)
             {
@@ -635,6 +616,72 @@ namespace CadPartSplitter
             }
 
             return boxes;
+        }
+
+        /// <summary>
+        /// 只解析文字层，返回整页「文字行」的**文字 + 外接框**（页面像素坐标）；不做归属、不改 <see cref="PartInfo"/>。
+        ///
+        /// 分行与拼字规则与 <see cref="BuildLines"/> 完全一致（同一套 Y 容差分组、同一套「词间间隙大于半个字高
+        /// 才补空格」），所以同一水平线上的几个词会拼成一条 ——
+        /// <c>A部詳細：</c> 与 <c>H325U10011</c> 若画在同一行，这里就是 <c>A部詳細：H325U10011</c>。
+        ///
+        /// 用途：没有画表格的組立図上，要領図一覧只写成自由文字
+        /// （<c>下記に示す図面を参照のこと。/ A部詳細：H325U10011 …</c>）时，
+        /// <see cref="AssemblyYoryoBuilder"/> 用这些行把它抽成 <c>01_アッセンブリ図_要領図.csv</c>
+        /// （<c>tables\*.csv</c> 里一条都没有，靠文字层兜底）。
+        ///
+        /// 无文字层 / 解析失败时返回空列表（调用方按「没有这种写法」处理，不抛异常）。
+        /// </summary>
+        public static List<PartTextLine> ReadTextLines(
+            string pdfPath, int pageIndex, int imgWidth, int imgHeight, Action<string> log)
+        {
+            Action<string> write = log ?? (_ => { });
+            var lines = new List<PartTextLine>();
+
+            if (string.IsNullOrEmpty(pdfPath) || imgWidth <= 0 || imgHeight <= 0)
+                return lines;
+
+            try
+            {
+                return ReadTextLinesCore(pdfPath, pageIndex, imgWidth, imgHeight);
+            }
+            catch (Exception ex)
+            {
+                write($"[WARN] 文字行读取失败（跳过「A部詳細：H…」这类自由文字写法）：{ex.Message}");
+                lines.Clear();
+            }
+
+            return lines;
+        }
+
+        /// <summary>
+        /// <see cref="ReadTextLines"/> / <see cref="ReadTextLineBoxes"/> 的共用实现：
+        /// 打开 PDF → 读词 → 换算成页面像素坐标 → 按 <see cref="BuildLines"/> 拼行。
+        /// 页面尺寸 / 页码无效时返回空列表；解析异常交给调用方的 catch（两处的 WARN 文字不同）。
+        /// </summary>
+        private static List<PartTextLine> ReadTextLinesCore(
+            string pdfPath, int pageIndex, int imgWidth, int imgHeight)
+        {
+            using (var doc = PdfDocument.Open(pdfPath))
+            {
+                if (pageIndex < 0 || pageIndex >= doc.NumberOfPages)
+                    return new List<PartTextLine>();
+
+                var page = doc.GetPage(pageIndex + 1);   // PdfPig 页码从 1 开始
+                if (page.Width <= 0 || page.Height <= 0)
+                    return new List<PartTextLine>();
+
+                int outside;
+                var raw = ReadPageWords(page, page.Height,
+                                        imgWidth / page.Width, imgHeight / page.Height,
+                                        imgWidth, imgHeight, out outside);
+
+                var texts = new List<PartText>(raw.Count);
+                foreach (var w in raw)
+                    texts.Add(ToPartText(w, 1.0, 0, 0));   // mm 不参与计算，只取像素坐标
+
+                return BuildLines(texts);
+            }
         }
 
         /// <summary>

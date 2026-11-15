@@ -36,6 +36,13 @@ namespace CadPartSplitter
         /// <summary>上次打开的「图面分类清单」路径：重开窗口时优先用它（手工挑过的位置比推算值更可信）。</summary>
         private string _lastPdfInfoListPath;
 
+        /// <summary>
+        /// 视图聚合的墨迹间距（毫米，默认 3.0；见 <see cref="DetectorOptions.ClusterGapMm"/>）。
+        /// 界面上没有对应控件，值来自 <c>settings.ini</c> 并在保存时原样写回 ——
+        /// 否则窗口关闭时会被控件值覆盖成默认值，手工改的阈值就白改了。
+        /// </summary>
+        private double _clusterGapMm = new DetectorOptions().ClusterGapMm;
+
         public MainForm()
         {
             InitializeComponent();
@@ -115,6 +122,7 @@ namespace CadPartSplitter
             chkAutoMask.Checked      = saved.AutoMaskRightColumn;
             chkDebug.Checked         = saved.SaveDebugImages;
             chkDropTextHeavy.Checked = saved.DropTextHeavyParts;
+            _clusterGapMm            = saved.ClusterGapMm;
 
             // 输出目录随所选文件变化（<图纸目录>\AiAppData\<图纸名>），未选文件前留空
             SetOutputDirectory(string.Empty);
@@ -135,6 +143,7 @@ namespace CadPartSplitter
                 Padding             = (int)numPad.Value,
                 DilateKernelWidth   = (int)numKw.Value,
                 DilateKernelHeight  = (int)numKh.Value,
+                ClusterGapMm        = _clusterGapMm,
                 AutoMaskRightColumn = chkAutoMask.Checked,
                 SaveDebugImages     = chkDebug.Checked,
                 DropTextHeavyParts  = chkDropTextHeavy.Checked
@@ -604,7 +613,7 @@ namespace CadPartSplitter
             AppendLog($"[INFO] DPI={opts.RenderDpi:0}  页码={opts.PdfPageIndex}  遮蔽={opts.RightMaskRatio:0.00}"
                     + $"（自动={ (opts.AutoMaskRightColumn ? "开" : "关") }）"
                     + $"  最小面积={opts.MinContourArea:0}  边距={opts.Padding}"
-                    + $"  核={opts.DilateKernelWidth}×{opts.DilateKernelHeight}");
+                    + "  视图聚合=" + ClusterRuleText(opts));
 
             try
             {
@@ -815,7 +824,7 @@ namespace CadPartSplitter
             AppendLog($"[INFO] DPI={opts.RenderDpi:0}  页码={opts.PdfPageIndex}  遮蔽={opts.RightMaskRatio:0.00}"
                     + $"（自动={ (opts.AutoMaskRightColumn ? "开" : "关") }）"
                     + $"  最小面积={opts.MinContourArea:0}  边距={opts.Padding}"
-                    + $"  核={opts.DilateKernelWidth}×{opts.DilateKernelHeight}");
+                    + "  视图聚合=" + ClusterRuleText(opts));
         }
 
         /// <summary>批量进度：线程安全地更新进度条与状态文字。</summary>
@@ -837,6 +846,25 @@ namespace CadPartSplitter
             lblStatus.Text    = $"处理中… {done}/{progressBar.Maximum}";
         }
 
+
+        /// <summary>
+        /// 「视图聚合」的说明文字：图形界面没有这个控件，所以顺带提示去哪儿改
+        /// （<c>%APPDATA%\CadPartSplitter\settings.ini</c> 的 <c>ClusterGapMm=</c>）。
+        /// </summary>
+        private static string ClusterRuleText(DetectorOptions opts)
+        {
+            if (opts.ClusterGapMm <= 0)
+            {
+                return "像素核 " + opts.DilateKernelWidth + "×" + opts.DilateKernelHeight
+                     + "（毫米间距规则已关闭）";
+            }
+
+            int size = opts.ClusterGapRadiusPx(opts.RenderDpi) * 2 + 1;
+
+            return "墨迹间距≤" + opts.ClusterGapMm.ToString("0.##") + " mm 算同一张图"
+                 + "（单链聚类，核 " + size + "×" + size + " px；"
+                 + "可在 settings.ini 里改 ClusterGapMm）";
+        }
 
         /// <summary>根据界面控件生成检测选项，越界时抛出 <see cref="ArgumentOutOfRangeException"/>。</summary>
         private DetectorOptions BuildOptions(string inputFile, string outputDir)
@@ -867,6 +895,7 @@ namespace CadPartSplitter
                 Padding            = (int)numPad.Value,
                 DilateKernelWidth  = Math.Max(1, (int)numKw.Value),
                 DilateKernelHeight = Math.Max(1, (int)numKh.Value),
+                ClusterGapMm       = _clusterGapMm,
                 SaveDebugImages    = chkDebug.Checked,
                 OutputDirectory    = outputDir,
                 Logger             = AppendLog

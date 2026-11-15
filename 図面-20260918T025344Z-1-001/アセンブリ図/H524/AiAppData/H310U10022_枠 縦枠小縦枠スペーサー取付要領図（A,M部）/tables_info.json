@@ -1755,7 +1755,7 @@
       "row_count": 9,
       "column_count": 32,
       "cell_count": 46,
-      "text_cell_count": 18,
+      "text_cell_count": 16,
       "struck_row_count": 0,
       "visible_row_count": 9,
       "rows": [
@@ -1904,8 +1904,8 @@
               "column": 11,
               "row_span": 1,
               "column_span": 1,
-              "text": "3",
-              "word_count": 1,
+              "text": "",
+              "word_count": 0,
               "struck_words": 0,
               "pixel": { "x": 4966, "y": 6010, "w": 353, "h": 176 },
               "pdf_mm": { "x": 420.45, "y": 508.85, "w": 29.89, "h": 14.90 }
@@ -2076,8 +2076,8 @@
               "column": 11,
               "row_span": 2,
               "column_span": 1,
-              "text": "2",
-              "word_count": 1,
+              "text": "",
+              "word_count": 0,
               "struck_words": 0,
               "pixel": { "x": 4966, "y": 6186, "w": 353, "h": 176 },
               "pdf_mm": { "x": 420.45, "y": 523.75, "w": 29.89, "h": 14.90 }
@@ -2145,8 +2145,8 @@
               "column": 11,
               "row_span": 2,
               "column_span": 1,
-              "text": "1 -1",
-              "word_count": 2,
+              "text": "-1",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 4966, "y": 6362, "w": 353, "h": 176 },
               "pdf_mm": { "x": 420.45, "y": 538.65, "w": 29.89, "h": 14.90 }

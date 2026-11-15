@@ -633,8 +633,8 @@
               "column": 11,
               "row_span": 3,
               "column_span": 1,
-              "text": "1 -6",
-              "word_count": 2,
+              "text": "-6",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 7372, "y": 6509, "w": 172, "h": 86 },
               "pdf_mm": { "x": 624.16, "y": 551.10, "w": 14.56, "h": 7.28 }

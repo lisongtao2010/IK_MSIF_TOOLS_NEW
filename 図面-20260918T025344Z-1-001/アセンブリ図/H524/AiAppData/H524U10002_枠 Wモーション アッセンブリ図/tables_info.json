@@ -1950,8 +1950,8 @@
               "column": 11,
               "row_span": 2,
               "column_span": 1,
-              "text": "1 -1",
-              "word_count": 2,
+              "text": "-1",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 4966, "y": 6186, "w": 353, "h": 176 },
               "pdf_mm": { "x": 420.45, "y": 523.75, "w": 29.89, "h": 14.90 }

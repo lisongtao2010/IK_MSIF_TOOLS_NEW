@@ -136,6 +136,7 @@
     </Compile>
     <Compile Include="Callout.cs" />
     <Compile Include="CalloutExtractor.cs" />
+    <Compile Include="PartTextBurner.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

@@ -36,11 +36,16 @@ namespace CadPartSplitter
     ///   --no-tz         关闭「Excel 部品表」（不读图纸文件夹里的 Excel，不生成 classify\特注品.json）
     ///   --area &lt;值&gt;      最小轮廓面积阈值（默认 25000）
     ///   --pad &lt;值&gt;       外接框扩展像素（默认 30）
-    ///   --kw &lt;值&gt;        膨胀核宽度（默认 60）
-    ///   --kh &lt;值&gt;        膨胀核高度（默认 10）
+    ///   --kw &lt;值&gt;        膨胀核宽度（默认 60，仅在 --no-cluster-gap 时生效）
+    ///   --kh &lt;值&gt;        膨胀核高度（默认 10，仅在 --no-cluster-gap 时生效）
+    ///   --cluster-gap-mm &lt;值&gt; 视图聚合的墨迹间距（毫米，默认 3.0）：黑点到最近黑点 ≤ 此值算同一张零件图
+    ///   --no-cluster-gap 关闭毫米聚合规则，退回 --kw / --kh 的像素核行为（旧版结果）
     ///   --no-irregular-split 关闭「不规则分割」兜底（矩形分割只出 1 块时按闭合轮廓拆开）
     ///   --irregular-reach &lt;值&gt; 不规则分割时每个视图外扩多少像素认领线框 / 标注（默认 100）
     ///   --no-strip-annot 关闭「PDF 批注 / 图章清理」（默认渲染前先删注释另存 &lt;图纸名&gt;_clean.pdf）
+    ///   --no-burn-text   关闭「把文字层补画回零件图」（默认按 PDF 词框把渲染没画出来的日文补进 Part_XX.png）
+    ///   --no-irregular-split-large 关闭「大块再拆」（矩形分割出了多块时，对够大的块再按像素归属拆一次）
+    ///   --irregular-large-ratio &lt;值&gt; 「大块再拆」的面积门槛（块外接框面积占整页比例，默认 0.02）
     ///
     /// 输出目录省略时写到 &lt;输入文件所在目录&gt;\AiAppData\&lt;图纸名&gt;
     /// （与下游 AI 环节约定：每张图纸一个子文件夹）。
@@ -139,6 +144,7 @@ namespace CadPartSplitter
             Console.WriteLine("[INFO] 表格残片筛除：" + (opts.DropTextHeavyParts
                               ? "文字行面积占比 ≥ " + opts.TextHeavyRatio.ToString("0.###") + " 的块丢弃"
                               : "关闭"));
+            Console.WriteLine("[INFO] 视图聚合   ：" + DescribeClusterRule(opts));
             Console.WriteLine("[INFO] 文字清单   ：" + (opts.SplitTextToWords
                               ? "一个词一行（每个词各自的坐标）"
                               : "按行合并（同一水平线上的词拼成一句）"));
@@ -152,7 +158,8 @@ namespace CadPartSplitter
                               ? "「品種 × 多列重复」表摊平成 品種/部品名/部品コード/員数 → 02_要領図_部品機能情報.csv（仅要領図，最后一步）"
                               : "关闭"));
             Console.WriteLine("[INFO] 要領図一覧 ：" + (opts.BuildAssemblyYoryoList
-                              ? "生成 01_アッセンブリ図_要領図.csv（項目 / 要領図漢字 / 図番 三列，仅アッセンブリ図）"
+                              ? "生成 01_アッセンブリ図_要領図.csv（項目 / 要領図漢字 / 図番 三列，仅アッセンブリ図；"
+                                + "没画表格的图按页面文字「A部詳細：H…」识别，項目 保留到「部」）"
                               : "关闭"));
             Console.WriteLine("[INFO] 输出目录   ：" + Path.GetFullPath(opts.OutputDirectory));
 
@@ -232,6 +239,23 @@ namespace CadPartSplitter
         }
 
         /// <summary>
+        /// 「视图聚合」一行日志：开启毫米规则时说明间距阈值（并附 DPI 换算出的核大小），
+        /// 关闭时说明退回的像素核 —— 这行直接决定「一个视图会不会被切成两张」。
+        /// </summary>
+        private static string DescribeClusterRule(DetectorOptions opts)
+        {
+            if (opts.ClusterGapMm <= 0)
+                return $"像素核 {opts.DilateKernelWidth}×{opts.DilateKernelHeight}（毫米间距规则已关闭）";
+
+            int radius = opts.ClusterGapRadiusPx(opts.RenderDpi);
+            int size   = radius * 2 + 1;
+
+            return $"墨迹间距 ≤ {opts.ClusterGapMm.ToString("0.##")} mm 算同一张零件图"
+                 + $"（单链聚类，{opts.RenderDpi.ToString("0")} DPI ⇒ 核 {size}×{size} px；"
+                 + "--cluster-gap-mm 可调，--no-cluster-gap 关闭）";
+        }
+
+        /// <summary>
         /// 批量模式（输入是文件夹）：一套参数跑完该文件夹下所有 PDF，
         /// 每张图纸各自落到 <c>&lt;输出根目录&gt;\&lt;图纸名&gt;</c>；返回 0 = 全部成功，2 = 有失败。
         /// </summary>
@@ -239,6 +263,7 @@ namespace CadPartSplitter
         {
             Console.WriteLine($"[INFO] 批量模式  ：{(recursive ? "含子文件夹" : "仅当前文件夹")}");
             Console.WriteLine($"[INFO] 调试图像  ：{(opts.SaveDebugImages ? "开启" : "关闭")}");
+            Console.WriteLine("[INFO] 视图聚合   ：" + DescribeClusterRule(opts));
             Console.WriteLine($"[INFO] 右侧遮蔽  ：{(opts.AutoMaskRightColumn ? "自动检测表格/标题栏" : "固定比例")}"
                               + $"（兜底比例 {opts.RightMaskRatio:0.00}）");
             Console.WriteLine("[INFO] 表格内容  ：" + (opts.ExtractRuledTables ? "提取有线表格" : "关闭"));
@@ -502,6 +527,17 @@ namespace CadPartSplitter
                             opts.DilateKernelHeight = kh;
                         break;
 
+                    case "--cluster-gap-mm":
+                        // 视图聚合的墨迹间距（毫米）：黑点到最近黑点 ≤ 此值算同一张零件图（默认 3.0）
+                        if (TryGetNextDouble(args, ref i, out double gapMm))
+                            opts.ClusterGapMm = gapMm;
+                        break;
+
+                    case "--no-cluster-gap":
+                        // 关闭毫米聚合规则，退回 --kw / --kh 的像素核行为（旧版结果）
+                        opts.ClusterGapMm = 0;
+                        break;
+
                     case "--no-irregular-split":
                         // 关闭「不规则分割」兜底：矩形分割只出 1 块时不再尝试按闭合轮廓拆开
                         opts.IrregularSplitWhenSingle = false;
@@ -513,9 +549,25 @@ namespace CadPartSplitter
                             opts.IrregularSplitReach = reach;
                         break;
 
+                    case "--no-irregular-split-large":
+                        // 关闭「大块再拆」：矩形分割出了多块时，不再对够大的块按像素归属再拆一次
+                        opts.IrregularSplitLargeBlocks = false;
+                        break;
+
+                    case "--irregular-large-ratio":
+                        // 「大块再拆」的面积门槛（块外接框面积占整页比例，默认 0.02）
+                        if (TryGetNextDouble(args, ref i, out double largeRatio))
+                            opts.IrregularSplitLargeAreaRatio = largeRatio;
+                        break;
+
                     case "--no-strip-annot":
                         // 关闭「PDF 批注 / 图章清理」：不生成 <图纸名>_clean.pdf，直接渲染原 PDF
                         opts.StripPdfAnnotations = false;
+                        break;
+
+                    case "--no-burn-text":
+                        // 关闭「把文字层补画回零件图」：零件图里保持渲染原样（PDFium 画不出的日文仍是空白）
+                        opts.BurnTextIntoParts = false;
                         break;
                 }
             }
@@ -588,8 +640,11 @@ namespace CadPartSplitter
             Console.WriteLine("  --no-tz-ai      关闭「Excel 部品表的 AI 判定与补足」（默认就是关闭）");
             Console.WriteLine("  --area  <N>    最小轮廓面积（默认 25000）");
             Console.WriteLine("  --pad   <N>    外接框扩展像素（默认 30）");
-            Console.WriteLine("  --kw    <N>    膨胀核宽度（默认 60）");
-            Console.WriteLine("  --kh    <N>    膨胀核高度（默认 10）");
+            Console.WriteLine("  --kw    <N>    膨胀核宽度（默认 60；仅在 --no-cluster-gap 时生效）");
+            Console.WriteLine("  --kh    <N>    膨胀核高度（默认 10；仅在 --no-cluster-gap 时生效）");
+            Console.WriteLine("  --cluster-gap-mm <N> 视图聚合的墨迹间距（毫米，默认 3.0）：");
+            Console.WriteLine("                黑点到最近黑点 ≤ 此值算同一张零件图；调小切得更碎，调大更易糊成一张");
+            Console.WriteLine("  --no-cluster-gap  关闭毫米聚合规则，退回 --kw / --kh 的像素核行为（旧版结果）");
             Console.WriteLine("  --no-irregular-split  关闭「不规则分割」兜底（矩形分割只出 1 块时按闭合轮廓拆开）");
             Console.WriteLine("  --irregular-reach <N> 不规则分割时每个视图外扩多少像素认领线框 / 标注（默认 100）");
             Console.WriteLine("  --no-strip-annot 关闭「PDF 批注 / 图章清理」（默认渲染前先删注释另存 <图纸名>_clean.pdf）");

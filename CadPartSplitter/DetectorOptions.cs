@@ -31,6 +31,38 @@ namespace CadPartSplitter
         /// </summary>
         public bool StripPdfAnnotations { get; set; } = true;
 
+        // ── 输出：把文字层补画回零件图 ────────────────────────────────────────
+
+        /// <summary>
+        /// 把 PDF 文字层里的文字「烧」回零件图 PNG（默认开启，命令行 <c>--no-burn-text</c> 关闭）。
+        ///
+        /// 为什么需要：有些图纸的日文用内嵌 MS-PGothic 子集（Type0 / Identity-H）写成，
+        /// PDFium 渲染时画不出这些字形 —— 页面上的「鴨居 / 三方枠 / G部」整块空白，
+        /// 而同一位置的圈内数字（④4、⑧8）和圆圈却正常。于是裁出来的 Part_XX.png 只有线条、
+        /// 没有文字，人眼分不清「哪张图是哪个部位」，下游只看图片时也读不到部位名。
+        ///
+        /// 文字层本身是好的（<see cref="PartTextExtractor"/> 用 PdfPig 读得到词与紧贴词框），
+        /// 所以导出 PNG 之后按词框把字补画回去（<see cref="PartTextBurner"/>）：
+        ///   · 位置 / 宽高严格按 <see cref="PartText"/> 的页面像素坐标减零件框左上角；
+        ///   · 字形用系统字体（MS Gothic 优先）等比拉伸到词框，视觉上与原图接近；
+        ///   · 渲染里<b>已经画出字</b>的词（圈内数字、英数字）按框内墨迹占比跳过，不会画两遍。
+        /// 只改 PNG 像素，<c>parts_info.json</c> / <c>parts_text.txt</c> 的内容与坐标不变。
+        ///
+        /// 关闭：命令行 `--no-burn-text`（界面无开关）。
+        /// </summary>
+        public bool BurnTextIntoParts { get; set; } = true;
+
+        /// <summary>
+        /// 补画文字时判定「渲染里已经有字，不用补」的框内墨迹占比阈值（默认 0.04，即 4%）。
+        ///
+        /// 计算方式：把词框裁到图内 → 反向二值化（≤160 的像素算墨迹）→ 统计墨迹像素占比。
+        /// 有字的框（一次印刷的汉字 / 数字）一般在 8%~20%；只有线条穿过词框时不到 2%。
+        ///
+        /// 调大（如 0.10）→ 更容易判成「缺字」，补画更积极，但可能给已经渲染好的字加一层重影；
+        /// 调小（如 0.01）→ 只补完全空白的词框，压在细线上的标注可能补不上。
+        /// </summary>
+        public double BurnTextSkipInkRatio { get; set; } = 0.04;
+
         // ── 区域屏蔽 ─────────────────────────────────────────────────────────
 
         /// <summary>
@@ -140,19 +172,82 @@ namespace CadPartSplitter
         /// <summary>
         /// 膨胀核宽度（像素）。横向长条零件需宽远大于高。
         /// 300 DPI 建议 60~120；DPI 降低时等比缩减。
+        ///
+        /// 只在 <see cref="ClusterGapMm"/> ≤ 0 时生效；默认开启毫米聚合规则后，
+        /// 聚合容差由 <see cref="ClusterGapMm"/> 给出（与 DPI 无关、横纵一致）。
         /// </summary>
         public int DilateKernelWidth { get; set; } = 60;
 
         /// <summary>
         /// 膨胀核高度（像素）。控制纵向聚合范围。
         /// 若相邻零件纵向粘连则减小；同一零件内部断开则增大。
+        ///
+        /// 只在 <see cref="ClusterGapMm"/> ≤ 0 时生效（见 <see cref="DilateKernelWidth"/>）。
         /// </summary>
         public int DilateKernelHeight { get; set; } = 10;
 
         /// <summary>
         /// 形态学操作迭代次数。越多斑块越大越连通，但更易粘连相邻零件。
+        /// 仅在 <see cref="ClusterGapMm"/> ≤ 0（关闭毫米聚合规则）时生效。
         /// </summary>
         public int DilateIterations { get; set; } = 2;
+
+        // ── 视图聚合规则（墨迹间距 / 单链聚类）────────────────────────────────
+
+        /// <summary>
+        /// 视图聚合的「墨迹间距」阈值（<b>毫米</b>，默认 3.0）：两个黑点之间的距离
+        /// ≤ 此值就认为属于<b>同一张零件图</b>，超过就分属两张。
+        ///
+        /// <para>
+        /// 为什么按毫米而不是像素：<see cref="DilateKernelWidth"/> / <see cref="DilateKernelHeight"/>
+        /// 是像素核（默认 60 × 10），换 DPI 就变容差 —— 300 DPI 下横向能跨 10 mm 粘连、
+        /// 纵向只跨 1.5 mm；同一个 3 mm 的间隙，横向并得起来、纵向并不起来。
+        /// 图纸本身是按毫米画的：CAD 的线是连续的，文字离最近的线一般不超过 3 mm，
+        /// 而两个视图之间通常隔 10 mm 以上，所以「≤ 3 mm 算一张图」正好把
+        /// 视图本体 + 它的尺寸标注 / 引出线收进同一块，又不会把两个视图糊在一起。
+        /// </para>
+        ///
+        /// <para>
+        /// 实现 = <b>单链聚类</b>（single-linkage）：把二值图用「边长 = 阈值」的圆形核做闭运算，
+        /// 再把每个连通域膨胀半个阈值；两个黑点之间只要存在一条「步长 ≤ 阈值」的
+        /// 黑点链，就归到同一块。半径换算见 <see cref="ClusterGapRadiusPx"/>。
+        /// 注意单链聚类<b>有传递性</b>：A-B 2 mm、B-C 2 mm ⇒ A、B、C 全并（A、C 之间可以超过 3 mm）。
+        /// </para>
+        ///
+        /// <para>
+        /// <b>局限</b>：尺寸线 / 引出线本身是连续墨迹（间距 = 0），靠它连着的两个视图
+        /// 依然会并成一块 —— 这靠的不是本参数，而是「不规则分割」
+        /// （填实闭合轮廓 → 开运算剥细桥 → 各视图认领自己的线框，见 <see cref="IrregularSplitLargeBlocks"/>）。
+        /// 本参数只管「碎块归并」：让同一个视图断成几节的外轮廓、飘在旁边的标注重新聚到一起。
+        /// </para>
+        ///
+        /// <para>
+        /// 调大（如 5.0）→ 更倾向糊成一张（视图分的块变少、标注带得更全）；
+        /// 调小（如 1.5）→ 切得更碎（抠得干净，但一个视图可能被拆成几块）。
+        /// 设 0（命令行 <c>--no-cluster-gap</c>）→ 关闭本规则，退回
+        /// <see cref="DilateKernelWidth"/> / <see cref="DilateKernelHeight"/> 的像素核行为（旧版结果）。
+        /// </para>
+        /// </summary>
+        public double ClusterGapMm { get; set; } = 3.0;
+
+        /// <summary>
+        /// 把 <see cref="ClusterGapMm"/> 换算成形态学核半径（像素）：
+        /// <c>r = round(阈值 / 2 × dpi / 25.4)</c> —— 两侧各外扩 r，两点距离 ≤ 2r ≈ 阈值即并成一块。
+        ///
+        /// 300 DPI、3.0 mm ⇒ r = 18 px，核长大 37 × 37；150 DPI 同阈值 ⇒ 9 px（容差仍是 3 mm）。
+        /// 返回 0 表示「不启用毫米规则」（阈值为 0 或 dpi 非法），调用方退回像素核。
+        /// </summary>
+        /// <param name="dpi">当前位图对应的 DPI（PDF 渲染用 <see cref="RenderDpi"/>，位图输入同样取它）。</param>
+        public int ClusterGapRadiusPx(double dpi)
+        {
+            if (ClusterGapMm <= 0 || dpi <= 0)
+                return 0;
+
+            double pxPerMm = dpi / 25.4;
+            int radius = (int)Math.Round(ClusterGapMm / 2.0 * pxPerMm);
+
+            return Math.Max(1, radius);
+        }
 
         // ── 轮廓过滤 ──────────────────────────────────────────────────────────
 
@@ -215,6 +310,33 @@ namespace CadPartSplitter
         /// 真的不想让它介入时关掉：命令行 `--no-irregular-split`。
         /// </summary>
         public bool IrregularSplitWhenSingle { get; set; } = true;
+
+        /// <summary>
+        /// 「大块再拆」：矩形分割已经出了多块时，对<b>够大的块</b>再试一次不规则分割（默认开启）。
+        ///
+        /// 原来不规则分割只在「矩形分割恰好只出 1 块」时兜底。但一张組立図上更常见的形态是
+        /// 「大部分视图各自成块，只有一两个块里粘着好几个视图」（正面 + 侧面由尺寸线串着），
+        /// 这种情况只出 1 块的兜底永远轮不到，那块就只能整块留下。
+        ///
+        /// 开启后：对整页（已擦图框、已遮蔽表格的）二值图做一次
+        /// <see cref="IrregularSplitter.Split"/>，把拆出来的实体按「外接框中心落在哪个块里」
+        /// 归到各块；某块里落进 ≥2 个实体、且每个实体自己的墨迹面积
+        /// ≥ <see cref="MinContourArea"/> 时，用这些实体（多边形掩膜）替换该块，
+        /// 其余块仍然整框裁切 —— 没有块被拆开时产物与改动前完全一致。
+        ///
+        /// 关闭：命令行 `--no-irregular-split-large`。
+        /// </summary>
+        public bool IrregularSplitLargeBlocks { get; set; } = true;
+
+        /// <summary>
+        /// 「大块再拆」的面积门槛：块的<b>外接框面积占整页的比例</b> ≥ 此值才尝试再拆（默认 0.02，即 2%）。
+        ///
+        /// 300 DPI 的 A1（约 9921 × 7008 px）对应约 140 万平方像素，即 2000×700 这样的条状块也算「大块」；
+        /// 小块里塞不下两个视图，拆了只会把零件切碎。
+        ///
+        /// 调大（如 0.05）→ 只拆特别大的块，改动更保守；调小（如 0.01）→ 更多块参与再拆。
+        /// </summary>
+        public double IrregularSplitLargeAreaRatio { get; set; } = 0.02;
 
         /// <summary>
         /// 不规则分割时，每个视图实体向四周外扩的像素（默认 100）。
@@ -433,11 +555,15 @@ namespace CadPartSplitter
         ///   · 表头区里有含「品種」的单元格，且同一列名重复出现 ≥ 2 次的是品種表；
         ///   · 重复列名每次出现的列 = 一组部品ブロック，块标题（上方单元格里的「部品名 ： …」）就是品名；
         ///   · 摊平成 品種 / 部品名 / 部品コード / 員数 四列，品種按合并单元格往下填满；
+        ///   · 另一种「品種 × 部品名 マトリクス表」（表头一排部品名、每行一个品種、格子里是品番，
+        ///     <c>－</c> = 该品種不用这个部品，`H325U10011.pdf` 就是）也收：**一个非 `－` 格子一条明细**，
+        ///     部品名取列名，員数 / 寸法留空 —— 一张 7 行 × 6 列的表就是 22 条明细；
+        ///   · 另外还认「単純部品表」（<c>部品名 / 枠区分</c>）与「部品情報表」（<c>部品名 / 部品コード</c> 两列小表）；
         ///   · 结果按 <see cref="OutputDirectory"/> 写成 <c>02_要領図_部品機能情報.csv</c>（带 BOM 的 UTF-8）。
         ///   · **只有图面分类为「要領図」的图纸才写**：分类读自 <c>classify\PdfInfoList.txt</c>
         ///     （<see cref="BuildPdfInfoList"/>），基本図 / 加工図 / アッセンブリ図 / 未识别 一律跳过，
         ///     并清掉上一次留下的同名产物。
-        /// 找不到这种表时什么都不写（只记日志）。生成时机在 <see cref="BuildLtStep1Table"/> 之后
+        /// 找不到这几种表时什么都不写（只记日志）。生成时机在 <see cref="BuildLtStep1Table"/> 之后
         /// （两张成品清单里最后出）。命令行对应 `--no-lt-step2`。
         /// </summary>
         public bool BuildLtStep2Table { get; set; } = true;
@@ -464,13 +590,21 @@ namespace CadPartSplitter
         ///     <c>A</c> / <c>B</c>（或 <c>A,M</c>）就是 項目，<b>要領図漢字 留空</b>；
         ///     只有 項目 没有 図番 的格子会跟紧跟着的 図番 配对。光秃秃的 図番（表題欄等）不收，
         ///     结构化路径已经收过的 図番 不重复收（内联只补漏）；
+        ///   · **没画表格**的組立図（页面上只写着「下記に示す図面を参照のこと。/ A部詳細：H325U10011 …」）
+        ///     改读整页文字行（<see cref="PartTextExtractor.ReadTextLines"/>）再抽一遍：`項目` 按图纸上
+        ///     写的**保留到「部」**（`A部` / `B部` …），`要領図漢字` 留空；抽法是「先分别找出 `～部` 与
+        ///     10 位 図番、再按位置配对」，两者之间写什么（`詳細` / `：` / `・・・` / 空格 / 注释）都不影响，
+        ///     `A部詳細：` 与 図番 折成两行也配得上（往上 3 行内）；全角字母数字先按 Unicode FormKC
+        ///     化成半角再认。同一个 図番 挂在两个 項目 上时两条都留，表格路径收过的 図番 不再收；
+        ///     配上几条 / 重复合并几条 / 几条没配上 項目（连原文）都写进日志，收少了能一眼看出原因；
         ///   · 摊平成 項目 / 要領図漢字 / 図番 三列，按 <see cref="OutputDirectory"/> 写成
         ///     <c>01_アッセンブリ図_要領図.csv</c>（带 BOM 的 UTF-8 + CRLF）。
         ///   · **只有图面分类为「アッセンブリ図」的图纸才写**：分类读自 <c>classify\PdfInfoList.txt</c>
-        ///     （<see cref="BuildPdfInfoList"/>），基本図 / 加工図 / 要領図 / 未识别 一律跳过，
-        ///     并清掉上一次留下的同名产物。
+        ///     （<see cref="BuildPdfInfoList"/>），基本図 / 加工図 / 要領図 / 特注 一律跳过，
+        ///     并清掉上一次留下的同名产物。**「未识别」是例外**：没画表格的图纸判不出分类，
+        ///     此时页面上有「A部詳細：H…」这种要領図索引就按アッセンブリ図 处理（没有才跳过）。
         /// 生成时机在 <see cref="BuildLtStep1Table"/> 之后、<see cref="BuildLtStep2Table"/> 之前。
-        /// 没有这种表时不生成文件（只记日志）。命令行对应 `--no-assembly-yoryo`。
+        /// 两条路都没收到时不生成文件（只记日志）。命令行对应 `--no-assembly-yoryo`。
         /// </summary>
         public bool BuildAssemblyYoryoList { get; set; } = true;
 

@@ -1,7 +1,7 @@
 {
   "page": 1,
   "dpi": 300,
-  "source": "D:\\Github_lis2010\\rabowork\\202609_MSIF_TOOLS\\図面-20260918T025344Z-1-001\\アセンブリ図\\H525\\H527U10001_枠 片引戸標準(在来) アッセンブリ図.PDF",
+  "source": "D:\\Github_lis2010\\IK_MSIF_TOOLS_NEW\\図面-20260918T025344Z-1-001\\アセンブリ図\\H525\\H527U10001_枠 片引戸標準(在来) アッセンブリ図.PDF",
   "tables": [
     {
       "name": "table_01",
@@ -667,8 +667,8 @@
               "column": 6,
               "row_span": 1,
               "column_span": 1,
-              "text": "1 -",
-              "word_count": 2,
+              "text": "-",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 8859, "y": 775, "w": 360, "h": 80 },
               "pdf_mm": { "x": 750.06, "y": 65.62, "w": 30.48, "h": 6.77 }
@@ -1432,8 +1432,8 @@
               "column": 11,
               "row_span": 1,
               "column_span": 1,
-              "text": "2 -3",
-              "word_count": 2,
+              "text": "-3",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 6389, "y": 6255, "w": 245, "h": 123 },
               "pdf_mm": { "x": 540.94, "y": 529.59, "w": 20.74, "h": 10.41 }
@@ -1615,8 +1615,8 @@
               "column": 11,
               "row_span": 2,
               "column_span": 1,
-              "text": "1 -4",
-              "word_count": 2,
+              "text": "-4",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 6389, "y": 6378, "w": 245, "h": 123 },
               "pdf_mm": { "x": 540.94, "y": 540.00, "w": 20.74, "h": 10.41 }

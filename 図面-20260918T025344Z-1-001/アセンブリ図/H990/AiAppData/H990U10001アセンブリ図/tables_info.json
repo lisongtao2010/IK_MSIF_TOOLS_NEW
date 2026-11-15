@@ -1,7 +1,7 @@
 {
   "page": 1,
   "dpi": 300,
-  "source": "D:\\Github_lis2010\\rabowork\\202609_MSIF_TOOLS\\図面-20260918T025344Z-1-001\\アセンブリ図\\H990\\H990U10001アセンブリ図.pdf",
+  "source": "D:\\Github_lis2010\\IK_MSIF_TOOLS_NEW\\図面-20260918T025344Z-1-001\\アセンブリ図\\H990\\H990U10001アセンブリ図.pdf",
   "tables": [
     {
       "name": "table_01",
@@ -859,8 +859,8 @@
               "column": 11,
               "row_span": 2,
               "column_span": 1,
-              "text": "1 -1",
-              "word_count": 2,
+              "text": "-1",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 6389, "y": 6378, "w": 245, "h": 123 },
               "pdf_mm": { "x": 540.94, "y": 540.00, "w": 20.74, "h": 10.41 }

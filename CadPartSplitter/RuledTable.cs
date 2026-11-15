@@ -33,16 +33,29 @@ namespace CadPartSplitter
         public int WordCount { get; set; }
 
         /// <summary>
-        /// 该单元格里被「取り消し線（划掉整行的横线）」穿过的词数。
-        /// 大于 0 说明这一格在图纸上被划掉了 —— 通常整行都作废。
+        /// 该单元格里被「取り消し線（横穿文字的划线）」穿过的词数。
+        /// 大于 0 说明这一格在图纸上被划掉了。整行怎么处理见 <see cref="RuledTable.StruckRowCount"/> /
+        /// <see cref="RuledTable.StruckCellCount"/>（整行划掉 → 行作废；只划掉品番那一格 → 只清空该格、行保留）。
         /// </summary>
         public int StruckWordCount { get; set; }
 
-        /// <summary>该单元格是否被划线作废。</summary>
+        /// <summary>该单元格是否被划线作废（<see cref="Text"/> 保留原值，输出时按空格子处理 —— 见 <see cref="StruckText"/>）。</summary>
         public bool IsStruck
         {
             get { return StruckWordCount > 0; }
         }
+
+        /// <summary>
+        /// 被划线划掉、输出时按空格子处理的原文（图纸上把 <c>部品コード</c> 那一格划掉，
+        /// 表示这个品番作废、这一条明细仍然有效）。
+        ///
+        /// <see cref="Text"/> 保留图纸上写的原值（<c>tables_info.json</c> 里仍是原值、`struck_words` &gt; 0），
+        /// <see cref="RuledTable.ToGrid"/> 输出时不写它 ——
+        /// 于是 <c>tables\*.csv</c> 与二维表里这一格是空的，下游
+        /// <c>01_アッセンブリ図_部品機能情報.csv</c> 得到「部品コード 空、其余列都在」。
+        /// 整行作废（≥2 格被划）时不填本属性，那一行整行不进 CSV。
+        /// </summary>
+        public string StruckText { get; set; } = string.Empty;
 
         // ── 页面绝对像素坐标 ────────────────────────────────────────────────
         public int PixelX { get; set; }
@@ -64,8 +77,14 @@ namespace CadPartSplitter
         public int Index { get; set; }
 
         /// <summary>
-        /// 该行是否被划线作废（行内只要有格子被 取り消し線 划掉就算 ——
-        /// CAD 图里「整行划掉」就表示这一行作废，作废行不写进 <c>tables\*.csv</c>）。
+        /// 该行是否被划线作废（作废行不写进 <c>tables\*.csv</c>）。
+        ///
+        /// 判据（<see cref="RuledTableExtractor"/> 的两档语义）：
+        ///   · 行内 <b>≥2 格</b>被 取り消し線 划掉 → 整行作废 → 本属性为 true；
+        ///   · 行内<b>只划掉一格</b>，且那一格是品番 / 図番形态的文字（<c>部品コード</c> 那一格）→
+        ///     该格输出成空（原文见 <see cref="RuledTableCell.StruckText"/>），行照常输出、本属性为 false。
+        ///
+        /// 也就是说「品番作废」不等于「明细作废」：CAD 图上把部品コード 划掉，是要这一条的品番空着。
         /// </summary>
         public bool IsStruck { get; set; }
 
@@ -147,6 +166,26 @@ namespace CadPartSplitter
             }
         }
 
+        /// <summary>
+        /// 被划线作废、但**整行保留**的格子数（原文见 <see cref="RuledTableCell.StruckText"/>）。
+        ///
+        /// 典型：部品表里 <c>部品コード</c> 那一格被 取り消し線 划掉 —— 图纸上表示这个品番作废，
+        /// 这一条明细（番号 / 部品名 / 員数 …）仍然有效，所以格子留空、行照常写进 <c>tables\*.csv</c>，
+        /// 下游 <c>01_アッセンブリ図_部品機能情報.csv</c> 得到的是「部品コード 空、其余列都在」。
+        /// 与 <see cref="StruckRowCount"/> 互斥：这些行不算作废行。
+        /// </summary>
+        public int StruckCellCount
+        {
+            get
+            {
+                int n = 0;
+                foreach (var r in Rows)
+                    foreach (var c in r.Cells)
+                        if (c.IsStruck && !string.IsNullOrEmpty(c.StruckText)) n++;
+                return n;
+            }
+        }
+
         /// <summary>实际输出的行数 = 总行数 − 划线作废行数。</summary>
         public int VisibleRowCount
         {
@@ -156,6 +195,10 @@ namespace CadPartSplitter
         /// <summary>
         /// 把表展开成二维文本网格（<c>[行][列]</c>，均从 0 开始，与 <see cref="Rows"/> 顺序一致）。
         /// 合并单元格只在左上角写文字，其余被覆盖的格子留空 —— CSV / txt 输出都是这个形态。
+        ///
+        /// 被划线作废、但整行保留的格子（<see cref="RuledTableCell.StruckText"/> 有值，
+        /// 典型是图纸上划掉的 <c>部品コード</c>）在这里输出成**空格子**：
+        /// 图纸的意思是「这个品番作废」，不是「这一条明细没有」。
         /// </summary>
         public string[][] ToGrid()
         {
@@ -176,7 +219,9 @@ namespace CadPartSplitter
                     if (r < 0 || r >= RowCount || c < 0 || c >= ColumnCount)
                         continue;
 
-                    grid[r][c] = cell.Text ?? string.Empty;
+                    grid[r][c] = string.IsNullOrEmpty(cell.StruckText)
+                        ? (cell.Text ?? string.Empty)
+                        : string.Empty;
                 }
             }
 
