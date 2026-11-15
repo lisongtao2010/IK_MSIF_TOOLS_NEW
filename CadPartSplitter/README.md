@@ -389,6 +389,14 @@ Part_01.png、parts_info.json、tables\ …
   没有任何批注时**不生成**副本（日志 `该 PDF 没有批注 / 图章，直接用原文件识别`）。
 - 同一张图重跑时，`_clean.pdf` 比原 PDF 新就直接复用（日志 `复用上次清理的 PDF`），
   不会每次都重写一遍；想强制重做就删掉这个文件。
+  **复用前会先复核这份副本里还有没有注释** —— 有残留就不用它、重新清理一次
+  （日志 `上次清理的 PDF 里还剩 N 个注释，重新清理一次`）。旧版本删注释的循环写成
+  「删一个 → 看个数有没有变小 → 没变小就停」，而 PDFium 的注释表是懒解析 + 缓存的，
+  删完立刻再数往往还是原来的个数，于是一页上有多个注释时**只删掉最后一个、其余全留着**，
+  日志却照样报「删除 N 个」；这类老副本一旦被复用就永远好不了，所以加了这道复核。
+- 另存之后还会**把生成的文件重新打开数一遍注释**：正常应当是 0；
+  若不是 0，日志会打 `[WARN] 批注清理：另存后的 PDF 里还有 N 个注释没删掉（PDFium 对这类注释不生效）`，
+  说明那几个注释（挂在图层 / 表单域上的图章等）PDFium 摘不掉，仍会画进位图 —— 这种只能人工处理。
 - 清理失败（PDF 加密、`pdfium.dll` 缺失、另存失败……）只记一行
   `[WARN] 批注清理失败（…），改用原 PDF 识别`，**识别照常进行**，不会因此中断。
 - 关闭：命令行加 `--no-strip-annot`（界面无开关，默认开）。
@@ -397,6 +405,23 @@ Part_01.png、parts_info.json、tables\ …
 在 PDF 里就是普通矢量图形或图片，与图纸线条无法区分，那种只能人工处理（或用 Acrobat 的
 「删除图章」后另存）。另外，PDF 表单域（widget annotation）也在注释之列，会一并删除 ——
 图纸一般没有表单域，若某张图依赖它，用 `--no-strip-annot` 关闭本步骤。
+
+**`_clean.pdf` 里为什么还看得到「△4」这类指名视图引用号 / 注記符号**：先看判别方法 ——
+用 Acrobat / Reader 打开**原始 PDF**，右侧「注释」面板里能看到、点它有便签弹出 → 那就是 **PDF 注释**
+（图章 / 便签 / FreeText），本步骤**应当**把它删掉；面板里根本没有 → 那是**画在图面上**的内容
+（CAD 把「三角形框 + 里面的数字」当图形 / 符号插进内容流），本步骤按设计不动它。
+
+- **是注释却没删掉**：这是本步骤的缺陷，已在 `PdfAnnotationStripper.TryStrip` 修掉 ——
+  旧写法删完一个就按「个数没变小」判断停手（PDFium 注释表缓存导致误判），
+  一页多个注释时只删掉最后一个；现在按索引把该页的注释全删一遍，
+  另存后还会重新打开复核（见上一条）。重跑时把老的 `_clean.pdf` 留着也没关系：
+  复用前会复核，有残留就自动重做。若复核出来仍 `> 0`，日志会告警，
+  那种（挂在图层 / 表单域上的）PDFium 摘不掉，只能人工删。
+- **是图面内容**：本步骤只调 `FPDFPage_RemoveAnnot` 删注释，内容流里的图形 / 文字一概不碰，
+  所以 `_clean.pdf` 会原样保留它们（`Part_01.png` 等渲染图里也照样有）。
+  要连图面内容一起去掉，需要另外做「删页面对象 / 白塗り」的一步（PDFium 的
+  `FPDFPage_GetObject` + `FPDFPage_RemoveObject` + `FPDFPage_GenerateContent`，
+  或渲染后按矢量轮廓涂白），**目前没有实现**。
 
 ## 输出
 
@@ -1446,7 +1471,7 @@ No.,部品名称,部品番号
 | `SplitResult.cs` | 接口返回模型：成功标志、退出码、零件列表、输出目录、日志、耗时 |
 | `PartSplitterService.cs` | 「加载文件 → 检测分割 → 落盘」流程封装，GUI 与 CLI 共用（输出目录留空时落到 `<输入文件目录>\AiAppData\<图纸名>` 并自动创建；PDF 先推断表格块，再检测；写 `parts_info.json` / `parts_text.txt` / `callouts.txt` / `outside_info.json` / `outside_text.txt` / `tables_info.json` / `tables_text.txt` / `tables\*.csv` / `PdfInfoList.txt`（PDF 信息：页数 / 页面尺寸 / 图面分类）；PDF 表格落盘后先展开「下表参照 / 左上表参照」写 `01_アッセンブリ図_部品機能情報.csv`（旧名 `LT_STEP1.csv`；只有图面分类为アッセンブリ図时才写），**最后**再摊平品種表 / 単純部品表写 `02_要領図_部品機能情報.csv`（旧名 `LT_STEP2.csv`；只有图面分类为要領図时才写）；`Run(..., out List<RuledTable>)` 把表格一并返回给接口层） |
 | `PdfRenderer.cs` | PDF → OpenCV Mat（Docnet.Core / PDFium） |
-| `PdfAnnotationStripper.cs` | 识别前的 PDF 预处理：用 PDFium 的 `FPDFPage_RemoveAnnot` 删掉页面上的批注 / 图章，`FPDF_SaveAsCopy` 另存 `<图纸名>_clean.pdf`（在 AiAppData 的该图纸文件夹里），把这份干净 PDF 交给 `PartSplitterService` 识别；没有批注时不生成副本，失败只告警并退回原 PDF |
+| `PdfAnnotationStripper.cs` | 识别前的 PDF 预处理：用 PDFium 的 `FPDFPage_RemoveAnnot` 删掉页面上的批注 / 图章（按索引把该页注释全删一遍 —— 旧的「删一个再数个数的写法」在 PDFium 注释表缓存下会只删掉最后一个），`FPDF_SaveAsCopy` 另存 `<图纸名>_clean.pdf`（在 AiAppData 的该图纸文件夹里）；另存后 `TryCountAnnotations` 把文件重新打开复核注释数，残留则在日志里告警；复用上次那份 `_clean.pdf` 之前也复核（有残留就重做，不吃缓存）。把这份干净 PDF 交给 `PartSplitterService` 识别；没有批注时不生成副本，失败只告警并退回原 PDF |
 | `PartDetector.cs` | 核心图像处理与零件裁切：二值化、图框擦除、表格遮蔽（块 / 列 / 固定比例）、形态学、轮廓筛选、合并、文字行占比筛除（`DropTextHeavyRects`）（`MaskStartX` 对外暴露表格区起点） |
 | `PartTextExtractor.cs` | 读 PDF 文字层：`DetectTableAreas` 推断表格 / 表題欄矩形；框内按重叠率归属各零件图 → 分行（`GroupIntoLines`）→ 逐词（`BuildWordLines`，默认）/ 按行（`BuildLines`）整理清单；框外分「表格区 / 其它」并重组成表→行→单元格；`ReadTextLineBoxes` 提供整页文字行框供占比筛除 |
 | `PartText.cs` | 词级文字坐标模型、清单行模型（`PartTextLine`）、表格行列模型、页面矩形 `PageRect`、页面文字结果模型 |
