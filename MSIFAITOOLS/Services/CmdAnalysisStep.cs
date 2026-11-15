@@ -70,12 +70,13 @@ namespace MSIFAITOOLS.Services
     /// <see cref="CmdPartAnalysisService"/> 的日志、界面提示与
     /// <c>docs\CMD分析_步骤命名.md</c> 都按这里的名字写，避免各处叫法不一致。
     ///
-    /// 点一次【CMD 分析】依次执行<b>（勾选时先跑）第 0 步 + 最前面 1 步 + 第 1~6 步</b>
+    /// 点一次【CMD 分析】依次执行<b>第 0 步（固定最先执行）+ 最前面 1 步 + 第 1~6 步</b>
     /// （按钮名字不变，仍是「一次性跑完」）：
     /// <list type="number">
     ///   <item><b>第 0 步 特注品.json 维护</b>（<see cref="CmdTzJsonMaintainer"/>，代号 <c>S0M</c>，
-    ///         <b>界面上勾选 checkbox 才执行</b>）：遍历 PDF 文件夹里文件名第 5 位是 <c>Z</c> 的 xlsx，
-    ///         读部品表 → 用 AI 判定哪些条目要追加进 <c>classify\特注品.json</c>（AI 说要加的才加）；</item>
+    ///         <b>固定最先执行</b>）：遍历 PDF 文件夹里文件名第 5 位是 <c>Z</c> 的 xlsx，
+    ///         <b>只处理 特注品.json 里还没有的文件</b>（json 里已有这个文件的条目时跳过，不送 AI）→
+    ///         让 AI 读取该文件补足 <c>classify\特注品.json</c>（AI 说要加的才加）；</item>
     ///   <item><b>最前面 · 特注品 CSV 生成</b>（<see cref="CmdSpecialProductCsvExporter"/>，代号 <c>S0C</c>，
     ///         不占「第 N 步」编号）：遍历 PDF 文件夹下的 <c>*.xlsx</c>，文件名第 5 位是 <c>Z</c>
     ///         （= 特注品）的读部品表，生成 <c>AiAppData\&lt;文件名&gt;\特注品.csv</c>
@@ -246,15 +247,18 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 日志里的「执行步骤」计划行：
-        /// <c>执行步骤：共 7 步 —— 最前面 · 特注品 CSV 生成 → 第 1 步 · 装配图部品入库 → …
-        /// → 第 6 步 · 使い分け自動設定</c>。
-        /// 「步数」= 最前面 1 步 + 第 1~6 步（第 0 步 分解与分类不属于本按钮，不计入）。
+        /// <c>执行步骤：第 0 步 · 特注品.json 维护（固定最先执行）→ 共 7 步 —— 最前面 · 特注品 CSV 生成 →
+        /// 第 1 步 · 装配图部品入库 → … → 第 6 步 · 使い分け自動設定</c>。
+        /// 「共 N 步」只数 最前面 1 步 + 第 1~6 步；<b>第 0 步（特注品.json 维护）固定最先执行</b>，
+        /// 另外那一步「分解与分类」（【开始分解】）不属于本按钮，不计入。
         /// </summary>
         public static string PlanText
         {
             get
             {
-                return string.Format("执行步骤：共 {0} 步 —— {1} → {2} → {3} → {4} → {5} → {6} → {7}",
+                return string.Format(
+                    "执行步骤：第 0 步 · 特注品.json 维护（固定最先执行）→ 共 {0} 步 —— {1} → {2} → " +
+                    "{3} → {4} → {5} → {6} → {7}",
                     UsageKindNumber + 1, SpecialProductCsvStep.Label, AssemblyStep.Label,
                     CalloutSplitStep.Label, YoryoAppendStep.Label, TzAppendStep.Label, PartCodeStep.Label,
                     UsageKindStep.Label);
@@ -262,15 +266,16 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 第 0 步的编号（0）：点【CMD 分析】时排在最前面**特注品 CSV 生成**之前，
-        /// 界面上由 checkbox（第 0 步 · 特注品.json 维护）决定是否执行（勾选才跑）。
+        /// 第 0 步的编号（0）：点【CMD 分析】时<b>固定最先执行</b>，排在**特注品 CSV 生成**之前
+        /// （界面上已经没有 checkbox，不能关掉）。
         /// </summary>
         public const int MaintainTzJsonNumber = 0;
 
         /// <summary>
         /// 第 0 步 · 特注品.json 维护（<see cref="CmdTzJsonMaintainer"/>）：
-        /// 遍历 PDF 文件夹下文件名第 5 位是 <c>Z</c> 的 xlsx，用 AI 判定部品表里的条目
-        /// 是否要追加进 <c>classify\特注品.json</c> —— AI 说要加的才加。
+        /// 遍历 PDF 文件夹下文件名第 5 位是 <c>Z</c> 的 xlsx，<b>只处理 特注品.json 里还没有的文件</b>
+        /// （json 里已有该文件的条目时跳过，不读 Excel、不送 AI），
+        /// 让 AI 读取该文件判定部品表里的条目是否要追加进 <c>classify\特注品.json</c> —— AI 说要加的才加。
         /// </summary>
         public static CmdAnalysisStep MaintainTzJsonStep
         {
@@ -351,12 +356,12 @@ namespace MSIFAITOOLS.Services
     /// </summary>
     internal enum CmdAnalysisStepKind
     {
-        /// <summary>一次跑完 6 步（= 主按钮【CMD 分析】，旧行为）。</summary>
+        /// <summary>一次跑完 第 0 步 + 最前面 1 步 + 第 1~6 步（= 主按钮【CMD 分析】）。</summary>
         All = 0,
 
         /// <summary>
         /// 第 0 步 特注品.json 维护：点分步执行区的【第 0 步】按钮可单独跑；
-        /// 主按钮【CMD 分析】时要 checkbox 勾选才跑（排在「最前面」那步之前）。
+        /// 主按钮【CMD 分析】时<b>固定最先执行</b>（排在「最前面」那步之前，界面上没有开关）。
         /// 编号是 0，与 <see cref="All"/> 的值相同会撞 case 标签，所以这里另给 100。
         /// </summary>
         MaintainTzJson = 100,

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -22,6 +23,8 @@ namespace MSIFAITOOLS
     /// 窗口顶部会按同一行的「部品名」（<c>colPartName</c>）去置换表
     /// （SQL Server 表 <c>DL_BuhinBuzaiMapping</c>）查出对应的部材名，点那一行就直接写入。
     /// 删除 / 追加行以<b>选中单元格所在的行</b>为基准（<see cref="GetSelectedRows"/>）。
+    /// <b>右键菜单</b>（Excel 那样）：在表格上点右键 →「在上方插入行」「在下方插入行」「删除行」，
+    /// 作用在右键的那一行上（见 <see cref="InitializePartsContextMenu"/>）。
     /// </para>
     /// </summary>
     internal sealed partial class PartBasicInfoForm : Form
@@ -52,6 +55,27 @@ namespace MSIFAITOOLS
 
         /// <summary>部品基本信息窗口是否已按屏幕摆放（只摆一次，之后保留用户拖动的位置）。</summary>
         private bool _editorPlaced;
+
+        /// <summary>
+        /// 表格的右键菜单（Excel 那样）：<b>在上方插入行</b> / <b>在下方插入行</b> / <b>删除行</b>。
+        /// 由 <see cref="InitializePartsContextMenu"/> 用代码创建（这块表格的列本来就是代码建的）。
+        /// </summary>
+        private ContextMenuStrip _partsMenu;
+
+        /// <summary>右键菜单「在上方插入行」：插到右键那一行的上面。</summary>
+        private ToolStripMenuItem _menuInsertRowAbove;
+
+        /// <summary>右键菜单「在下方插入行」：插到右键那一行的下面。</summary>
+        private ToolStripMenuItem _menuInsertRowBelow;
+
+        /// <summary>右键菜单「删除行」（选中多行时文字变成「删除选中的 N 行」）。</summary>
+        private ToolStripMenuItem _menuDeleteRow;
+
+        /// <summary>
+        /// 这一次鼠标按下是不是<b>右键</b>：右键 = 弹出菜单（插入行 / 删除行），
+        /// 不能像左键那样进入编辑 / 打开「选择部材名」窗口（见 <see cref="DgvParts_CellClick"/>）。
+        /// </summary>
+        private bool _rightClickInProgress;
 
         /// <summary>
         /// 「部品コード」为空时该单元格的背景色（粉红色）—— 表示这个值不是图纸 / CSV 给的，
@@ -209,6 +233,7 @@ namespace MSIFAITOOLS
         {
             InitializeComponent();
             InitializePartsGrid();
+            InitializePartsContextMenu();
             _databasePath = string.IsNullOrWhiteSpace(databasePath) ? null : databasePath.Trim();
         }
 
@@ -329,6 +354,12 @@ namespace MSIFAITOOLS
         /// <summary>把部品明细填入表格（填表期间不产生脏标记）。</summary>
         private void PopulateParts(IList<PartBasicInfo> parts)
         {
+            // 换图 / 重新载入时先把「部品名」候选列表收掉（旧的候选项 / 编辑框引用都已经失效）
+            DetachPartNameCandidateEditor();
+
+            // 「部材部品」表可能刚被保存流程（RegisterRules）写过 → 丢掉缓存，下次重新读
+            InvalidateMemberPartCatalogCache();
+
             _suppressGridEvents = true;
 
             try
@@ -475,10 +506,58 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 「追加行」：在当前选中行的下方插入一行（未选中任何行时追加到表格末尾）。
-        /// 页码沿用插入点上一行，番号取其下一个。
+        /// 表格的右键菜单（Excel 那样）：<b>在上方插入行</b> / <b>在下方插入行</b> / <b>删除行</b>。
+        /// 作用对象 = 右键点到的行（右键时先把那一格设为当前选中格，见 <see cref="DgvParts_CellMouseDown"/>）；
+        /// 具体动作和按钮【追加行】/【删除行】完全一样（<see cref="InsertBlankRow"/> / <see cref="DeleteSelectedRows"/>），
+        /// 所以确认提示、未保存标记、序号重排都一致。
+        /// </summary>
+        private void InitializePartsContextMenu()
+        {
+            _partsMenu = new ContextMenuStrip();
+            _partsMenu.ShowItemToolTips = true;
+
+            _menuInsertRowAbove = new ToolStripMenuItem("在上方插入行");
+            _menuInsertRowAbove.Click += MenuInsertRowAbove_Click;
+
+            _menuInsertRowBelow = new ToolStripMenuItem("在下方插入行");
+            _menuInsertRowBelow.Click += MenuInsertRowBelow_Click;
+
+            _menuDeleteRow = new ToolStripMenuItem("删除行");
+            _menuDeleteRow.Click += MenuDeleteRow_Click;
+
+            _partsMenu.Items.Add(_menuInsertRowAbove);
+            _partsMenu.Items.Add(_menuInsertRowBelow);
+            _partsMenu.Items.Add(new ToolStripSeparator());
+            _partsMenu.Items.Add(_menuDeleteRow);
+
+            // 每次弹出前按当前状态启用 / 禁用（一行都没有时不能删；还没有図番时什么都不能做）
+            _partsMenu.Opening += PartsMenu_Opening;
+
+            dgvParts.ContextMenuStrip = _partsMenu;
+
+            // 一行都没有时表格被 lblEmpty 挡着：让它也弹同一个菜单
+            //（这时没有参照行，「上 / 下方插入」都等于追加到末尾 = 建第一行）
+            lblEmpty.ContextMenuStrip = _partsMenu;
+        }
+
+        /// <summary>
+        /// 【追加行】按钮：在选中行的<b>下方</b>插入一行（未选中任何行时追加到表格末尾）。
         /// </summary>
         private void BtnAddRow_Click(object sender, EventArgs e)
+        {
+            InsertBlankRow(false);
+        }
+
+        /// <summary>
+        /// 在选中行的上方 / 下方插入一行空白行（右键菜单「在上方插入行」「在下方插入行」；
+        /// 【追加行】按钮 = 在下方插入）。插完直接进入「部品名」的编辑。
+        /// <para>
+        /// 页码沿用参照行，番号取其下一个（和原来的【追加行】一致）；
+        /// 表格里一行都没有时按「页码 1 / 番号 1」建第一行。
+        /// </para>
+        /// </summary>
+        /// <param name="above">true = 插在选中行的上方；false = 插在选中行的下方（没有选中行时追加到末尾）。</param>
+        private void InsertBlankRow(bool above)
         {
             if (_drawingNo.Length == 0)
             {
@@ -489,9 +568,20 @@ namespace MSIFAITOOLS
 
             dgvParts.EndEdit();
 
-            // 插入位置 = 选中行（多选时取最靠下的行）的下一行；没有选中行时插到末尾
-            DataGridViewRow anchor = GetInsertAnchorRow();
-            int insertIndex = anchor == null ? dgvParts.Rows.Count : anchor.Index + 1;
+            // 参照行 = 选中行（往上插取最靠上的、往下插取最靠下的）；没有选中行时取当前单元格所在行；
+            // 都没有（或表是空的）就追加到末尾
+            DataGridViewRow anchor = GetInsertAnchorRow(!above);
+            int insertIndex;
+
+            if (anchor == null)
+            {
+                insertIndex = dgvParts.Rows.Count;
+            }
+            else
+            {
+                insertIndex = above ? anchor.Index : anchor.Index + 1;
+            }
+
             int page = 1;
             int number = 1;
 
@@ -567,16 +657,19 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 取「追加行」的参照行（插入点上一行）：优先取选中行中最靠下的一行，
-        /// 没有选中行时取当前单元格所在行；表格为空时返回 null（表示追加到末尾）。
+        /// 取「插入行 / 追加行」的参照行：优先取选中的行（<paramref name="bottomMost"/> = <c>true</c> 取最靠下的一行，
+        /// <c>false</c> 取最靠上的一行），没有选中行时取当前单元格所在行；表格为空时返回 <c>null</c>
+        /// （表示追加到末尾）。
         /// </summary>
-        private DataGridViewRow GetInsertAnchorRow()
+        /// <param name="bottomMost">true = 选中的多行里取最靠下的；false = 取最靠上的。</param>
+        private DataGridViewRow GetInsertAnchorRow(bool bottomMost)
         {
             DataGridViewRow anchor = null;
 
             foreach (DataGridViewRow row in GetSelectedRows())
             {
-                if (anchor == null || row.Index > anchor.Index)
+                if (anchor == null ||
+                    (bottomMost ? row.Index > anchor.Index : row.Index < anchor.Index))
                 {
                     anchor = row;
                 }
@@ -693,6 +786,129 @@ namespace MSIFAITOOLS
 
             RenumberRows();
             SetDirty(true);
+        }
+
+        /// <summary>右键菜单「在上方插入行」：在右键那一行的上面插一行空白行。</summary>
+        private void MenuInsertRowAbove_Click(object sender, EventArgs e)
+        {
+            InsertBlankRow(true);
+        }
+
+        /// <summary>右键菜单「在下方插入行」：在右键那一行的下面插一行空白行。</summary>
+        private void MenuInsertRowBelow_Click(object sender, EventArgs e)
+        {
+            InsertBlankRow(false);
+        }
+
+        /// <summary>右键菜单「删除行」：和【删除行】按钮一样删掉选中的行（会先确认）。</summary>
+        private void MenuDeleteRow_Click(object sender, EventArgs e)
+        {
+            DeleteSelectedRows();
+        }
+
+        /// <summary>
+        /// 右键菜单打开前：按当前状态启用 / 禁用各项，并把「删除行」的文字换成这次要删的行数。
+        /// </summary>
+        private void PartsMenu_Opening(object sender, CancelEventArgs e)
+        {
+            bool hasDrawingNo = _drawingNo.Length > 0;
+
+            // 没有図番时空白行存不进数据库（保存会报「无法解析出図番」）→ 两个插入项置灰
+            _menuInsertRowAbove.Enabled = hasDrawingNo;
+            _menuInsertRowBelow.Enabled = hasDrawingNo;
+
+            int targetRowCount = CountMenuTargetRows();
+
+            _menuDeleteRow.Enabled = hasDrawingNo && targetRowCount > 0;
+            _menuDeleteRow.Text = targetRowCount > 1 ? "删除选中的 " + targetRowCount + " 行" : "删除行";
+
+            DataGridViewRow anchorAbove = GetInsertAnchorRow(false);
+            DataGridViewRow anchorBelow = GetInsertAnchorRow(true);
+
+            _menuInsertRowAbove.ToolTipText = anchorAbove == null
+                ? "追加到表格末尾（没有选中行）"
+                : "在第 " + (anchorAbove.Index + 1) + " 行的上方插入一行空白行";
+
+            _menuInsertRowBelow.ToolTipText = anchorBelow == null
+                ? "追加到表格末尾（没有选中行）"
+                : "在第 " + (anchorBelow.Index + 1) + " 行的下方插入一行空白行";
+        }
+
+        /// <summary>
+        /// 右键点表格：先把「这一格」设为当前选中格，再弹出右键菜单
+        /// （和 Excel 一样，菜单作用在右键的那一行；Ctrl 多选时保持多选，一次删多行）。
+        /// <para>
+        /// 点的是表头（<c>RowIndex &lt; 0</c>）时不动当前选中格；
+        /// 右键不进入编辑 / 不打开「选择部材名」窗口 —— <see cref="DgvParts_CellClick"/> 靠
+        /// <see cref="_rightClickInProgress"/> 区分左右键。
+        /// </para>
+        /// </summary>
+        private void DgvParts_CellMouseDown(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            _rightClickInProgress = e.Button == MouseButtons.Right;
+
+            if (!_rightClickInProgress || e.RowIndex < 0 || e.ColumnIndex < 0)
+            {
+                return;
+            }
+
+            if (e.RowIndex >= dgvParts.Rows.Count || e.ColumnIndex >= dgvParts.Columns.Count)
+            {
+                return;
+            }
+
+            DataGridViewCell cell = dgvParts.Rows[e.RowIndex].Cells[e.ColumnIndex];
+
+            if (cell == null || cell.Selected)
+            {
+                // 已经选中的格子（Ctrl 多选的那几行）保持原样：删除时一次删这几行
+                return;
+            }
+
+            // 正在编辑别的格子时先提交，别把用户刚打的字丢掉
+            if (dgvParts.IsCurrentCellInEditMode)
+            {
+                try
+                {
+                    dgvParts.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                }
+                catch (Exception)
+                {
+                    // 提交失败（下拉列的值不在候选里等）→ 照样把这一格设为当前格
+                }
+            }
+
+            try
+            {
+                dgvParts.CurrentCell = cell;
+            }
+            catch (Exception)
+            {
+                // 设置失败（表格不可用等）→ 保持原来的选中格，菜单仍按现在的选中行工作
+            }
+        }
+
+        /// <summary>
+        /// 右键菜单「删除行」这次会删几行：优先选中的行（可多行），
+        /// 没有选中的行时算当前单元格所在行；都没有时返回 0（菜单项置灰）。
+        /// </summary>
+        private int CountMenuTargetRows()
+        {
+            List<DataGridViewRow> rows = GetSelectedRows();
+
+            if (rows.Count > 0)
+            {
+                return rows.Count;
+            }
+
+            DataGridViewCell cell = dgvParts.CurrentCell;
+
+            if (cell != null && cell.OwningRow != null && !cell.OwningRow.IsNewRow)
+            {
+                return 1;
+            }
+
+            return 0;
         }
 
         /// <summary>「刷新」：重新从数据库读取当前図番的部品明细（会丢弃未保存的修改）。</summary>
@@ -1675,6 +1891,7 @@ namespace MSIFAITOOLS
         /// 单击单元格：只选中<b>这一格</b>（不再整行选中），并<b>直接进入编辑、把内容全选</b>
         /// （EditMode 是 <c>EditOnKeystrokeOrF2</c>，不手动 BeginEdit 的话要点两次才可以改）。
         /// <list type="bullet">
+        ///   <item><b>右键</b>（<see cref="_rightClickInProgress"/>）→ 只弹右键菜单（插入行 / 删除行），不进入编辑；</item>
         ///   <item>「部材名」→ 打开「选择部材名」窗口（<see cref="ShowMemberNamePicker"/>），不进入普通编辑；</item>
         ///   <item>只读列（No / 参照元 / 数据来源 / 登录时间）→ 只选中单元格；</item>
         ///   <item>其它列 → 选中 + 进入编辑 + 全选（再打一个字就替换掉原来的值）。</item>
@@ -1682,6 +1899,12 @@ namespace MSIFAITOOLS
         /// </summary>
         private void DgvParts_CellClick(object sender, DataGridViewCellEventArgs e)
         {
+            if (_rightClickInProgress)
+            {
+                // 右键 = 弹出右键菜单（插入行 / 删除行），不要进入编辑 / 不要打开「选择部材名」
+                return;
+            }
+
             if (_suppressGridEvents || e.RowIndex < 0 || e.ColumnIndex < 0)
             {
                 return;
@@ -2017,7 +2240,31 @@ namespace MSIFAITOOLS
                 e.Handled = true;
                 e.SuppressKeyPress = true;
                 SaveParts();
+                return;
             }
+
+            // F4：在当前「部品名」单元格上开关候选列表（输入内容为空也可以打开，方便挑一个常用的）
+            if (e.KeyCode == Keys.F4 && !e.Control && !e.Alt)
+            {
+                if (IsPartNameCellInUse())
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    TogglePartNameCandidates();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 当前单元格是不是正在编辑的「部品名」（<see cref="PartNameColumnName"/>）：
+        /// 候选列表 / F4 只对这一列生效，别的列（数量 / 部品コード 等）照常输入数字。
+        /// </summary>
+        private bool IsPartNameCellInUse()
+        {
+            DataGridViewCell cell = dgvParts.CurrentCell;
+
+            return cell != null && dgvParts.ContainsFocus &&
+                string.Equals(cell.OwningColumn.Name, PartNameColumnName, StringComparison.Ordinal);
         }
 
         /// <summary>关闭前确认未保存的修改（系统关机/任务管理器结束时不询问）。</summary>
@@ -2067,6 +2314,9 @@ namespace MSIFAITOOLS
 
             // 「选择部材名」窗口是 Owned 窗口（正常情况下会随本画面一起关闭），这里再显式收一次尾
             CloseMemberNamePicker();
+
+            // 「部品名」候选窗口同理（Owned 窗口，隐藏后复用，这里释放掉）
+            ClosePartNameCandidatePopup();
 
             // Close() 会触发 FormClosed，所以先把引用取到局部变量再关闭
             if (preview != null && !preview.IsDisposed)

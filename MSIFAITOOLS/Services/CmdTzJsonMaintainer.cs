@@ -49,6 +49,15 @@ namespace MSIFAITOOLS.Services
         /// <summary>维护前 特注品.json 里已有的条目数。</summary>
         public int ExistingRowCount { get; set; }
 
+        /// <summary>
+        /// <c>特注品.json</c> 里<b>已经有这个文件的条目</b>、所以本次没读 Excel 也没送 AI 的文件个数
+        /// （只补 json 里还没有的文件）。
+        /// </summary>
+        public int ExistingFileSkippedCount { get; set; }
+
+        /// <summary>上面那些被跳过的文件在 <c>特注品.json</c> 里已有的条目数合计（仅供参考）。</summary>
+        public int ExistingFileRowCount { get; set; }
+
         /// <summary>本次开始时 <c>classify\特注品.json</c> 是否存在（不存在 = 按「作成名」让 AI 建一份新的）。</summary>
         public bool JsonExistedAtStart { get; set; }
 
@@ -66,13 +75,22 @@ namespace MSIFAITOOLS.Services
     }
 
     /// <summary>
-    /// 【CMD 分析】<b>第 0 步 · 特注品.json 维护</b>（界面上勾选才执行，排在「最前面 · 特注品 CSV 生成」之前）。
+    /// 【CMD 分析】<b>第 0 步 · 特注品.json 维护</b>（主按钮【CMD 分析】<b>固定最先执行</b>，
+    /// 排在「最前面 · 特注品 CSV 生成」之前；界面上没有开关）。
     ///
     /// <para>
     /// 遍历 PDF 文件夹里文件名第 5 位是 <c>Z</c>（特注品）的 Excel，把<b>整份文件的表格原文</b>
     /// （所有工作表 + 行号 + 单元格原文，见 <see cref="ExcelSheetDumper"/>）交给 AI，
     /// <b>由 AI 自己认出部品表并判断哪些条目需要追加到 <c>classify\特注品.json</c></b>；
     /// AI 说「不用追加」的文件不动 json，说「要追加」的按 AI 给出的条目写入。
+    /// </para>
+    ///
+    /// <para>
+    /// <b>只补 json 里还没有的文件</b>：遍历到的特注品 Excel，先看 <c>特注品.json</c> 里有没有
+    /// <b>这个文件</b>（条目的 <c>file</c> 字段）的明细；
+    ///   · 一条都没有（json 里还不包含这个文件）→ 才读 Excel、让 AI 读取并<b>补足</b> json；
+    ///   · 已经有明细 → 这个文件<b>不读 Excel、不送 AI</b>，直接跳过（日志里写「跳过：已在 json 里」）。
+    /// 这样重跑【CMD 分析】时不会对同一份 Excel 反复调用 AI（成本 / 时间都会浪费在重复判定上）。
     /// </para>
     ///
     /// <para>
@@ -113,6 +131,8 @@ namespace MSIFAITOOLS.Services
     /// <para>
     /// <b>安全约定</b>：
     /// <list type="bullet">
+    ///   <item><c>特注品.json</c> 里已经有这个文件的条目时，这个文件<b>不读 Excel、不送 AI</b>
+    ///         （= 只补 json 里还没有的文件；见 <see cref="CountExistingForFile"/>）；</item>
     ///   <item>能在规则解析结果里对上的条目，字段一律用<b>部品表原文</b>（AI 只决定「哪一行要追加」）；</item>
     ///   <item>规则没解析出来的条目（Excel 排版认不出），字段用 <b>AI 从整表原文里读到的原文</b>，
     ///         并且至少要给出「部品名」或「部品コード」，全空的条目丢弃；</item>
@@ -228,6 +248,10 @@ namespace MSIFAITOOLS.Services
         /// <summary>
         /// 执行第 0 步：读 <paramref name="pdfFolder"/> 下第 5 位是 <c>Z</c> 的 Excel，
         /// 用 AI 判定是否把部品追加进 <c>&lt;classifyDirectory&gt;\特注品.json</c>。
+        /// <para>
+        /// <b>只处理 json 里还没有的文件</b>：某个 Excel 在 <c>特注品.json</c> 里已经有条目时，
+        /// 这个文件连 Excel 都不读、也不送 AI（见 <see cref="CountExistingForFile"/>）。
+        /// </para>
         /// </summary>
         /// <param name="pdfFolder">PDF 文件夹（= 分解输出根目录的上一级）。</param>
         /// <param name="classifyDirectory">分类目录（<c>&lt;输出根目录&gt;\classify</c>）。</param>
@@ -387,6 +411,23 @@ namespace MSIFAITOOLS.Services
                 string drawingNo = Path.GetFileNameWithoutExtension(file);
                 List<string> notes = new List<string>();
                 List<TzRow> rows;
+
+                // ── 特注品.json 里已经有这个文件的条目 → 这个文件不用再处理 ──
+                // （要求：只对「json 里还没有的文件」让 AI 读取并补足 json。
+                //   已经登记过的文件再送 AI 也只会被去重逻辑挡掉，白花时间和 token）
+                int existingForThisFile = CountExistingForFile(items, fileName);
+
+                if (existingForThisFile > 0)
+                {
+                    result.ExistingFileSkippedCount++;
+                    result.ExistingFileRowCount += existingForThisFile;
+
+                    PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
+                        "  跳过：{0} 已在 {1} 里（{2} 条明细）→ 不读 Excel、不送 AI",
+                        fileName, TzJsonFileName, existingForThisFile));
+
+                    continue;
+                }
 
                 // 进度直接写日志：result.Notes 要等整个方法返回才统一输出，
                 // AI 调用期间日志一片空白，会让人以为这一步没在跑
@@ -574,7 +615,10 @@ namespace MSIFAITOOLS.Services
             {
                 AddNote(result.Notes, createMode
                     ? TzJsonFileName + " 还不存在，AI 也没给出可用的条目 → 本次没有作成（文件仍未创建）"
-                    : TzJsonFileName + " 没有变化（一条都没追加，不写文件）");
+                    : TzJsonFileName + " 没有变化（一条都没追加，不写文件）" +
+                      (result.ExistingFileSkippedCount > 0
+                          ? "；" + result.ExistingFileSkippedCount + " 个特注品文件已在 json 里，已跳过"
+                          : string.Empty));
 
                 return result;
             }
@@ -1062,6 +1106,42 @@ namespace MSIFAITOOLS.Services
             }
 
             return 0;
+        }
+
+        /// <summary>
+        /// 数一下 <c>特注品.json</c> 里同一份 Excel 已经登记了多少条明细
+        /// （按条目的 <c>file</c> 字段比对，忽略大小写）。
+        /// <para>
+        /// 用途：<b>0 条 = json 里还没有这个文件</b> → 才读 Excel 并让 AI 补足；
+        /// 大于 0 条 → 这个文件已经登记过，第 0 步直接跳过。
+        /// 与 <see cref="CollectExistingForFile"/> 不同，这里<b>不按提示词上限截断</b>，数字是真实条数。
+        /// </para>
+        /// </summary>
+        private static int CountExistingForFile(IEnumerable items, string fileName)
+        {
+            if (items == null || string.IsNullOrEmpty(fileName))
+            {
+                return 0;
+            }
+
+            int count = 0;
+
+            foreach (object item in items)
+            {
+                Dictionary<string, object> map = item as Dictionary<string, object>;
+
+                if (map == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(ReadRawText(map, FileKey), fileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
 
         /// <summary>收集 特注品.json 里同一份 Excel 已经登记的条目（给 AI 参考，避免重复）。</summary>

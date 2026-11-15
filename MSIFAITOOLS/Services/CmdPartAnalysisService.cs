@@ -23,9 +23,13 @@ namespace MSIFAITOOLS.Services
     ///   · CMD 分析：01_アッセンブリ図_部品機能情報.csv → 本工具自己的列名映射 → 部品明细。
     /// 入库方式、校验状态、部品信息画面的显示方式完全一致（同一 DB / 同一表）。
     ///
-    /// 点一次【CMD 分析】依次执行 <b>最前面 1 步 + 第 1~6 步</b>（名字与日志前缀见 <see cref="CmdAnalysisSteps"/>，
+    /// 点一次【CMD 分析】依次执行 <b>第 0 步 + 最前面 1 步 + 第 1~6 步</b>（名字与日志前缀见 <see cref="CmdAnalysisSteps"/>，
     /// 详细说明见 <c>docs\CMD分析_步骤命名.md</c>）：
     /// <list type="number">
+    ///   <item><b>第 0 步 特注品.json 维护</b>（<see cref="CmdTzJsonMaintainer"/>，<b>固定最先执行</b>）：
+    ///         遍历 PDF 文件夹下文件名第 5 位是 <c>Z</c> 的 xlsx，<b>只处理 特注品.json 里还没有的文件</b>
+    ///         （json 里已有这个文件的条目时跳过），让 AI 读取该文件补足 <c>classify\特注品.json</c>。
+    ///         不碰数据库；</item>
     ///   <item><b>最前面 特注品 CSV 生成</b>（<see cref="CmdSpecialProductCsvExporter"/>，不占步骤编号）：
     ///         遍历 PDF 文件夹下的 <c>*.xlsx</c>，文件名第 5 位是 <c>Z</c>（特注品）的读部品表，
     ///         写 <c>AiAppData\&lt;文件名&gt;\特注品.csv</c>。<b>不碰数据库</b>；</item>
@@ -36,8 +40,9 @@ namespace MSIFAITOOLS.Services
     ///   <item><b>第 5 步 部品コード正規化</b>（<see cref="CmdPartCodeNormalizer"/>，含同図番内の重複チェック）。</item>
     ///   <item><b>第 6 步 使い分け自動設定</b>（<see cref="CmdUsageKindCollector"/>）。</item>
     /// </list>
-    /// 这 6 步之前还有 <b>第 0 步 分解与分类</b>（【开始分解】= CadPartSplitter 分割 + 本工具分解 +
-    /// <c>classify\PdfInfoList.txt</c>），它不属于本按钮。
+    /// 这 6 步之前还有 <b><see cref="CmdAnalysisSteps.PrepareStep"/></b>（【开始分解】= CadPartSplitter 分割 +
+    /// 本工具分解 + <c>classify\PdfInfoList.txt</c>），它不属于本按钮
+    /// （它的编号也是 0，但和上面的「第 0 步 特注品.json 维护」是两回事）。
     ///
     /// 追加步骤（第 2 / 3 / 4 / 5 / 6 步，都只对 <c>classify\PdfInfoList.txt</c> 里「図面分类 = アッセンブリ図」的记录生效）：
     /// <list type="number">
@@ -60,6 +65,8 @@ namespace MSIFAITOOLS.Services
     ///         H下限 / H上限 / W下限 / W上限」全相同的 2 行以上，按「部品コード」查
     ///         <c>hiroidashiData</c> 里的 <c>*.xlsx</c> 第 4 列（部品ｺｰﾄﾞ/形材番号）相同的行，
     ///         把第 12 列（使い分け）的值按顺序填到这些行上（只改这一列）。
+    ///         填值前<b>逐行核对</b>该行记录在库里的部品コード 与拾い出し表那条明细的部品ｺｰﾄﾞ
+    ///         （<c>□ / △ / ○ …</c> 按通配，<c>MEA□429</c> = <c>MEACC429</c>），对不上的行<b>不填</b>并记警告。
     ///         <b>放在部品コード 正規化（第 5 步）之后</b>：这时部品コード 已经是 <c>MEA□429</c> 这种写法，
     ///         和拾い出し表一致，查表最准。</item>
     /// </list>
@@ -133,11 +140,13 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 同上，并决定是否执行「<b>第 0 步 · 特注品.json 维护</b>」
-        /// （界面上勾选 checkbox 时传 <c>true</c>）。
+        /// 同上（<paramref name="maintainTzJson"/> 已不再使用，保留只为兼容旧调用）：
+        /// 第 0 步 · 特注品.json 维护由 <paramref name="stepKind"/> 决定 ——
+        /// 主按钮 <see cref="CmdAnalysisStepKind.All"/> 时<b>固定最先执行</b>。
         /// <para>
         /// 第 0 步（<see cref="CmdTzJsonMaintainer"/>）：遍历 PDF 文件夹下文件名第 5 位是 <c>Z</c>
-        /// 的 xlsx，用 AI 判定部品表里的条目是否要追加进 <c>classify\特注品.json</c>，AI 说要加的才加。
+        /// 的 xlsx，<b>只处理 特注品.json 里还没有的文件</b>，让 AI 判定部品表里的条目是否要追加进
+        /// <c>classify\特注品.json</c>，AI 说要加的才加。
         /// 它<b>排在「最前面 · 特注品 CSV 生成」之前</b>：json 先补全，后面那步与第 4 步都能读到更完整的内容。
         /// </para>
         /// <para>
@@ -148,7 +157,7 @@ namespace MSIFAITOOLS.Services
         /// <param name="outputDirectory">分解输出根目录（&lt;PDF 文件夹&gt;\AiAppData）。</param>
         /// <param name="onLog">日志回调（kind, message）。</param>
         /// <param name="stepKind">要执行的步骤（主按钮传 <see cref="CmdAnalysisStepKind.All"/>）。</param>
-        /// <param name="maintainTzJson">是否执行第 0 步 特注品.json 维护（AI 判定）。</param>
+        /// <param name="maintainTzJson">已不再使用（保留只为兼容旧调用）。</param>
         public PartAnalysisSummary AnalyzeAndSave(IList<PdfClassification> classifications,
             string outputDirectory, Action<LogKind, string> onLog, CmdAnalysisStepKind stepKind,
             bool maintainTzJson)
@@ -179,15 +188,16 @@ namespace MSIFAITOOLS.Services
             bool runSpecialProductCsv = stepKind == CmdAnalysisStepKind.All ||
                 stepKind == CmdAnalysisStepKind.SpecialProductCsv;
 
-            // 第 0 步：主按钮【CMD 分析】按界面 checkbox（勾选才跑）；
-            // 单独点【第 0 步 · 特注品.json 维护】按钮时无条件执行（点按钮本身就是明确指令）
+            // 第 0 步：主按钮【CMD 分析】（All）固定最先执行（界面上已经没有开关了）；
+            // 单独点【第 0 步 · 特注品.json 维护】按钮时也只跑这一步；
+            // 其它单步按钮不会连带跑第 0 步（maintainTzJson 参数已不再使用，保留只为兼容旧调用）
             bool runMaintainTzJson = stepKind == CmdAnalysisStepKind.MaintainTzJson ||
-                (maintainTzJson && stepKind == CmdAnalysisStepKind.All);
+                stepKind == CmdAnalysisStepKind.All;
 
             PartAnalysisService.ReportLog(onLog, LogKind.Info, CmdAnalysisSteps.DescribeRun(stepKind));
 
-            // 第 0 步（可单独执行 / 主按钮时勾选才跑）：文件名第 5 位是 Z 的 xlsx →
-            // 用 AI 判定是否追加进 classify\特注品.json
+            // 第 0 步（主按钮固定最先执行 / 也可单独执行）：文件名第 5 位是 Z 的 xlsx →
+            // 只对 特注品.json 里还没有的文件让 AI 读取并补足 classify\特注品.json
             // 排在「最前面 · 特注品 CSV 生成」之前：json 先补全，那一步与第 4 步都能读到更完整的内容
             if (runMaintainTzJson)
             {
@@ -300,9 +310,13 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 【第 0 步】特注品.json 维护（界面上勾选才执行）：PDF 文件夹下文件名第 5 位是 <c>Z</c>
+        /// 【第 0 步】特注品.json 维护（主按钮【CMD 分析】固定最先执行）：PDF 文件夹下文件名第 5 位是 <c>Z</c>
         /// 的 xlsx → 读部品表 → 用 AI 判定哪些条目要追加进 <c>classify\特注品.json</c>
         /// （AI 说要加的才加，见 <see cref="CmdTzJsonMaintainer"/>）。
+        /// <para>
+        /// <b>只补 json 里还没有的文件</b>：某个特注品 Excel 在 <c>特注品.json</c> 里已经有条目时，
+        /// 这个文件连 Excel 都不读、也不送 AI（见 <see cref="CmdTzJsonMaintainer"/>）。
+        /// </para>
         /// <para>
         /// 没配 AI 接口密钥 / <c>特注品.json</c> 解析失败时只记日志，<b>不动 特注品.json</b>。
         /// <c>特注品.json</c> 还不存在时按<b>「作成名」</b>处理：AI 不再判断「追加」，而是把部品表里
@@ -321,7 +335,7 @@ namespace MSIFAITOOLS.Services
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Empty);
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
                 "{0}扫描 {1} 下的 xlsx（文件名第 {2} 位是 {3} = 特注品）→ 交给 AI 处理 {4}" +
-                "（已存在=判定追加 / 还没存在=作成名）",
+                "（只处理 json 里还没有的文件；已存在=判定追加 / 还没存在=作成名）",
                 CmdAnalysisSteps.MaintainTzJsonStep.LogHeader, pdfDirectory,
                 CmdSpecialProductRule.DrawingNoPosition, CmdSpecialProductRule.DrawingNoMark, jsonPath));
 
@@ -366,10 +380,10 @@ namespace MSIFAITOOLS.Services
                 result.AddedRowCount > 0 ? LogKind.Success : LogKind.Info,
                 string.Format(
                     "  完成：扫描 {0} 个 Excel（特注品 {1} 个），AI 调用 {2} 次，追加 {3} 条" +
-                    "（不追加 {4} 个 / 重复跳过 {5} 条 / 失败 {6} 个）{7}",
+                    "（不追加 {4} 个 / 重复跳过 {5} 条 / json 已有跳过 {6} 个文件 / 失败 {7} 个）{8}",
                     result.ScannedFileCount, result.SpecialProductFileCount, result.AiCallCount,
                     result.AddedRowCount, result.AiRejectedFileCount, result.SkippedDuplicateCount,
-                    result.AiFailedFileCount,
+                    result.ExistingFileSkippedCount, result.AiFailedFileCount,
                     result.JsonCreated
                         ? "，已新建 " + result.TzJsonPath
                         : result.Written ? "，已写回 " + result.TzJsonPath : "，未写文件"));
@@ -377,13 +391,30 @@ namespace MSIFAITOOLS.Services
             // “AI 调用 0 次”容易被当成故障：这里直接说清是哪种情况
             if (result.AiCallCount == 0)
             {
-                PartAnalysisService.ReportLog(onLog, LogKind.Warning, result.SpecialProductFileCount == 0
-                    ? "  本次没有调用 AI：文件名第 " + CmdSpecialProductRule.DrawingNoPosition + " 位是 " +
-                      CmdSpecialProductRule.DrawingNoMark + " 的 Excel 一个都没有"
-                    : string.Format(
-                        "  本次没有调用 AI：特注品 Excel 有 {0} 个，但部品表都没读到明细" +
+                string noAiReason;
+
+                if (result.SpecialProductFileCount == 0)
+                {
+                    noAiReason = "文件名第 " + CmdSpecialProductRule.DrawingNoPosition + " 位是 " +
+                        CmdSpecialProductRule.DrawingNoMark + " 的 Excel 一个都没有";
+                }
+                else if (result.ExistingFileSkippedCount > 0 &&
+                    result.ExistingFileSkippedCount == result.SpecialProductFileCount)
+                {
+                    // 全部特注品文件在 json 里都已经有条目：不是故障，是「只补没有的文件」的正常结果
+                    noAiReason = string.Format(
+                        "特注品 Excel {0} 个在 {1} 里都已经有条目（只补 json 里还没有的文件），全部跳过",
+                        result.SpecialProductFileCount, CmdTzPartCollector.FileName);
+                }
+                else
+                {
+                    noAiReason = string.Format(
+                        "特注品 Excel 有 {0} 个，但部品表都没读到明细" +
                         "（见上面的提示：读不到部品表就不会送 AI）",
-                        result.SpecialProductFileCount));
+                        result.SpecialProductFileCount);
+                }
+
+                PartAnalysisService.ReportLog(onLog, LogKind.Warning, "  本次没有调用 AI：" + noAiReason);
             }
         }
 
@@ -1119,9 +1150,13 @@ namespace MSIFAITOOLS.Services
         ///
         /// <para>规则：</para>
         /// <list type="bullet">
-        ///   <item>组内行按「页码 → 番号」排序，第 i 行取拾い出し表里该部品コード的第 i 个值；</item>
+        ///   <item>组内行按「页码 → 番号」排序，依次取拾い出し表里该部品コード 的值（见下面第 4 条）；</item>
         ///   <item>找到的值比行数少时，多出来的行保持原样（不写空值）；</item>
         ///   <item>该行已经有「使い分け」（手工填过）时不覆盖，重复执行不会改掉人工数据；</item>
+        ///   <item><b>逐行核对部品コード</b>：填值前把这一行<b>记录在库里的部品コード</b>和拾い出し表那条明细
+        ///         自己记录的「部品ｺｰﾄﾞ/形材番号」再比一次（<see cref="CmdUsageKindCollector.PartCodeMatches"/>，
+        ///         <c>□ / △ / ○ …</c> 按通配处理）—— 对不上的行<b>不填</b>，记警告后跳过，
+        ///         绝不会把别的部品コード 的「使い分け」写进来；</item>
         ///   <item>7 个字段相同但只有 1 行时不算「两条数据都一样」，不处理。</item>
         /// </list>
         /// <para>
@@ -1141,7 +1176,7 @@ namespace MSIFAITOOLS.Services
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Empty);
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
                 "{0}同一図番内「区分 / 参照元 / 部品コード / H下限 / H上限 / W下限 / W上限」全同的 2 行以上 " +
-                "→ 按部品コード查 {1} 里的 xlsx 第 4 列 → 依次填入第 12 列「使い分け」",
+                "→ 按部品コード查 {1} 里的 xlsx 第 4 列 → 逐行核对部品コード 后填入第 12 列「使い分け」",
                 CmdAnalysisSteps.UsageKindStep.LogHeader, CmdUsageKindCollector.FolderName));
 
             List<string> notes = new List<string>();
@@ -1212,7 +1247,8 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 一个図番的第 6 步：读该図番的行 → 按 7 个字段分组 → 组内按顺序填「使い分け」→ 只更新这一列。
+        /// 一个図番的第 6 步：读该図番的行 → 按 7 个字段分组 → 组内<b>逐行核对部品コード 后</b>填「使い分け」
+        /// → 只更新这一列。
         /// </summary>
         private static void AssignUsageKindsForDrawing(string drawingNo, PartBasicInfoRepository repository,
             CmdUsageKindIndex index, PartAnalysisSummary summary, Action<LogKind, string> onLog)
@@ -1236,9 +1272,11 @@ namespace MSIFAITOOLS.Services
 
             foreach (UsageKindGroup group in groups)
             {
-                List<string> values = index.FindUsageKinds(group.PartCode);
+                // 拾い出し表里该部品コード 的明细：每条都带着它自己记录的 部品コード / 来源文件 / 行号，
+                // 下面填值前要逐行核对（不是只按顺序硬填）
+                List<CmdUsageKindEntry> entries = index.FindEntries(group.PartCode);
 
-                if (values.Count == 0)
+                if (entries.Count == 0)
                 {
                     summary.UsageKindMissGroupCount++;
 
@@ -1250,28 +1288,47 @@ namespace MSIFAITOOLS.Services
                 }
 
                 List<string> assigned = new List<string>();
+                int mismatchCount = 0;
 
-                for (int position = 0; position < group.Parts.Count && position < values.Count; position++)
+                for (int position = 0; position < group.Parts.Count && position < entries.Count; position++)
                 {
                     PartBasicInfo part = group.Parts[position];
+                    CmdUsageKindEntry entry = entries[position];
 
                     if (!string.IsNullOrWhiteSpace(part.UsageKind))
                     {
-                        // 已经有值（手工填过 / 上次已填）：不覆盖
+                        // 已经有值（手工填过 / 上次已填）：不覆盖（这一条明细仍按位置算用掉了）
                         continue;
                     }
 
-                    part.UsageKind = values[position];
+                    // 填值前逐行核对：这一行「记录在库里的部品コード」必须和拾い出し表这条明细记录的
+                    // 部品ｺｰﾄﾞ 一致（□ / △ / ○ … 按通配，MEA□429 = MEACC429）；对不上就不填
+                    if (!CmdUsageKindCollector.PartCodeMatches(part.PartCode, entry.PartCode))
+                    {
+                        mismatchCount++;
+
+                        PartAnalysisService.ReportLog(onLog, LogKind.Warning, string.Format(
+                            "  {0}：番号 {1} 的部品コード「{2}」与拾い出し表 {3} 第 {4} 行的「{5}」对不上，" +
+                            "这一行不填 使い分け",
+                            drawingNo, part.Number, part.PartCode, entry.FileName, entry.RowNumber,
+                            entry.PartCode));
+
+                        continue;
+                    }
+
+                    part.UsageKind = entry.UsageKind;
                     updates.Add(part);
-                    assigned.Add(part.PartName + "→" + values[position]);
+                    assigned.Add(part.PartName + "→" + entry.UsageKind);
                 }
 
                 matchedGroups++;
 
                 PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
-                    "  {0}：{1} 行（部品コード {2}）← 使い分け {3}",
+                    "  {0}：{1} 行（部品コード {2}）← 使い分け {3}（拾い出し表 {4} 条{5}）",
                     drawingNo, group.Parts.Count, group.PartCode,
-                    assigned.Count == 0 ? "（都已有值，不改）" : string.Join(" / ", assigned.ToArray())));
+                    assigned.Count == 0 ? "（都已有值，不改）" : string.Join(" / ", assigned.ToArray()),
+                    entries.Count,
+                    mismatchCount == 0 ? string.Empty : "，部品コード 不一致 " + mismatchCount + " 行"));
             }
 
             if (matchedGroups == 0)

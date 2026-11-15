@@ -78,6 +78,12 @@ namespace MSIFAITOOLS.Services
         private readonly Dictionary<string, List<CmdPartMasterEntry>> _entriesByPartName =
             new Dictionary<string, List<CmdPartMasterEntry>>(StringComparer.Ordinal);
 
+        /// <summary>
+        /// 部品名 一览（去重、保持 CSV 出现顺序；部品名为空的行不计）。
+        /// 给「部品名」候选列表（<c>PartBasicInfoForm</c> 的部品名输入辅助）当数据源用。
+        /// </summary>
+        private readonly List<string> _partNames = new List<string>();
+
         /// <summary>读到的明细条数（部品コード为空的行不计）。</summary>
         public int EntryCount
         {
@@ -86,6 +92,15 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>重复的部品コード 条数（保留第一行，其余只计数）。</summary>
         public int DuplicateCount { get; set; }
+
+        /// <summary>
+        /// 部品名 一览（去重、保持 CSV 出现顺序；部品名为空的行不计）。
+        /// 给「部品名」单元格的候选列表当数据源（和「部品コード 自动推定」用的是同一份マスタ）。
+        /// </summary>
+        public IList<string> PartNames
+        {
+            get { return _partNames; }
+        }
 
         /// <summary>加入一条明细；部品コード 为空 / 已存在时忽略。</summary>
         public void Add(CmdPartMasterEntry entry)
@@ -117,6 +132,9 @@ namespace MSIFAITOOLS.Services
             {
                 byName = new List<CmdPartMasterEntry>();
                 _entriesByPartName.Add(partNameKey, byName);
+
+                // 第一次出现的部品名 才加进一览（保持 CSV 顺序 + 去重）
+                _partNames.Add((entry.PartName ?? string.Empty).Trim());
             }
 
             byName.Add(entry);

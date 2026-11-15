@@ -95,6 +95,11 @@
     <Compile Include="PartBasicInfoForm.Designer.cs">
       <DependentUpon>PartBasicInfoForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="PartBasicInfoForm.PartNameCandidates.cs">
+      <DependentUpon>PartBasicInfoForm.cs</DependentUpon>
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="PartNameCandidatePopup.cs" />
     <Compile Include="MemberNameReplacementForm.cs">
       <SubType>Form</SubType>
     </Compile>

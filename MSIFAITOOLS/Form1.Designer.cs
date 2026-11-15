@@ -676,7 +676,7 @@ namespace MSIFAITOOLS
             this.lblCmdStepNote.Name = "lblCmdStepNote";
             this.lblCmdStepNote.Size = new System.Drawing.Size(480, 18);
             this.lblCmdStepNote.TabIndex = 11;
-            this.lblCmdStepNote.Text = "※ 上方【CMD 分析】= 依次跑完 勾选的第 0 步 + 6 步";
+            this.lblCmdStepNote.Text = "※ 上方【CMD 分析】= 先跑第 0 步（特注品.json 维护），再依次跑完 6 步";
             this.lblCmdStepNote.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
             // chkCmdStep0
@@ -684,13 +684,16 @@ namespace MSIFAITOOLS
             this.chkCmdStep0.AutoSize = true;
             this.chkCmdStep0.Checked = true;
             this.chkCmdStep0.CheckState = System.Windows.Forms.CheckState.Checked;
+            // 第 0 步现在是【CMD 分析】固定最先执行的步骤（不再由用户开关），
+            // 这个 checkbox 只作为「这一步会跑」的说明，禁用掉避免误解
+            this.chkCmdStep0.Enabled = false;
             this.chkCmdStep0.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.chkCmdStep0.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
             this.chkCmdStep0.Location = new System.Drawing.Point(586, 150);
             this.chkCmdStep0.Name = "chkCmdStep0";
             this.chkCmdStep0.Size = new System.Drawing.Size(232, 21);
             this.chkCmdStep0.TabIndex = 16;
-            this.chkCmdStep0.Text = "第 0 步 · 特注品.json 维护（AI 判定）";
+            this.chkCmdStep0.Text = "第 0 步 · 特注品.json 维护（固定先执行）";
             this.chkCmdStep0.UseVisualStyleBackColor = true;
             // 
             // btnAiSettings

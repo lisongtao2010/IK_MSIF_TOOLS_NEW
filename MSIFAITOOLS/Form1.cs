@@ -1077,8 +1077,9 @@ namespace MSIFAITOOLS
         /// 01_アッセンブリ図_部品機能情報.csv（&lt;输出根目录&gt;\&lt;図番号&gt;\…，旧名 LT_STEP1.csv），
         /// 以 xy.txt 校验后登录到 SQLite 部品基本信息表（与【AI 分析】的「部材名AI推荐」同一张表）。
         ///
-        /// 点一次依次走「最前面 1 步 + 第 1~6 步」（名字见 <see cref="CmdAnalysisSteps"/>）：
-        /// （勾选 checkbox 时先跑）<b>第 0 步 特注品.json 维护</b>（PDF 文件夹下文件名第 5 位是 Z 的 xlsx →
+        /// 点一次依次走「第 0 步 + 最前面 1 步 + 第 1~6 步」（名字见 <see cref="CmdAnalysisSteps"/>）：
+        /// <b>第 0 步 特注品.json 维护（固定最先执行）</b>（PDF 文件夹下文件名第 5 位是 Z 的 xlsx，
+        /// 只处理 特注品.json 里还没有的文件 →
         /// 用 AI 判定是否追加进 classify\特注品.json）→
         /// <b>最前面</b> 特注品 CSV 生成（PDF 文件夹下文件名第 5 位是 Z 的 xlsx →
         /// <c>AiAppData\&lt;文件名&gt;\特注品.csv</c>）→
@@ -1103,7 +1104,7 @@ namespace MSIFAITOOLS
         /// 子按钮【第 0 步 · 特注品.json 维护】：只跑第 0 步
         /// （PDF 文件夹下文件名第 5 位是 <c>Z</c> 的 xlsx → 读部品表 → 用 AI 判定哪些条目要追加进
         /// <c>classify\特注品.json</c>）。**不看 checkbox**：点这个按钮就是要跑第 0 步；
-        /// checkbox 只决定「主按钮【CMD 分析】时要不要先跑第 0 步」。这一步不碰数据库。
+        /// 主按钮【CMD 分析】也会固定先跑第 0 步（界面上已经没有 checkbox）。这一步不碰数据库。
         /// </summary>
         private async void BtnCmdStep0_Click(object sender, EventArgs e)
         {
@@ -1219,12 +1220,11 @@ namespace MSIFAITOOLS
             progressBar.Style = ProgressBarStyle.Continuous;
             progressBar.Value = 0;
 
-            // 第 0 步 特注品.json 维护：主按钮按 checkbox（勾选才跑）；
-            // 单独点【第 0 步 · 特注品.json 维护】按钮时无条件跑（服务层按 stepKind 判断）
-            // （后台线程不直接读控件，先在这里取界面上的状态）
-            bool maintainTzJson = chkCmdStep0.Checked;
+            // 第 0 步 特注品.json 维护：主按钮【CMD 分析】固定最先执行
+            // （界面上的 checkbox 已禁用，只作说明；服务层对 CmdAnalysisStepKind.All 会无条件先跑这一步，
+            //  单步按钮只跑自己那一步，不会连带第 0 步）
 
-            // 主按钮 / 子按钮共用：日志与状态栏都用同一步骤名（名字来自 CmdAnD:\Github_lis2010\IK_MSIF_TOOLS\図面-20260918T025344Z-1-001\図面\alysisSteps）
+            // 主按钮 / 子按钮共用：日志与状态栏都用同一步骤名（名字来自 CmdAnalysisSteps）
             CmdAnalysisStep step = CmdAnalysisSteps.GetStep(stepKind);
             string actionName = step == null ? "CMD 分析" : step.Label;
 
@@ -1237,10 +1237,11 @@ namespace MSIFAITOOLS
                 Color.FromArgb(120, 200, 255));
             AppendLog(CmdAnalysisSteps.DescribeRun(stepKind), Color.FromArgb(120, 200, 255));
 
-            if (maintainTzJson && stepKind == CmdAnalysisStepKind.All)
+            if (stepKind == CmdAnalysisStepKind.All)
             {
                 AppendLog(CmdAnalysisSteps.MaintainTzJsonStep.LogHeader +
-                    " 已勾选：先执行 特注品.json 维护（AI 判定是否追加）", Color.FromArgb(120, 200, 255));
+                    " 固定最先执行：只对 特注品.json 里还没有的文件让 AI 读取并补足",
+                    Color.FromArgb(120, 200, 255));
             }
             AppendLog("分解输出目录：" + outputDir, Color.FromArgb(180, 180, 180));
             AppendLog("部品基本信息数据库：" + ResolvePartDatabasePath(),
@@ -1260,8 +1261,7 @@ namespace MSIFAITOOLS
                 // 后台线程执行：用匿名方法（delegate）代替 Lambda 表达式
                 Func<PartAnalysisSummary> analyzeWork = delegate
                 {
-                    return service.AnalyzeAndSave(snapshot, outputDir, OnServiceLog, stepKind,
-                        maintainTzJson);
+                    return service.AnalyzeAndSave(snapshot, outputDir, OnServiceLog, stepKind);
                 };
 
                 summary = await Task.Run(analyzeWork);

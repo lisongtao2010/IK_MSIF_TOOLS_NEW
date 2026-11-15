@@ -67,18 +67,22 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 取该部品コード对应的「使い分け」值（按出现顺序，跳过空值）。
+        /// 取该部品コード对应的拾い出し表明细（按出现顺序，<b>跳过 使い分け 为空的行</b>）。
+        /// 每条明细都带着它自己记录的「部品ｺｰﾄﾞ/形材番号」（<see cref="CmdUsageKindEntry.PartCode"/>）、
+        /// 来源文件名与行号 —— 第 6 步填值前要用它<b>逐行核对</b>该行的部品コード。
+        /// <para>
         /// 搜索时把 <c>□ / ■ / △ / ▲ / ○ / ●</c> 等符号当通配符（任一侧含符号即可，
         /// 因为数据库里的部品コード是具体值、xlsx 里是 <c>MEA□429</c> 这种带符号的写法）。
+        /// </para>
         /// </summary>
         /// <param name="partCode">部品基本信息表的「部品コード」。</param>
-        public List<string> FindUsageKinds(string partCode)
+        public List<CmdUsageKindEntry> FindEntries(string partCode)
         {
-            List<string> values = new List<string>();
+            List<CmdUsageKindEntry> matched = new List<CmdUsageKindEntry>();
 
             if (string.IsNullOrWhiteSpace(partCode))
             {
-                return values;
+                return matched;
             }
 
             string key = partCode.Trim();
@@ -95,6 +99,24 @@ namespace MSIFAITOOLS.Services
                     continue;
                 }
 
+                matched.Add(entry);
+            }
+
+            return matched;
+        }
+
+        /// <summary>
+        /// 取该部品コード对应的「使い分け」值（按出现顺序，跳过空值）。
+        /// 只需要值的调用方用这个；要同时核对「这条值来自哪个部品コード」时用
+        /// <see cref="FindEntries"/>（第 6 步就是这么做的）。
+        /// </summary>
+        /// <param name="partCode">部品基本信息表的「部品コード」。</param>
+        public List<string> FindUsageKinds(string partCode)
+        {
+            List<string> values = new List<string>();
+
+            foreach (CmdUsageKindEntry entry in FindEntries(partCode))
+            {
                 values.Add(entry.UsageKind);
             }
 

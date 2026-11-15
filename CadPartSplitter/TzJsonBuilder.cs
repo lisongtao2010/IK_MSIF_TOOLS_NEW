@@ -42,7 +42,8 @@ namespace CadPartSplitter
         public string SpecialSize { get; set; }
 
         /// <summary>
-        /// 这条明细是谁判出来的：<c>rule</c> = <c>TzJsonBuilder</c> 的规则（5 列标题 / 分块版式），
+        /// 这条明细是谁判出来的：<c>rule</c> = <c>TzJsonBuilder</c> 的规则（5 列标题 / 分块版式）、
+        /// <c>adaptive</c> = 自适应版式（表头是同义列名时按「列角色」认）、
         /// <c>ai</c> = AI 判定补足（见 <see cref="TzAiExtractor"/>）。
         /// 下游只按那五个字段取数，不认识这个字段也没有影响。
         /// </summary>
@@ -74,10 +75,20 @@ namespace CadPartSplitter
     ///   · 一份工作簿里有多块这样的表也照样收；
     ///   · 品種 空着（合并单元格的续行）时沿用上一行的值 —— 与 <c>02_要領図_部品機能情報.csv</c> 的摊平一致。
     ///
-    /// 选表规则：工作簿里有名为「カメラ」的表就只读它（其余表版式不同，混进来只会添噪音）；
-    /// 名字里带「カメラ」的（「カメラ表」之类）也算；都没有时退回
-    /// 「每张表都按上面那套 5 列标题找一遍」，并在日志里说明。
-    /// 「カメラ」表里一条明细都没收到时（那张表是空表 / 索引），也会退到「全部表再找一遍」。
+    /// 选表规则：工作簿里有名为「カメラ」的表就**只读这一张**（其余表是 <c>_表題入力</c> /
+    /// <c>変更履歴</c> 这类输入表，混进来只会把「図番欄 / 承認者名欄」当成部品明细）；名字里带
+    /// 「カメラ」的（「カメラ表」之类）也算；都没有时才退回「每张表都按上面那套 5 列标题找一遍」。
+    /// 「カメラ」表里一条明细都没收到时**不再退到其它表** —— 只记日志，版式问题看诊断导出。
+    ///
+    /// 认不出 5 列标题时的兜底，按顺序一层层往下试（前一层收到明细就不再往下）：
+    ///   · 「分块版式」（<c>H310Z10004.XLS</c> 的「カメラ」表）：块见出し当 枠区分 +
+    ///     <c>追加部品セット ： …（ MZA674 ）</c> 给 部品名 / 部品コード + 每组 品種 × 追加対応特注寸法；
+    ///   · 「自适应版式」（<see cref="CollectAdaptiveEntries"/>）：表头写的是**同义列名**
+    ///     （<c>品名 / 品番 / 型式 / 特注内容 …</c>）时按「列角色」认列 ——
+    ///     <c>I400Z10006.xls</c> 的「カメラ」表（<c>開発番号 / 品種 / 追加する部品セットの部品番号</c>
+    ///     3 列、大半行品番为空）靠这一层收出 2 条：<c>室内ドア 【NC】</c> → <c>MZC337</c>、
+    ///     <c>クローゼットドア 開き戸 【NC】</c> → <c>MZC□338</c>；
+    ///   · 「AI 判定与补足」（<c>--tz-ai</c>，默认关闭，见 <see cref="TzAiExtractor"/>）。
     ///
     /// 读取用 ExcelDataReader（只读，不依赖机器上装没装 Excel）：
     /// <c>.xls</c> 是老 BIFF 格式，文字按文件里的代码页解，兜底代码页用 932（日文 Shift-JIS）。
@@ -127,6 +138,13 @@ namespace CadPartSplitter
 
         /// <summary>特注品.json 里 <c>source</c> 字段：规则（5 列标题 / 分块版式）判出来的明细。</summary>
         public const string SourceRule = "rule";
+
+        /// <summary>
+        /// <c>source</c> 字段的另一个值：靠「自适应版式」收出来的明细
+        /// （表头写的是同义列名、版式既不是 5 列也不是分块版式，见 <see cref="CollectAdaptiveEntries"/>）。
+        /// 下游只按那五个字段取数，认不认识这个值都没有影响。
+        /// </summary>
+        public const string SourceAdaptive = "adaptive";
 
         /// <summary>
         /// 表头最多拆成几行来拼（图纸导出的 Excel 常把表头压在 2 行里，
@@ -530,6 +548,12 @@ namespace CadPartSplitter
                           + "改按 5 列标题在全部 " + sheets.Count + " 张表里找。");
                 }
             }
+            else
+            {
+                // 有「カメラ」表：这张工作簿就只读它（其余表是 _表題入力 / 変更履歴 这类输入表）
+                o.Log("[INFO] 特注品.json：" + fileName + " 有「" + targets[0].Key + "」表 → 只读这一张"
+                      + "（工作簿共 " + sheets.Count + " 张表，其余不读）。");
+            }
 
             foreach (var sheet in targets)
             {
@@ -543,24 +567,13 @@ namespace CadPartSplitter
                 }
             }
 
-            // 指定的「カメラ」表里一条都没收到 → 全部表再按 5 列标题找一遍
-            // （有些工作簿的「カメラ」表只是空表 / 索引，真正的部品表在别的表里）
+            // 「カメラ」表里一条明细都没收到时**也不退到其它表**：有「カメラ」页就只读这一页。
+            // 其余表是 _表題入力 / 変更履歴 这类输入表（I400Z10006.xls 的 _表題入力 里是
+            // 「図番欄 / 商品名欄 / 承認者ﾒｰﾙID欄」+ 值），当成部品表读只会把表題信息写进 特注品.json。
             if (entries.Count == 0 && targets.Count > 0 && targets.Count < sheets.Count)
             {
-                o.Log("[INFO] 特注品.json：" + fileName + " 的「" + PreferredSheetName + "」表里没收到底表 5 列，"
-                      + "改按 5 列标题在全部 " + sheets.Count + " 张表里再找一遍。");
-
-                foreach (var sheet in sheets)
-                {
-                    int before = entries.Count;
-                    CollectEntries(sheet.Value, fileName, drawingNumber, sheet.Key, entries);
-
-                    if (entries.Count > before)
-                    {
-                        o.Log("[INFO] 特注品.json：" + fileName + " 的「" + sheet.Key + "」表 → "
-                              + (entries.Count - before) + " 条明细。");
-                    }
-                }
+                o.Log("[INFO] 特注品.json：" + fileName + " 的「" + PreferredSheetName + "」表里没认到明细，"
+                      + "按设计不再退到其它表（工作簿里有「" + PreferredSheetName + "」页就只读这一页）。");
             }
 
             // ④ 5 列表头版式一条都没收到 → 换「分块版式」再读一遍（H310Z10004.XLS 的「カメラ」表就是这种：
@@ -568,7 +581,7 @@ namespace CadPartSplitter
             //    5 列を探す読み方では、この版式は絶対に 1 条も取れない。
             if (entries.Count == 0)
             {
-                foreach (var sheet in sheets)
+                foreach (var sheet in targets)
                 {
                     int before = entries.Count;
                     CollectBlockEntries(sheet.Value, fileName, drawingNumber, sheet.Key, entries);
@@ -593,16 +606,11 @@ namespace CadPartSplitter
                 }
                 else if (entries.Count == 0)
                 {
-                    // 规则整个工作簿一条都没收到：先「カメラ」表，再其余表
-                    // （真正的部品表可能根本不在「カメラ」表里）
+                    // 规则一条都没收到：AI 也只看 targets（工作簿里有「カメラ」表就只读这一页 ——
+                    // 其余表是 _表題入力 这类输入表，送 AI 也只会把 図番欄 / 承認者名欄 当成部品明细）
                     aiTargets = new List<KeyValuePair<string, List<string[]>>>();
 
                     foreach (var sheet in targets)
-                    {
-                        aiTargets.Add(sheet);
-                    }
-
-                    foreach (var sheet in sheets)
                     {
                         if (!ContainsSheet(aiTargets, sheet.Key))
                         {
@@ -652,8 +660,37 @@ namespace CadPartSplitter
                 }
             }
 
+            // ⑥ 自适应版式：表头写的是同义列名（開発番号 / 品種 / 追加する部品セットの部品番号 のような
+            //    3 列マッピング表など）、既凑不齐 5 列也不是分块版式时，按「列角色」再读一遍 ——
+            //    I400Z10006.xls 的「カメラ」表靠这一层收出来。
+            //    放在 AI 之后：AI 已经判出明细的表不再走这一层（自适应比 AI 松，容易把备注行当明细）。
+            //    只扫 targets（有「カメラ」页就是那一页），不碰 _表題入力 这类输入表。
+            if (entries.Count == 0)
+            {
+                foreach (var sheet in targets)
+                {
+                    AdaptiveStats stats;
+                    int produced = CollectAdaptiveEntries(sheet.Value, fileName, drawingNumber, sheet.Key,
+                                                          entries, out stats);
+
+                    if (produced > 0)
+                    {
+                        o.Log("[INFO] 特注品.json：" + fileName + " 的「" + sheet.Key + "」表（自适应版式）→ "
+                              + produced + " 条明细"
+                              + (stats.SkippedVarietyOnly > 0
+                                     ? "（另有 " + stats.SkippedVarietyOnly
+                                       + " 行只有品種、没有部品コード → 没有追加部品セット，跳过）"
+                                     : string.Empty)
+                              + (stats.StrippedNotes > 0
+                                     ? "（" + stats.StrippedNotes + " 条的 部品コード 末尾带注記 → 已剥掉）"
+                                     : string.Empty)
+                              + "。");
+                    }
+                }
+            }
+
             if (entries.Count == 0 && !string.IsNullOrWhiteSpace(dumpDirectory))
-                DumpSheetsForDiagnosis(dumpDirectory, fileName, sheets, o);
+                DumpSheetsForDiagnosis(dumpDirectory, fileName, targets, o);
             return entries;
         }
 
@@ -1059,6 +1096,450 @@ namespace CadPartSplitter
 
             return row;
         }
+
+        // ── 自适应版式（不认识的样式的兜底） ─────────────────────────────────
+
+        /// <summary>
+        /// 自适应版式里「列角色」的下标：顺序与 <see cref="ColumnNames"/> 一致
+        /// （0 品種 / 1 部品名 / 2 枠区分 / 3 部品コード / 4 追加対応特注寸法）。
+        /// </summary>
+        private const int RoleVariety = 0;
+
+        /// <summary>自适应版式：部品名 角色。</summary>
+        private const int RolePartName = 1;
+
+        /// <summary>自适应版式：枠区分 角色。</summary>
+        private const int RoleFrame = 2;
+
+        /// <summary>自适应版式：部品コード 角色。</summary>
+        private const int RolePartCode = 3;
+
+        /// <summary>自适应版式：追加対応特注寸法 角色。</summary>
+        private const int RoleSpecialSize = 4;
+
+        /// <summary>
+        /// 自适应版式：每个「列角色」认哪些列名写法（组内长的写法排在前面，与 <see cref="HeaderNames"/>
+        /// 同一套约定）。表头写着 品名 / 品番 / 特注内容 这种同义写法时，「5 列标题」那一层永远凑不齐，
+        /// 这一层就是给它兜底的。
+        /// 型式 / 型番 只放进 部品コード 一组：放两处会让 品種 列与 部品コード 列抢同一格。
+        /// </summary>
+        private static readonly string[][] AdaptiveAliases =
+        {
+            new[] { "品種", "タイプ", "種類", "シリーズ" },
+            new[] { "部品名称", "部品名", "部材名", "品名", "名称" },
+            new[] { "枠区分", "枠の種類", "区分", "グループ" },
+            new[] { "部品コード", "部品番号", "部品NO", "品番", "型番", "型式", "コード" },
+            new[] { "追加対応特注寸法", "特注寸法", "特注内容", "追加対応", "特注", "寸法", "備考" }
+        };
+
+        /// <summary>自适应版式里明细格最多多少字（更长的当注記 / 说明文，不当部品名・部品コード）。</summary>
+        private const int AdaptiveCellMaxLength = 60;
+
+        /// <summary>
+        /// 「整格等于列名」比「含列名」优先的加权值：比任何列名的字数都大，
+        /// 所以 <c>枠の種類</c>（整格 4 字，归 枠区分）不会被 品種 组的 <c>種類</c>（含 2 字）抢走。
+        /// </summary>
+        private const int AdaptiveExactMatch = 1000;
+
+        /// <summary>
+        /// 自适应版式读一张表的统计（日志用，本身不影响输出）。
+        /// </summary>
+        private sealed class AdaptiveStats
+        {
+            /// <summary>只有 品種、部品名 / 部品コード / 特注寸法 全空的行数 —— 这种行没有追加部品セット，不是特注明细。</summary>
+            public int SkippedVarietyOnly;
+
+            /// <summary>部品コード 末尾带注記（<c>MZC□338（注２）</c> 这种）、已被剥掉的行数。</summary>
+            public int StrippedNotes;
+        }
+
+        /// <summary>
+        /// 自适应版式：按「列角色」收明细 —— 给「表头写的是同义列名」的样式兜底。
+        ///
+        /// 典型就是 <c>I400Z10006.xls</c> 的「カメラ」表：3 列マッピング表
+        /// <code>
+        /// 開発番号   品種                     追加する部品セットの部品番号
+        /// I400/I402  室内ドア 【NC】           MZC337
+        /// I401       室内ドア 【C付】
+        /// I404       ランマ付ドア 【NC】
+        /// …
+        /// H101       クローゼットドア 開き戸 【NC】 MZC□338（注２）
+        /// </code>
+        /// 表头里只有「品種」「…部品番号」两列能对上角色（開発番号 没有对应列，忽略），
+        /// 而且大半行的部品番号是空的 —— 那些行表示「这个 品種 没有追加部品セット」，不是明细。
+        ///
+        /// 认表头：一行（或上下 2~3 行）里至少认出 2 个列角色，且其中必须有 部品名 或 部品コード ——
+        /// 只有「寸法 / 備考」两个词的行不当表头，否则任何一张说明表都会被当成部品表；
+        /// 表头不能从空行开始（上空行 + 表头 + 首行明细 会被拼成 3 行表头，首行明细就丢了）。
+        ///
+        /// 收明细：空行 / 表头又出现一次 / 注記行（<c>※…</c>、<c>注）…</c>、带句読点的说明文、
+        /// 超过 <see cref="AdaptiveCellMaxLength"/> 字）/ 品種・部品名・部品コード 三格全空 就收这一块；
+        /// 品種 是纵向合并单元格时沿用上一行的值（与 5 列版式同一套做法）。
+        /// 只有 品種、其余列全空的行跳过并计数（记成明细会让下游以为这个 品種 是特注却拿不到品番）；
+        /// 部品コード 末尾的注記（<c>（注２）</c>）剥掉，留下能对上的品番。
+        /// </summary>
+        /// <returns>这次收了几条明细。</returns>
+        private static int CollectAdaptiveEntries(
+            List<string[]> grid,
+            string fileName,
+            string drawingNumber,
+            string sheetName,
+            List<TzEntry> output,
+            out AdaptiveStats stats)
+        {
+            stats = new AdaptiveStats();
+
+            if (grid == null || grid.Count == 0 || output == null)
+                return 0;
+
+            int produced = 0;
+            int row = 0;
+
+            while (row < grid.Count)
+            {
+                int[] columns;
+                int headerRows;
+
+                if (!TryFindAdaptiveHeader(grid, row, out columns, out headerRows))
+                {
+                    row++;      // 不是表头行：往下挪一行继续找
+                    continue;
+                }
+
+                int cursor = row + headerRows;
+                string lastVariety = string.Empty;
+
+                while (cursor < grid.Count)
+                {
+                    string[] line = grid[cursor];
+
+                    if (line == null || CsvFile.IsEmptyRow(line))
+                        break;      // 空行：这一块到此为止
+
+                    int[] again;
+                    int againRows;
+
+                    if (TryFindAdaptiveHeader(grid, cursor, out again, out againRows))
+                        break;      // 表头又出现一次 → 新的一块，交回外层重新认
+
+                    string partName = Cell(line, columns[RolePartName]);
+                    string rawCode = Cell(line, columns[RolePartCode]);
+                    string partCode = StripTrailingNote(rawCode);
+                    string specialSize = Cell(line, columns[RoleSpecialSize]);
+                    string variety = Cell(line, columns[RoleVariety]);
+
+                    if (partCode.Length != rawCode.Length)
+                        stats.StrippedNotes++;
+
+                    if (IsAdaptiveNote(partName) || IsAdaptiveNote(partCode))
+                        break;      // 注記行（※… / 注）… / 长说明文）：这一块到此为止
+
+                    // 品種 / 部品名 / 部品コード 三格全空：合计行 / 备注行 / 表尾
+                    if (string.IsNullOrEmpty(CsvFile.Normalize(variety))
+                        && string.IsNullOrEmpty(CsvFile.Normalize(partName))
+                        && string.IsNullOrEmpty(CsvFile.Normalize(partCode)))
+                    {
+                        break;
+                    }
+
+                    // 品種 是纵向合并单元格：续行的品種格是空的，沿用上一行的值
+                    if (string.IsNullOrEmpty(CsvFile.Normalize(variety)))
+                        variety = lastVariety;
+                    else
+                        lastVariety = variety;
+
+                    // 只有 品種、其余列全空 = 这个 品種 没有追加部品セット（I400Z10006 的「カメラ」表
+                    // 明细 15 行里 13 行是这样）→ 不算特注明细，跳过
+                    if (string.IsNullOrEmpty(CsvFile.Normalize(partName))
+                        && string.IsNullOrEmpty(CsvFile.Normalize(partCode))
+                        && string.IsNullOrEmpty(CsvFile.Normalize(specialSize)))
+                    {
+                        stats.SkippedVarietyOnly++;
+                        cursor++;
+                        continue;
+                    }
+
+                    output.Add(new TzEntry
+                    {
+                        File          = fileName,
+                        DrawingNumber = drawingNumber,
+                        Sheet         = sheetName,
+                        Row           = cursor + 1,     // 1 起，与 Excel 左边那列行号一致
+                        Variety       = variety,
+                        PartName      = partName,
+                        FrameKind     = Cell(line, columns[RoleFrame]),
+                        PartCode      = partCode,
+                        SpecialSize   = specialSize,
+                        Source        = SourceAdaptive
+                    });
+
+                    produced++;
+                    cursor++;
+                }
+
+                // cursor 一定大于 row（至少跨过表头），这里再兜一次底，避免原地打转
+                row = Math.Max(cursor, row + 1);
+            }
+
+            return produced;
+        }
+
+        /// <summary>
+        /// 去掉 部品コード 末尾的注記段：<c>MZC□338（注２）</c> → <c>MZC□338</c>
+        /// （<c>（注２）</c> 是注記编号，不是品番的一部分，留着下游按品番匹配就对不上）。
+        /// 只剥**末尾整个括号段**、且剥完还有剩下的；<c>2H100</c> / <c>TJ-3086</c> 这类不受影响。
+        /// </summary>
+        private static string StripTrailingNote(string code)
+        {
+            string text = (code ?? string.Empty).Trim();
+
+            while (text.Length > 1)
+            {
+                char last = text[text.Length - 1];
+                char open = last == '）' ? '（' : (last == ')' ? '(' : '\0');
+
+                if (open == '\0')
+                    break;
+
+                int at = text.LastIndexOf(open);
+
+                if (at <= 0)
+                    break;      // 括号在开头 / 没有配对：不是注記段
+
+                string head = text.Substring(0, at).Trim();
+
+                if (head.Length == 0)
+                    break;
+
+                text = head;
+            }
+
+            return text;
+        }
+
+        /// <summary>
+        /// 自适应版式的表头：从 <paramref name="startRow"/> 起，一行或上下 1~3 行里
+        /// 认出的「列角色」最多、且至少 2 个、其中必须有 部品名 或 部品コード 的那个位置。
+        /// 先按「整格等于列名」认，认出的角色不够多时再放宽到「含列名」（表头写成
+        /// <c>部品名（規格）</c> 那种）。同一格不会被两个角色抢走。
+        /// </summary>
+        /// <param name="columns">找到时：5 个角色各自的列下标（没认到的为 -1）。</param>
+        /// <param name="height">找到时：表头占了几行（1~<see cref="MaxHeaderRows"/>）。</param>
+        private static bool TryFindAdaptiveHeader(
+            List<string[]> grid,
+            int startRow,
+            out int[] columns,
+            out int height)
+        {
+            columns = null;
+            height = 0;
+
+            if (startRow < 0 || startRow >= grid.Count)
+                return false;
+
+            // 表头不能从空行开始：上空行 + 表头行 + 首行明细 会被拼成「2~3 行表头」，
+            // 首行明细就跟着表头一起被吞掉（I400Z10006 的「カメラ」表上面就有一行空格）
+            string[] firstLine = grid[startRow];
+
+            if (firstLine == null || CsvFile.IsEmptyRow(firstLine))
+                return false;
+
+            int[] best = null;
+            int bestHeight = 0;
+            int bestScore = 0;
+
+            for (int h = 1; h <= MaxHeaderRows; h++)
+            {
+                if (startRow + h > grid.Count)
+                    break;
+
+                for (int pass = 0; pass <= 1; pass++)
+                {
+                    // 表头拆成上下两行时，最后一行自己也必须有列名 ——
+                    // 否则就是把下面那条明细行一起当成了表头，明细会少收一条
+                    if (h > 1 && !HasAdaptiveRoleInRow(grid, startRow + h - 1, pass == 1))
+                        continue;
+
+                    int[] found = MatchAdaptiveHeaderCells(grid, startRow, h, pass == 1);
+                    int score = CountAdaptiveRoles(found);
+
+                    if (score < 2 || score <= bestScore)
+                        continue;       // 角色太少，或不如已经找到的那个
+
+                    // 没有「认人的那一列」（部品名 / 部品コード）的行不算表头
+                    if (found[RolePartName] < 0 && found[RolePartCode] < 0)
+                        continue;
+
+                    best = found;
+                    bestHeight = h;
+                    bestScore = score;
+                }
+            }
+
+            if (best == null)
+                return false;
+
+            columns = best;
+            height = bestHeight;
+            return true;
+        }
+
+        /// <summary>
+        /// 这一行自己能不能认出至少一个列角色 —— 表头被拆成上下两行时用来确认「第二行确实也是表头」，
+        /// 否则会把表头下面那条明细行一起吞进表头（明细少一条、行号也对不上）。
+        /// </summary>
+        private static bool HasAdaptiveRoleInRow(List<string[]> grid, int row, bool allowPartial)
+        {
+            if (row < 0 || row >= grid.Count)
+                return false;
+
+            return CountAdaptiveRoles(MatchAdaptiveHeaderCells(grid, row, 1, allowPartial)) > 0;
+        }
+
+        /// <summary>
+        /// 在 <paramref name="height"/> 行里按列名同义词认角色：返回 5 个角色各自的列下标（没认到的为 -1）。
+        /// <paramref name="allowPartial"/> = true 时「含列名」也算命中（整格相等那遍认不齐时才用）。
+        /// </summary>
+        private static int[] MatchAdaptiveHeaderCells(
+            List<string[]> grid,
+            int startRow,
+            int height,
+            bool allowPartial)
+        {
+            var found = new int[AdaptiveAliases.Length];
+
+            for (int i = 0; i < found.Length; i++)
+                found[i] = -1;
+
+            for (int h = 0; h < height; h++)
+            {
+                if (startRow + h >= grid.Count)
+                    break;
+
+                string[] line = grid[startRow + h];
+
+                if (line == null)
+                    continue;
+
+                for (int c = 0; c < line.Length; c++)
+                {
+                    string cell = CsvFile.Normalize(line[c]);
+
+                    if (cell.Length == 0 || IsAdaptiveColumnUsed(found, c))
+                        continue;
+
+                    int bestRole = -1;
+                    int bestMatch = 0;
+
+                    for (int role = 0; role < AdaptiveAliases.Length; role++)
+                    {
+                        if (found[role] >= 0)
+                            continue;       // 这个角色已经有列了
+
+                        int match = AdaptiveColumnNameMatch(cell, AdaptiveAliases[role], allowPartial);
+
+                        if (match > bestMatch)
+                        {
+                            bestMatch = match;
+                            bestRole = role;
+                        }
+                    }
+
+                    // 一格只归一个角色：归「命中最长」的那个（整格相等再优先）
+                    if (bestRole >= 0)
+                        found[bestRole] = c;
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// 这一格和这个角色的列名有多像：整格相等 = <see cref="AdaptiveExactMatch"/> + 字数（最优先），
+        /// 含列名 = 命中的词的字数，0 = 不像（<paramref name="allowPartial"/> = false 时只认整格相等）。
+        /// 用「命中词的字数」而不是「先到先得」：<c>枠の種類</c> 要归 枠区分（4 字），不能归 品種（2 字）。
+        /// </summary>
+        private static int AdaptiveColumnNameMatch(string normalizedCell, string[] aliases, bool allowPartial)
+        {
+            if (normalizedCell.Length == 0)
+                return 0;
+
+            int best = 0;
+
+            foreach (string alias in aliases)
+            {
+                string key = CsvFile.Normalize(alias);
+
+                if (key.Length == 0)
+                    continue;
+
+                if (string.Equals(normalizedCell, key, StringComparison.Ordinal))
+                {
+                    if (AdaptiveExactMatch + key.Length > best)
+                        best = AdaptiveExactMatch + key.Length;
+
+                    continue;
+                }
+
+                // 「含列名」只在后半段用（整格相等那遍认不齐时才放宽），且不能比整格相等更优先
+                if (allowPartial
+                    && normalizedCell.Length > key.Length
+                    && normalizedCell.IndexOf(key, StringComparison.Ordinal) >= 0
+                    && key.Length > best)
+                {
+                    best = key.Length;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>这一列已经被别的角色占了（一个格不能同时是 品種 又是 部品コード）。</summary>
+        private static bool IsAdaptiveColumnUsed(int[] found, int column)
+        {
+            for (int i = 0; i < found.Length; i++)
+            {
+                if (found[i] == column)
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>认出了几个列角色。</summary>
+        private static int CountAdaptiveRoles(int[] found)
+        {
+            int count = 0;
+
+            for (int i = 0; i < found.Length; i++)
+            {
+                if (found[i] >= 0)
+                    count++;
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// 自适应版式里「这一格是注記，不是部品名 / 部品コード」：<c>※…</c> / <c>注）…</c> 开头、
+        /// 带句点（<c>。</c>）的说明文、或超过 <see cref="AdaptiveCellMaxLength"/> 字的长文。
+        /// </summary>
+        private static bool IsAdaptiveNote(string text)
+        {
+            string cell = CsvFile.Normalize(text);
+
+            if (cell.Length == 0)
+                return false;
+
+            if (cell.Length > AdaptiveCellMaxLength)
+                return true;
+
+            return cell.StartsWith("※", StringComparison.Ordinal)
+                   || cell.StartsWith("注", StringComparison.Ordinal)
+                   || cell.IndexOf('。') >= 0;
+        }
+
+        // ── 分块版式的辅助方法（接着往下：見出し / 追加部品セット / 块标题） ──────
 
         /// <summary>
         /// 找「品種」明细見出し：同一行里至少有一个 <c>品種</c>，且还有 <c>追加対応特注寸法</c>

@@ -6,9 +6,19 @@ namespace MSIFAITOOLS
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing && (components != null))
+            if (disposing)
             {
-                components.Dispose();
+                // 表格右键菜单是代码创建的（不在 components 里）→ 在这里释放
+                if (_partsMenu != null)
+                {
+                    _partsMenu.Dispose();
+                    _partsMenu = null;
+                }
+
+                if (components != null)
+                {
+                    components.Dispose();
+                }
             }
 
             base.Dispose(disposing);
@@ -144,9 +154,16 @@ namespace MSIFAITOOLS
             this.dgvParts.SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.CellSelect;
             this.dgvParts.Size = new System.Drawing.Size(980, 452);
             this.dgvParts.TabIndex = 1;
+            this.dgvParts.CellBeginEdit += new System.Windows.Forms.DataGridViewCellCancelEventHandler(this.DgvParts_CellBeginEdit);
             this.dgvParts.CellClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.DgvParts_CellClick);
+            this.dgvParts.CellEndEdit += new System.Windows.Forms.DataGridViewCellEventHandler(this.DgvParts_CellEndEdit);
+            this.dgvParts.CellMouseDown += new System.Windows.Forms.DataGridViewCellMouseEventHandler(this.DgvParts_CellMouseDown);
             this.dgvParts.CellValueChanged += new System.Windows.Forms.DataGridViewCellEventHandler(this.DgvParts_CellValueChanged);
+            this.dgvParts.ColumnWidthChanged += new System.Windows.Forms.DataGridViewColumnEventHandler(this.DgvParts_HidePartNameCandidates);
+            this.dgvParts.EditingControlShowing += new System.Windows.Forms.DataGridViewEditingControlShowingEventHandler(this.DgvParts_EditingControlShowing);
             this.dgvParts.KeyDown += new System.Windows.Forms.KeyEventHandler(this.DgvParts_KeyDown);
+            this.dgvParts.Leave += new System.EventHandler(this.DgvParts_Leave);
+            this.dgvParts.Scroll += new System.Windows.Forms.ScrollEventHandler(this.DgvParts_HidePartNameCandidates);
             //
             // pnlFooter
             //
