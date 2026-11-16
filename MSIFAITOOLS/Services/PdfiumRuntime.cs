@@ -230,11 +230,49 @@ namespace MSIFAITOOLS.Services
 
             string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
             string platformFolder = IntPtr.Size == 8 ? "x64" : "x86";
+            string nativePackage = IntPtr.Size == 8 ? "x86_64" : "x86";
+            string ridFolder = IntPtr.Size == 8 ? "win-x64" : "win-x86";
 
             AddCandidate(paths, Path.Combine(baseDirectory, platformFolder, "pdfium.dll"));
             AddCandidate(paths, Path.Combine(baseDirectory, "pdfium.dll"));
 
+            // 开发机 / 发布机上的 NuGet 包缓存里那份：程序目录的 dll 被覆盖或漏拷时自动兜底。
+            // 不存在时不加入候选，免得诊断信息里多一条无意义的「不存在」。
+            string nugetRoot = GetNuGetPackageRoot();
+
+            if (!string.IsNullOrEmpty(nugetRoot))
+            {
+                string cachedPdfium = Path.Combine(nugetRoot,
+                    "pdfiumviewer.native." + nativePackage + ".v8-xfa", "2018.4.8.256",
+                    "runtimes", ridFolder, "native", "pdfium.dll");
+
+                if (File.Exists(cachedPdfium))
+                {
+                    AddCandidate(paths, cachedPdfium);
+                }
+            }
+
             return paths;
+        }
+
+        /// <summary>NuGet 全局包缓存目录（取不到时返回 null）。</summary>
+        private static string GetNuGetPackageRoot()
+        {
+            string fromEnvironment = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+
+            if (!string.IsNullOrWhiteSpace(fromEnvironment))
+            {
+                return fromEnvironment.Trim();
+            }
+
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            if (string.IsNullOrEmpty(userProfile))
+            {
+                return null;
+            }
+
+            return Path.Combine(userProfile, ".nuget", "packages");
         }
 
         /// <summary>加入候选列表（忽略空值与重复项）。</summary>

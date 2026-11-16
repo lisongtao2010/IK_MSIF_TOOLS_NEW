@@ -14,7 +14,7 @@ namespace MSIFAITOOLS
 
     /// <summary>
     /// 「选择部材名」窗口：由部品基本信息画面（<see cref="PartBasicInfoForm"/>）
-    /// 点「部材名」单元格时打开，用来从<b>常用部材名</b>里挑一个（而不是让人对着图纸手打）。
+    /// 点「部材名」单元格时打开，做成输入法候选面板那样——只有一列部材名，前面带编号。
     ///
     /// <para>
     /// <b>非模态</b>：窗口打开期间主画面照常操作（改别的格子、换行、看图纸），不会被挡住；
@@ -22,24 +22,25 @@ namespace MSIFAITOOLS
     /// </para>
     ///
     /// <para>
-    /// <b>单击即写入</b>：部材名 只能选一个，所以列表不用复选框 ——
-    /// 单击哪一项，就立刻把这一项写进主画面当前的「部材名」单元格
+    /// <b>按编号写入</b>：候选项前面都带编号（1～9，第 10 项是 0），
+    /// 直接按数字键就把对应编号的部材名写进主画面当前的「部材名」单元格
     /// （触发 <see cref="MemberNamePicked"/>；单元格原来的 <c>|</c> 多值会被整体替换）。
-    /// 列表里没有的名字写在「手工输入」里点【写入】（留空点【写入】= 清空这一格）。
+    /// 鼠标单击哪一项也一样；第 11 项以后没有编号，只能单击。
     /// </para>
     ///
     /// <para>
-    /// <b>候选项</b> = 部材部品マスタ（<c>D:\MSIFDB\MSIF_MemberParts.db</c> 的「部材部品」表，
-    /// 首次运行时由 <c>部材部品\部材部品.csv</c> 导入）里的部材名 一览
-    /// （<see cref="MemberPartCatalog.MemberNames"/>，去重、保持登录顺序）。第二列同时列出
-    /// 这个部材名 下面登记的部品名，方便在写法相近的部材名 之间判断。
+    /// <b>候选顺序</b>：
+    /// ① 这一行的「部品名」在置换表（SQL Server 表 <c>genpin.dbo.T_M_MergeName</c>，
+    ///    <c>MsifDevName</c> = 取得的词）里对应的「置换后」（<c>GenpinName</c>）——排最前，按 1 就是它；
+    /// ② 「部材名」单元格现在的值（拆开 <c>|</c>，方便改回原值）；
+    /// ③ 部材部品マスタ（<see cref="MemberPartCatalog.MemberNames"/>）里的部材名 一览。
     /// </para>
     ///
     /// <para>
-    /// <b>顶部那一行</b>（<c>lblMapping</c>）= 这一行的「部品名」（<c>colPartName</c>）在置换表
-    /// （SQL Server 表 <c>DL_BuhinBuzaiMapping</c>，<c>BuhinName</c> = 部品名）里对应的
-    /// 「部材名」（<c>BuzaiName</c>）：点这一行就直接写进目标单元格；查不到 / 连不上时红字说明原因，
-    /// 不影响下面的候选列表和手工输入。
+    /// <b>过滤 / 手工输入</b>：顶部输入框打字就按关键字过滤（<c>↑</c> / <c>↓</c> 换候选项）；
+    /// 列表里没有的名字直接打在输入框里按 <c>Enter</c> 写入
+    /// （输入框是空的时按 <c>Enter</c> 会先确认是否清空这一格）。
+    /// 想把数字当关键字打时，按住 <c>Ctrl</c> 再按数字。
     /// </para>
     /// </summary>
     internal sealed partial class MemberNamePickerForm : Form
@@ -50,16 +51,25 @@ namespace MSIFAITOOLS
         /// <summary>拆分原值时认可的竖线：半角 <c>|</c> 与全角 <c>｜</c>（老数据 / 手打时两种都有）。</summary>
         private static readonly char[] ValueSeparators = new char[] { Separator, '｜' };
 
+        /// <summary>能用数字键选的最多项数（1～9）。</summary>
+        private const int MaxShortcutNumber = 9;
+
+        /// <summary>没有数字快捷键的行用的对齐空白（与「编号 + 2 个空格」同宽）。</summary>
+        private const string NumberPadding = "   ";
+
         /// <summary>「已写入」那行文字的正常颜色。</summary>
         private static readonly Color PreviewNormalColor = Color.FromArgb(52, 73, 94);
 
         /// <summary>「已写入」那行文字在值为空（清空了单元格）时的颜色。</summary>
         private static readonly Color PreviewEmptyColor = Color.FromArgb(198, 40, 40);
 
-        /// <summary>列表里的全部项目（原值拆出来的项在前，候选项在后；保持这个顺序显示）。</summary>
+        /// <summary>
+        /// 全部候选项（置换表的推荐项在前，其次是这一格现在的值，最后是部材部品マスタ 的部材名；
+        /// 去重后保持这个顺序）。
+        /// </summary>
         private readonly List<string> _items = new List<string>();
 
-        /// <summary>部材部品マスタ（可能为 <c>null</c>：读不到时只有空列表 + 手工输入）。</summary>
+        /// <summary>部材部品マスタ（可能为 <c>null</c>：候选列表只剩推荐项和原值）。</summary>
         private readonly MemberPartCatalog _catalog;
 
         /// <summary>
@@ -68,13 +78,11 @@ namespace MSIFAITOOLS
         /// </summary>
         private string _currentValue = string.Empty;
 
-        /// <summary>重建列表期间抑制「选中变化」引起的副作用。</summary>
-        private bool _isLoading;
-
         /// <summary>
         /// 这次要写入的那一行的「部品名」（<c>colPartName</c>）：用它去置换表
-        /// <c>DL_BuhinBuzaiMapping</c> 查对应的部材名，显示在顶部那一行。
-        /// 主画面换了目标行时由 <see cref="SetTarget"/> 更新；空串 = 那一行没填部品名。
+        /// <c>T_M_MergeName</c>（<c>MsifDevName</c>）查对应的置换后（<c>GenpinName</c>），
+        /// 作为第 1 号候选排在列表最前。主画面换了目标行时由 <see cref="SetTarget"/> 更新；
+        /// 空串 = 那一行没填部品名。
         /// </summary>
         private string _partName = string.Empty;
 
@@ -86,20 +94,14 @@ namespace MSIFAITOOLS
         private readonly Dictionary<string, string[]> _mappingCache =
             new Dictionary<string, string[]>(StringComparer.Ordinal);
 
-        /// <summary>顶部那行「部品名 → 部材名」现在给出的部材名（点那一行就写入这个值；空 = 不能点）。</summary>
-        private string _mappingTarget = string.Empty;
+        /// <summary>置换表查到的推荐项（<c>GenpinName</c>；按部品名 查不到时为空数组）。</summary>
+        private string[] _mappingTargets = new string[0];
 
-        /// <summary>顶部「部品名 → 部材名」那行文字的正常颜色（查到 / 提示）。</summary>
-        private static readonly Color MappingNormalColor = Color.FromArgb(52, 73, 94);
+        /// <summary>置换表查询失败的原因（成功时为空串；只写在状态行，不弹窗）。</summary>
+        private string _mappingError = string.Empty;
 
-        /// <summary>顶部「部品名 → 部材名」那行文字命中时的颜色（深绿色，表示点一下就能写入）。</summary>
-        private static readonly Color MappingHitColor = Color.FromArgb(27, 94, 32);
-
-        /// <summary>顶部「部品名 → 部材名」那行文字查不到 / 查询失败时的颜色。</summary>
-        private static readonly Color MappingMissColor = Color.FromArgb(198, 40, 40);
-
-        /// <summary>顶部那一行文字的 ToolTip（名字太长被裁掉时也能看到完整内容）。</summary>
-        private readonly ToolTip _mappingToolTip = new ToolTip();
+        /// <summary>输入框上的操作提示（编号键 / Enter 的用法）。</summary>
+        private readonly ToolTip _hintToolTip = new ToolTip();
 
         /// <summary>
         /// 「选择部材名」窗口查置换表用的连接超时（秒）：交互画面里连不上时不要像维护画面那样等满 15 秒。
@@ -126,11 +128,11 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 创建「选择部材名」窗口，并按这一行的<b>部品名</b> 去置换表
-        /// （SQL Server 表 <c>DL_BuhinBuzaiMapping</c>）查对应的部材名，显示在顶部那一行。
+        /// （SQL Server 表 <c>T_M_MergeName</c>）查对应的部材名，作为第 1 号候选排在列表最前。
         /// </summary>
-        /// <param name="catalog">部材部品マスタ（可为 <c>null</c>：候选列表只剩原值拆出来的项）。</param>
+        /// <param name="catalog">部材部品マスタ（可为 <c>null</c>：候选列表只剩推荐项和原值）。</param>
         /// <param name="currentValue">「部材名」单元格当前的值（<c>|</c> 分开的多项会拆开加进候选）。</param>
-        /// <param name="partName">同一行的「部品名」（<c>colPartName</c>；空 = 不知道，只显示提示）。</param>
+        /// <param name="partName">同一行的「部品名」（<c>colPartName</c>；空 = 不知道，只列出候选项）。</param>
         public MemberNamePickerForm(MemberPartCatalog catalog, string currentValue, string partName)
         {
             InitializeComponent();
@@ -139,9 +141,13 @@ namespace MSIFAITOOLS
             _currentValue = currentValue == null ? string.Empty : currentValue.Trim();
             _partName = partName == null ? string.Empty : partName.Trim();
 
+            _hintToolTip.SetToolTip(txtFilter,
+                "输入关键字过滤部材名；按 1～9（0 = 第 10 项）直接写入；↑↓ 换候选项，Enter 写入。");
+
+            LoadMappingTargets();
             LoadItems();
             ApplyFilter(string.Empty);
-            ShowMapping();
+            ShowTargetHint();
         }
 
         /// <summary>
@@ -156,14 +162,14 @@ namespace MSIFAITOOLS
         /// <param name="currentValue">目标单元格当前的值（可为 <c>null</c>）。</param>
         public void SetCurrentValue(string currentValue)
         {
-            // 只换写入目标、部品名不变（顶部那一行会按同一个部品名 重新查一次，命中缓存时是零开销）
+            // 只换写入目标、部品名不变（推荐项按同一个部品名 重新查一次，命中缓存时是零开销）
             SetTarget(currentValue, _partName);
         }
 
         /// <summary>
         /// 切换「要写入的目标单元格」并同时更新这一行的<b>部品名</b>
         /// （主画面点了另一行的「部材名」时调用）：列表里会把这一格现在的值预先选中，
-        /// 顶部那一行换成新部品名 在置换表里对应的部材名。
+        /// 候选列表换成新部品名 在置换表里对应的推荐项 + 新的原值。
         /// </summary>
         /// <param name="currentValue">目标单元格当前的值（可为 <c>null</c>）。</param>
         /// <param name="partName">同一行的「部品名」（可为 <c>null</c> / 空）。</param>
@@ -172,61 +178,39 @@ namespace MSIFAITOOLS
             _currentValue = currentValue == null ? string.Empty : currentValue.Trim();
             _partName = partName == null ? string.Empty : partName.Trim();
 
-            SelectCurrentValue();
+            LoadMappingTargets();
+            LoadItems();
+            ApplyFilter(txtFilter.Text);
             ShowTargetHint();
-            ShowMapping();
         }
 
         /// <summary>
-        /// 顶部那一行「部品名 → 部材名」：按 <see cref="_partName"/> 去置换表
-        /// （SQL Server 表 <c>DL_BuhinBuzaiMapping</c> 的 <c>BuhinName</c> = 部品名）查 <c>BuzaiName</c> 显示出来。
-        /// <list type="bullet">
-        ///   <item>查到 → 深绿色，点这一行就把第一个部材名 写进目标单元格；</item>
-        ///   <item>没填部品名 / 置换表里没有 / 查询失败 → 红字说明原因（下面的候选列表和手工输入照常可用）。</item>
-        /// </list>
+        /// 按 <see cref="_partName"/> 去置换表（SQL Server 表 <c>genpin.dbo.T_M_MergeName</c> 的
+        /// <c>MsifDevName</c>）查 <c>GenpinName</c>，结果放进 <see cref="_mappingTargets"/>，
+        /// 由 <see cref="LoadItems"/> 排成第 1 号候选；查不到 / 连不上只记在 <see cref="_mappingError"/>，
+        /// 不弹窗、不影响下面的候选列表。
         /// </summary>
-        private void ShowMapping()
+        private void LoadMappingTargets()
         {
-            _mappingTarget = string.Empty;
-            lblMapping.Cursor = Cursors.Default;
-
-            string text;
-            Color color = MappingNormalColor;
+            _mappingTargets = new string[0];
+            _mappingError = string.Empty;
 
             if (_partName.Length == 0)
             {
-                text = "部品名：（这一行没有填部品名）→ 无法从置换表查部材名";
+                return;
             }
-            else
+
+            string[] targets;
+            string error;
+
+            if (!TryQueryMapping(_partName, out targets, out error))
             {
-                string[] targets;
-                string error;
+                _mappingError = error == null ? string.Empty : error;
 
-                if (!TryQueryMapping(_partName, out targets, out error))
-                {
-                    text = "部品名「" + _partName + "」→ 置换表（" +
-                        MemberNameReplacementRepository.TableName + "）查询失败：" + error;
-                    color = MappingMissColor;
-                }
-                else if (targets.Length == 0)
-                {
-                    text = "部品名「" + _partName + "」→ 置换表（" +
-                        MemberNameReplacementRepository.TableName + "）里没有对应的部材名" +
-                        "（可在【部材名置换表】里登录）";
-                }
-                else
-                {
-                    _mappingTarget = targets[0];
-                    lblMapping.Cursor = Cursors.Hand;
-                    text = "部品名「" + _partName + "」→ 部材名：" + string.Join(" / ", targets) +
-                        "（点这一行直接写入）";
-                    color = MappingHitColor;
-                }
+                return;
             }
 
-            lblMapping.Text = text;
-            lblMapping.ForeColor = color;
-            _mappingToolTip.SetToolTip(lblMapping, text);
+            _mappingTargets = targets;
         }
 
         /// <summary>
@@ -294,17 +278,55 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 点顶部那一行「部品名 → 部材名」= 直接把这个部材名 写进目标单元格
-        /// （查到多个时写第一个；没查到时这一行不可点）。
+        /// 按编号写入（<c>1</c>～<c>9</c> → 第 1～9 项，<c>0</c> → 第 10 项）：
+        /// 编号对得上当前列表时就写入并返回 true；没有这一项时返回 false（这次按键当普通输入处理）。
         /// </summary>
-        private void LblMapping_Click(object sender, EventArgs e)
+        /// <param name="number">数字键的数值（0～9）。</param>
+        /// <returns>true = 已写入；false = 列表里没有这个编号的项。</returns>
+        private bool PickByNumber(int number)
         {
-            if (_mappingTarget.Length == 0)
+            int index = number == 0 ? MaxShortcutNumber : number - 1;
+
+            if (index < 0 || index >= lvNames.Items.Count)
+            {
+                return false;
+            }
+
+            ListViewItem row = lvNames.Items[index];
+            row.Selected = true;
+            row.Focused = true;
+            row.EnsureVisible();
+
+            Pick(GetItemValue(row));
+
+            return true;
+        }
+
+        /// <summary>
+        /// <c>Enter</c> = 写入：列表里有选中项就写选中项；没有选中项就把输入框里的文字当部材名写进去
+        /// （列表里没有的名字走这条路）。输入框是空的时先确认（= 清空这一格）。
+        /// </summary>
+        private void Commit()
+        {
+            if (lvNames.SelectedItems.Count > 0)
+            {
+                Pick(GetItemValue(lvNames.SelectedItems[0]));
+
+                return;
+            }
+
+            string custom = txtFilter.Text.Trim();
+
+            if (custom.Length == 0 &&
+                MessageBox.Show(this,
+                    "输入框是空的：按 Enter 会清空主画面这一格。\n\n要清空吗？",
+                    "确认清空", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2) != DialogResult.Yes)
             {
                 return;
             }
 
-            Pick(_mappingTarget);
+            Pick(custom);
         }
 
         /// <summary>
@@ -315,9 +337,16 @@ namespace MSIFAITOOLS
         {
             lblPreview.ForeColor = PreviewNormalColor;
 
-            lblPreview.Text = _currentValue.Length == 0
-                ? "这一格现在是空的：单击列表里的部材名就会写入。"
-                : "这一格现在是：" + _currentValue + "（单击列表就把它换掉）";
+            string text = _currentValue.Length == 0
+                ? "这一格现在是空的"
+                : "这一格现在是：" + _currentValue;
+
+            if (_mappingError.Length > 0)
+            {
+                text += "（置换表连不上，没有推荐项）";
+            }
+
+            lblPreview.Text = text;
         }
 
         /// <summary>窗口显示时把焦点放到过滤框（直接打字就是搜索）。</summary>
@@ -329,29 +358,29 @@ namespace MSIFAITOOLS
             txtFilter.SelectAll();
         }
 
-        /// <summary>组装列表项目：原值拆出来的项 → 部材部品マスタ 的部材名。</summary>
+        /// <summary>
+        /// 组装候选项：置换表的推荐项 → 原值拆出来的项 → 部材部品マスタ 的部材名（去重后保持这个顺序）。
+        /// </summary>
         private void LoadItems()
         {
-            _isLoading = true;
+            _items.Clear();
 
-            try
+            foreach (string target in _mappingTargets)
             {
-                foreach (string part in SplitValue(_currentValue))
-                {
-                    AddItem(part);
-                }
-
-                if (_catalog != null)
-                {
-                    foreach (string memberName in _catalog.MemberNames)
-                    {
-                        AddItem(memberName);
-                    }
-                }
+                AddItem(target);
             }
-            finally
+
+            foreach (string part in SplitValue(_currentValue))
             {
-                _isLoading = false;
+                AddItem(part);
+            }
+
+            if (_catalog != null)
+            {
+                foreach (string memberName in _catalog.MemberNames)
+                {
+                    AddItem(memberName);
+                }
             }
         }
 
@@ -393,13 +422,15 @@ namespace MSIFAITOOLS
             return parts;
         }
 
-        /// <summary>按过滤关键字重建列表；关键字为空时显示全部项目。重建后选中目标单元格现在的值。</summary>
+        /// <summary>
+        /// 按过滤关键字重建列表（关键字为空时显示全部候选项），每一行前面加上编号；
+        /// 重建后选中目标单元格现在的值，并让列宽跟着窗口走。
+        /// </summary>
         private void ApplyFilter(string keyword)
         {
             string filter = keyword == null ? string.Empty : keyword.Trim();
             string filterKey = MemberPartCatalogLoader.NormalizeKey(filter);
 
-            _isLoading = true;
             lvNames.BeginUpdate();
 
             try
@@ -414,8 +445,7 @@ namespace MSIFAITOOLS
                         continue;
                     }
 
-                    ListViewItem row = new ListViewItem(item);
-                    row.SubItems.Add(DescribePartNames(item));
+                    ListViewItem row = new ListViewItem(NumberPrefix(lvNames.Items.Count) + item);
                     row.Tag = item;
                     lvNames.Items.Add(row);
                 }
@@ -423,28 +453,61 @@ namespace MSIFAITOOLS
             finally
             {
                 lvNames.EndUpdate();
-                _isLoading = false;
+                AdjustColumnWidth();
             }
 
             SelectCurrentValue();
         }
 
-        /// <summary>这个部材名 下面登记的部品名（用 <c> / </c> 连接；没有时为空串）。</summary>
-        private string DescribePartNames(string memberName)
+        /// <summary>
+        /// 第 <paramref name="index"/> 项（从 0 开始）前面的编号文字：
+        /// 前 9 项是 <c>1</c>～<c>9</c>，第 10 项是 <c>0</c>，再往后没有快捷键、只留对齐的空白。
+        /// </summary>
+        /// <param name="index">这一项在列表里的位置（从 0 开始）。</param>
+        /// <returns>宽度一致的前缀（编号 + 2 个空格，或 3 个空格）。</returns>
+        private static string NumberPrefix(int index)
         {
-            if (_catalog == null)
+            if (index < MaxShortcutNumber)
+            {
+                return (index + 1).ToString() + "  ";
+            }
+
+            if (index == MaxShortcutNumber)
+            {
+                return "0  ";
+            }
+
+            return NumberPadding;
+        }
+
+        /// <summary>让唯一的那一列铺满列表宽度（窗口拉宽 / 缩窄、出现滚动条时都跟着变）。</summary>
+        private void AdjustColumnWidth()
+        {
+            int width = lvNames.ClientSize.Width - 4;
+
+            if (width > 80 && colMemberName.Width != width)
+            {
+                colMemberName.Width = width;
+            }
+        }
+
+        /// <summary>列表宽度变了 → 列宽跟着变。</summary>
+        private void LvNames_Resize(object sender, EventArgs e)
+        {
+            AdjustColumnWidth();
+        }
+
+        /// <summary>取一行对应的部材名（真实值放在 <c>Tag</c> 里，行文字前面带编号）。</summary>
+        private static string GetItemValue(ListViewItem row)
+        {
+            if (row == null)
             {
                 return string.Empty;
             }
 
-            IList<string> partNames = _catalog.GetPartNames(memberName);
+            string value = row.Tag as string;
 
-            if (partNames == null || partNames.Count == 0)
-            {
-                return string.Empty;
-            }
-
-            return string.Join(" / ", new List<string>(partNames).ToArray());
+            return value == null ? row.Text : value;
         }
 
         /// <summary>把列表里等于目标单元格当前值的那一项选中（没有相同项时清空选择）。</summary>

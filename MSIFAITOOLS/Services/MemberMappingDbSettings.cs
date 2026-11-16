@@ -11,7 +11,7 @@ using System.Web.Script.Serialization;
 namespace MSIFAITOOLS.Services
 {
     /// <summary>
-    /// 部材名置换表（SQL Server 的 <c>DL_BuhinBuzaiMapping</c>）的连接信息。
+    /// 部材名置换表（SQL Server 的 <c>genpin.dbo.T_M_MergeName</c>）的连接信息。
     ///
     /// <para>
     /// 取值优先级与 AI 设置一致：环境变量 → 连接信息维护画面保存的用户配置
@@ -25,20 +25,20 @@ namespace MSIFAITOOLS.Services
     /// </summary>
     internal sealed class MemberMappingDbSettings
     {
-        /// <summary>默认接続先（现场 SQL Server）。</summary>
-        public const string DefaultServer = "10.103.126.209";
+        /// <summary>默认接続先（现场 SQL Server：genpin 库）。</summary>
+        public const string DefaultServer = "10.103.126.208";
 
         /// <summary>默认端口。</summary>
         public const int DefaultPort = 1433;
 
         /// <summary>默认 DB 名。</summary>
-        public const string DefaultDatabase = "MSIF";
+        public const string DefaultDatabase = "genpin";
 
         /// <summary>默认登录 ID。</summary>
         public const string DefaultUserId = "sqluser_dairen";
 
         /// <summary>默认密码。</summary>
-        public const string DefaultPassword = "dairen1112##";
+        public const string DefaultPassword = "dairen1111##";
 
         /// <summary>App.config 中的接続先键名。</summary>
         public const string ServerSettingKey = "MappingDbServer";
@@ -109,7 +109,7 @@ namespace MSIFAITOOLS.Services
         /// <summary>端口（默认 1433）。</summary>
         public int Port { get; private set; }
 
-        /// <summary>DB 名（默认 MSIF）。</summary>
+        /// <summary>DB 名（默认 genpin）。</summary>
         public string Database { get; private set; }
 
         /// <summary>登录 ID。</summary>
@@ -162,7 +162,7 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 画面 / 日志用的目标描述（不含密码）：<c>SQL Server 10.103.126.209,1433 / DB MSIF</c>。
+        /// 画面 / 日志用的目标描述（不含密码）：<c>SQL Server 10.103.126.208,1433 / DB genpin</c>。
         /// </summary>
         public string DescribeTarget()
         {
@@ -196,7 +196,7 @@ namespace MSIFAITOOLS.Services
 
             if (Database.Trim().Length == 0)
             {
-                error = "请填写 DB 名（本工具用 MSIF）。";
+                error = "请填写 DB 名（本工具用 genpin）。";
                 return false;
             }
 
@@ -224,6 +224,15 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>加密值前缀（用于与明文区分）。</summary>
         private const string EncryptedPrefix = "dpapi:";
+
+        /// <summary>旧版本的默认接続先（genpin 迁移前：部材名置换表在 <c>MSIF</c> 库）。</summary>
+        public const string LegacyDefaultServer = "10.103.126.209";
+
+        /// <summary>旧版本的默认 DB 名。</summary>
+        public const string LegacyDefaultDatabase = "MSIF";
+
+        /// <summary>旧版本的默认密码。</summary>
+        public const string LegacyDefaultPassword = "dairen1112##";
 
         /// <summary>DPAPI 附加熵。</summary>
         private static readonly byte[] Entropy =
@@ -279,19 +288,47 @@ namespace MSIFAITOOLS.Services
                     return null;
                 }
 
-                return new MemberMappingDbSettings(
+                MemberMappingDbSettings loaded = new MemberMappingDbSettings(
                     GetText(data, "Server"),
                     GetInt(data, "Port"),
                     GetText(data, "Database"),
                     GetText(data, "UserId"),
                     Unprotect(GetText(data, "Password")),
                     MemberMappingDbSettings.SourceUserSettings);
+
+                // 旧版本点【保存】时留下的「整组都等于旧默认值」的配置（10.103.126.209 / MSIF / dairen1112##）
+                // 会让程序一直连旧库（那里没有 T_M_MergeName）→ 当作未配置，改用新的内置默认值（genpin）。
+                if (IsLegacyDefault(loaded))
+                {
+                    return null;
+                }
+
+                return loaded;
             }
             catch (Exception ex)
             {
                 error = ex.Message;
                 return null;
             }
+        }
+
+        /// <summary>
+        /// 是否是旧版本默认值那一组（genpin 迁移前的 <c>10.103.126.209 / MSIF / dairen1112##</c>）：
+        /// 这种配置当作用户没改过 → 忽略，改用新的内置默认值。
+        /// </summary>
+        private static bool IsLegacyDefault(MemberMappingDbSettings settings)
+        {
+            if (settings == null)
+            {
+                return false;
+            }
+
+            return string.Equals(settings.Server, LegacyDefaultServer, StringComparison.OrdinalIgnoreCase) &&
+                settings.Port == MemberMappingDbSettings.DefaultPort &&
+                string.Equals(settings.Database, LegacyDefaultDatabase, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(settings.UserId, MemberMappingDbSettings.DefaultUserId,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(settings.Password, LegacyDefaultPassword, StringComparison.Ordinal);
         }
 
         /// <summary>保存用户配置（文件夹不存在时自动创建）。失败时返回 false 并给出原因。</summary>

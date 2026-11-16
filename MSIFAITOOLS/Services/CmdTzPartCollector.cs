@@ -29,6 +29,12 @@ namespace MSIFAITOOLS.Services
         /// <summary>追加対応特注寸法。</summary>
         public string SpecialSize { get; set; }
 
+        /// <summary>
+        /// 員数（= 部品基本信息表的「数量」）。Excel 部品表 / 特注品.csv / 特注品.json 里没有时为空，
+        /// 写库时照原样写进「数量」列（「特注 = 1」的行不会被清空）。
+        /// </summary>
+        public string Quantity { get; set; }
+
         /// <summary>来源 Excel 文件名。</summary>
         public string FileName { get; set; }
 
@@ -178,6 +184,13 @@ namespace MSIFAITOOLS.Services
         private const string FrameKindKey = "枠区分";
         private const string PartCodeKey = "部品コード";
         private const string SpecialSizeKey = "追加対応特注寸法";
+
+        /// <summary>
+        /// 「員数」= 部品基本信息表的「数量」。Excel 部品表 / 特注品.csv 里有就带上，
+        /// 【AI 分析】的特注品数量设定也会写进 特注品.json
+        /// （见 <see cref="SpecialProductQuantityAdvisor"/>），第 4 步一并写进「数量」列。
+        /// </summary>
+        private const string QuantityKey = "員数";
         private const string FileKey = "file";
         private const string SheetKey = "sheet";
         private const string RowKey = "row";
@@ -382,6 +395,7 @@ namespace MSIFAITOOLS.Services
                 entry.FrameKind = GetText(row, FrameKindKey);
                 entry.PartCode = GetText(row, PartCodeKey);
                 entry.SpecialSize = GetText(row, SpecialSizeKey);
+                entry.Quantity = GetText(row, QuantityKey);
                 entry.FileName = GetText(row, FileKey);
                 entry.Sheet = GetText(row, SheetKey);
                 entry.Row = GetInt(row, RowKey);
@@ -396,8 +410,8 @@ namespace MSIFAITOOLS.Services
         /// <c>特注品.csv</c>（<c>&lt;outputDirectory&gt;\&lt;文件名&gt;\特注品.csv</c>），
         /// 转成与 <c>特注品.json</c> 相同的明细列表 —— 第 4 步<b>直接用它，不再解析 Excel</b>。
         /// <para>
-        /// 列按表头名找：品種 / 部品名 / 枠区分 / 部品コード / 追加対応特注寸法
-        /// （表头里没有的列按空处理；「員数」第 4 步不用）。
+        /// 列按表头名找：品種 / 部品名 / 枠区分 / 部品コード / 追加対応特注寸法 / 員数
+        /// （表头里没有的列按空处理；「員数」→ 部品基本信息表的「数量」）。
         /// 一个 CSV 都没有时记一条 <paramref name="notes"/>，调用方可以退回读 <c>特注品.json</c>。
         /// </para>
         /// </summary>
@@ -448,6 +462,7 @@ namespace MSIFAITOOLS.Services
                 int frameCol = IndexOfHeader(header, FrameKindKey);
                 int codeCol = IndexOfHeader(header, PartCodeKey);
                 int sizeCol = IndexOfHeader(header, SpecialSizeKey);
+                int quantityCol = IndexOfHeader(header, QuantityKey);
 
                 if (kindCol < 0)
                 {
@@ -475,6 +490,7 @@ namespace MSIFAITOOLS.Services
                     entry.FrameKind = frameCol < 0 ? string.Empty : Cell(row, frameCol);
                     entry.PartCode = codeCol < 0 ? string.Empty : Cell(row, codeCol);
                     entry.SpecialSize = sizeCol < 0 ? string.Empty : Cell(row, sizeCol);
+                    entry.Quantity = quantityCol < 0 ? string.Empty : Cell(row, quantityCol);
                     entry.FileName = fileName;
                     entry.Sheet = CmdSpecialProductCsvExporter.PartSheetName;
                     entry.Row = rowIndex + 1;
@@ -633,7 +649,7 @@ namespace MSIFAITOOLS.Services
                 }
 
                 PartBasicInfo part = new PartBasicInfo(drawingNo, 1, startNumber + result.Parts.Count,
-                    entry.PartName, string.Empty, entry.FrameKind, string.Empty, string.Empty,
+                    entry.PartName, string.Empty, entry.FrameKind, entry.Quantity, string.Empty,
                     string.Empty, entry.PartCode);
 
                 part.Remark = BuildRemark(entry.Variety, entry.SpecialSize);

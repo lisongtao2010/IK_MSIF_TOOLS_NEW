@@ -439,7 +439,11 @@ namespace MSIFAITOOLS.Services
         /// <summary>特注品.json 顶层的明细条数键（有就同步更新）。</summary>
         private const string TzItemCountKey = "item_count";
 
-        /// <summary>特注品.json 一条明细里的字段名（顺序与 <see cref="TzCsvColumns"/> 对应；没有「員数」）。</summary>
+        /// <summary>
+        /// 特注品.json 一条明细里的字段名（顺序与 <see cref="TzCsvColumns"/> 对应）。
+        /// 「員数」不在这个数组里 —— 它由 <see cref="TzQuantityKey"/> 单独处理
+        /// （不参与 品種 + 部品名 + 部品コード 的同一行判定）。
+        /// </summary>
         private static readonly string[] TzFieldKeys = new string[]
         {
             "品種", "部品名", "枠区分", "部品コード", "追加対応特注寸法"
@@ -447,6 +451,13 @@ namespace MSIFAITOOLS.Services
 
         /// <summary><see cref="TzFieldKeys"/> 各自对应 CSV 的第几列（0 起）。</summary>
         private static readonly int[] TzCsvColumns = new int[] { 0, 1, 2, 3, 5 };
+
+        /// <summary>
+        /// 特注品.json 的「員数」字段名（CSV 第 5 列 = 下标 4）。
+        /// 第 4 步据此写部品基本信息表的「数量」列；【AI 分析】的特注品数量设定也写这里
+        /// （见 <see cref="SpecialProductQuantityAdvisor"/>）。
+        /// </summary>
+        private const string TzQuantityKey = "員数";
 
         /// <summary>
         /// 把刚生成的 特注品.csv 同步进 <c>classify\特注品.json</c>（= 补足 特注品.json）：
@@ -527,6 +538,19 @@ namespace MSIFAITOOLS.Services
 
                     item[TzFieldKeys[index]] = value;
                     filled++;
+                }
+
+                // 員数（CSV 第 5 列）也补进 特注品.json：第 4 步读它写「数量」列
+                // （AI 分析的特注品数量设定也写这个字段，两边用同一个名字）
+                if (GetTzText(item, TzQuantityKey).Length == 0)
+                {
+                    string quantity = CellText(csvCells, 4);
+
+                    if (quantity.Length > 0)
+                    {
+                        item[TzQuantityKey] = quantity;
+                        filled++;
+                    }
                 }
             }
 
@@ -655,6 +679,14 @@ namespace MSIFAITOOLS.Services
                 item[TzFieldKeys[index]] = CellText(csvCells, TzCsvColumns[index]);
             }
 
+            // 新明细也带上 員数（CSV 有值时才写，空着就留空 → 第 4 步写库时数量为空）
+            string quantity = CellText(csvCells, 4);
+
+            if (quantity.Length > 0)
+            {
+                item[TzQuantityKey] = quantity;
+            }
+
             return item;
         }
 
@@ -677,8 +709,14 @@ namespace MSIFAITOOLS.Services
             return Convert.ToString(value, CultureInfo.InvariantCulture).Trim();
         }
 
-        /// <summary>把 JSON 写回文件：UTF-8 无 BOM、CRLF、2 空格缩进（保持 特注品.json 可读）。</summary>
-        private static void WriteJsonFile(string path, object value, JavaScriptSerializer serializer)
+        /// <summary>
+        /// 把 JSON 写回文件：UTF-8 无 BOM、CRLF、2 空格缩进（保持 特注品.json 可读）。
+        /// <para>
+        /// <c>internal</c>：<see cref="SpecialProductQuantityAdvisor"/>（【AI 分析】的特注品数量设定）
+        /// 也用它写同一份 <c>特注品.json</c>，保证缩进 / 换行格式一致。
+        /// </para>
+        /// </summary>
+        internal static void WriteJsonFile(string path, object value, JavaScriptSerializer serializer)
         {
             StringBuilder builder = new StringBuilder();
             AppendJsonValue(builder, value, 0, serializer);

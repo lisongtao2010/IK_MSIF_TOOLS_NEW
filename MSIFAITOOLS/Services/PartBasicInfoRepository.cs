@@ -101,6 +101,13 @@ namespace MSIFAITOOLS.Services
         /// <summary>「参照元」列名（旧名「来源标识」：老数据库打开时改成这个名字，数据保留）。</summary>
         public const string SourceTagColumnName = "参照元";
 
+        /// <summary>
+        /// 「来源表格文件」列名：写的是来源文件的完整路径。
+        /// 【CMD 分析】第 4 步（特注品.json 部品追加）写的是该図番的 <c>特注品.csv</c>，
+        /// 【AI 分析】的特注品数量设定就按这个路径定位要改「数量」的行。
+        /// </summary>
+        public const string SourceFileColumnName = "来源表格文件";
+
         /// <summary>旧版「来源标识」列名（只在升级老数据库识别旧列时用）。</summary>
         public const string LegacySourceTagColumnName = "来源标识";
 
@@ -930,6 +937,117 @@ namespace MSIFAITOOLS.Services
 
                         updated += command.ExecuteNonQuery();
                     }
+                }
+
+                transaction.Commit();
+            }
+
+            return updated;
+        }
+
+        /// <summary>
+        /// 【AI 分析 · 特注品数量设定】把「来源表格文件 = <paramref name="sourceFilePath"/>」的所有行的
+        /// 「数量」改成同一个值（整份文件只有一个数量的写法：正文写着「1個追加(同梱)」的特注品）。
+        /// 只改「数量」一列；路径对不上的行（アッセンブリ図 / 要領図 / AI 分析 的行）一概不动。
+        /// </summary>
+        /// <param name="sourceFilePath">行的「来源表格文件」值（该図番的 特注品.csv 完整路径）。</param>
+        /// <param name="quantity">写进去的数量（空 / 空白时什么都不做）。</param>
+        /// <returns>实际更新的行数。</returns>
+        public int UpdateQuantityBySourceFile(string sourceFilePath, string quantity)
+        {
+            if (string.IsNullOrWhiteSpace(sourceFilePath) || string.IsNullOrWhiteSpace(quantity))
+            {
+                return 0;
+            }
+
+            string sql = "UPDATE [" + TableName + "] SET [" + QuantityColumnName + "] = @数量 " +
+                "WHERE [" + SourceFileColumnName + "] = @来源表格文件;";
+
+            int updated;
+
+            using (SQLiteTransaction transaction = _connection.BeginTransaction())
+            {
+                using (SQLiteCommand command = new SQLiteCommand(sql, _connection, transaction))
+                {
+                    command.Parameters.Add(new SQLiteParameter("@数量", quantity.Trim()));
+                    command.Parameters.Add(new SQLiteParameter("@来源表格文件", sourceFilePath.Trim()));
+
+                    updated = command.ExecuteNonQuery();
+                }
+
+                transaction.Commit();
+            }
+
+            return updated;
+        }
+
+        /// <summary>
+        /// 【AI 分析 · 特注品数量设定】按「来源表格文件 + 部品コード / 部品名」改「数量」（表型的逐条数量）。
+        /// <para>
+        /// 部品コード 在库里可能已被第 5 步正规化成 <c>MEA□429</c> 这种写法，AI 给的是 Excel 原文
+        /// （<c>MEACC429</c>），所以条件里 部品コード 与 部品名 用 OR 同时匹配，任一命中即改。
+        /// </para>
+        /// </summary>
+        /// <param name="sourceFilePath">行的「来源表格文件」值（该図番的 特注品.csv 完整路径）。</param>
+        /// <param name="partCode">部品コード（Excel 原文，可为空）。</param>
+        /// <param name="partName">部品名（可为空）。</param>
+        /// <param name="quantity">写进去的数量（空 / 空白时什么都不做）。</param>
+        /// <returns>实际更新的行数。</returns>
+        public int UpdateQuantityByPart(string sourceFilePath, string partCode, string partName, string quantity)
+        {
+            if (string.IsNullOrWhiteSpace(sourceFilePath) || string.IsNullOrWhiteSpace(quantity))
+            {
+                return 0;
+            }
+
+            string code = string.IsNullOrWhiteSpace(partCode) ? string.Empty : partCode.Trim();
+            string name = string.IsNullOrWhiteSpace(partName) ? string.Empty : partName.Trim();
+
+            if (code.Length == 0 && name.Length == 0)
+            {
+                return 0;
+            }
+
+            StringBuilder condition = new StringBuilder();
+
+            if (code.Length > 0)
+            {
+                condition.Append('[').Append(PartCodeColumnName).Append("] = @部品コード");
+            }
+
+            if (name.Length > 0)
+            {
+                if (condition.Length > 0)
+                {
+                    condition.Append(" OR ");
+                }
+
+                condition.Append("[部品名] = @部品名");
+            }
+
+            string sql = "UPDATE [" + TableName + "] SET [" + QuantityColumnName + "] = @数量 " +
+                "WHERE [" + SourceFileColumnName + "] = @来源表格文件 AND (" + condition + ");";
+
+            int updated;
+
+            using (SQLiteTransaction transaction = _connection.BeginTransaction())
+            {
+                using (SQLiteCommand command = new SQLiteCommand(sql, _connection, transaction))
+                {
+                    command.Parameters.Add(new SQLiteParameter("@数量", quantity.Trim()));
+                    command.Parameters.Add(new SQLiteParameter("@来源表格文件", sourceFilePath.Trim()));
+
+                    if (code.Length > 0)
+                    {
+                        command.Parameters.Add(new SQLiteParameter("@部品コード", code));
+                    }
+
+                    if (name.Length > 0)
+                    {
+                        command.Parameters.Add(new SQLiteParameter("@部品名", name));
+                    }
+
+                    updated = command.ExecuteNonQuery();
                 }
 
                 transaction.Commit();

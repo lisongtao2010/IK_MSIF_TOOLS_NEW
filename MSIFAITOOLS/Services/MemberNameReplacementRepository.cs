@@ -7,9 +7,10 @@ using System.Globalization;
 namespace MSIFAITOOLS.Services
 {
     /// <summary>
-    /// 部材名置换表的 1 行（SQL Server 表 <c>DL_BuhinBuzaiMapping</c>）：
-    /// <c>BuhinName</c>（部品名）= 图纸上的部材名（例：<c>鴨居</c>），
-    /// <c>BuzaiName</c>（部材名）= 希望登录进部品基本信息表的名字（例：<c>上枠</c>）。
+    /// 部材名置换表的 1 行（SQL Server 表 <c>genpin.dbo.T_M_MergeName</c>）：
+    /// <c>MsifDevName</c>（图纸 / <c>parts_info.json</c> 上取得的词）= 置换前，
+    /// <c>GenpinName</c>（要置换成的词）= 置换后。
+    /// <c>Classification</c> 是分类，只用于画面显示，不参与匹配。
     /// </summary>
     internal sealed class MemberNameReplacement
     {
@@ -18,69 +19,74 @@ namespace MSIFAITOOLS.Services
         {
         }
 
-        public MemberNameReplacement(string source, string target, string note)
+        public MemberNameReplacement(string source, string target, string classification)
         {
             Source = (source ?? string.Empty).Trim();
             Target = (target ?? string.Empty).Trim();
-            Note = (note ?? string.Empty).Trim();
+            Classification = (classification ?? string.Empty).Trim();
         }
 
-        /// <summary>部品名 = <c>BuhinName</c>（置换前；空值的行不会被采用）。</summary>
+        /// <summary>置换前 = <c>MsifDevName</c>（空值的行不会被采用）。</summary>
         public string Source { get; private set; }
 
-        /// <summary>部材名 = <c>BuzaiName</c>（置换后；空值的行不会被采用）。</summary>
+        /// <summary>置换后 = <c>GenpinName</c>（空值的行不会被采用）。</summary>
         public string Target { get; private set; }
 
-        /// <summary>備考 = <c>Remarks</c>（可选）。</summary>
-        public string Note { get; private set; }
+        /// <summary>分類 = <c>Classification</c>（画面显示用，不参与匹配）。</summary>
+        public string Classification { get; private set; }
+
+        /// <summary>兼容旧调用方（旧表的 <c>Remarks</c> 列）：值与 <see cref="Classification"/> 相同。</summary>
+        public string Note
+        {
+            get { return Classification; }
+        }
     }
 
     /// <summary>
-    /// 部材名置换表的 SQL Server 仓储（维护画面 <see cref="MemberNameReplacementForm"/> 用）。
+    /// 部材名置换表的 SQL Server 仓储（画面 <see cref="MemberNameReplacementForm"/> 用）。
     ///
     /// <para>
-    /// <b>表</b>：<c>DL_BuhinBuzaiMapping</c>（<c>BuhinName</c> 部品名 / <c>BuzaiName</c> 部材名 /
-    /// <c>Remarks</c> 備考 / <c>UpdatedAt</c> 更新日時；主键 = <c>(BuhinName, BuzaiName)</c>）。
-    /// 连接信息由 <see cref="MemberMappingDbSettingsStore"/> 解析
-    /// （维护画面 <see cref="MemberMappingDbSettingsForm"/>）。
+    /// <b>表</b>：<c>genpin.dbo.T_M_MergeName</c>（<c>Classification</c> 分類 / <c>MsifDevName</c> 置换前 /
+    /// <c>GenpinName</c> 置换后 / <c>DeleteFlg</c> 削除フラグ / <c>CreateBy</c>・<c>CreateTime</c> /
+    /// <c>UpdateBy</c>・<c>UpdateTime</c>）。匹配条件 = <c>MsifDevName</c> → <c>GenpinName</c>，
+    /// 只采用 <c>DeleteFlg = 0</c>（含 NULL）的行。连接信息由 <see cref="MemberMappingDbSettingsStore"/> 解析
+    /// （画面 <see cref="MemberMappingDbSettingsForm"/>）。
     /// </para>
     ///
     /// <para>
-    /// <b>保存规则</b>（<see cref="Save"/>）：按主键 <c>(BuhinName, BuzaiName)</c> 精确同步 ——
-    /// 画面里删掉的行 → <c>DELETE</c>；新加的行 → <c>INSERT</c>；其它 → <c>UPDATE</c>（并刷新 <c>UpdatedAt</c>）。
-    /// 所以 <c>Remarks</c>（備考）也能在画面上维护，且不会把别的行冲掉。
+    /// <b>只读</b>：这张表由 genpin 侧维护（有 <c>DeleteFlg</c> / <c>UpdateBy</c> 等管理列），
+    /// 本工具只读不写 —— 画面里改不了，也没有保存处理。
     /// </para>
     /// </summary>
     internal sealed class MemberNameReplacementRepository : IDisposable
     {
         /// <summary>表名。</summary>
-        public const string TableName = "DL_BuhinBuzaiMapping";
+        public const string TableName = "T_M_MergeName";
 
-        /// <summary>「部品名」列名（置换前 = 图纸上的部材名；主键之一）。</summary>
-        public const string SourceColumnName = "BuhinName";
+        /// <summary>「分類」列名（画面显示用，不参与匹配）。</summary>
+        public const string ClassificationColumnName = "Classification";
 
-        /// <summary>「部材名」列名（置换后 = 登录进部品基本信息表的部材名；主键之一）。</summary>
-        public const string TargetColumnName = "BuzaiName";
+        /// <summary>「置换前」列名（图纸 / <c>parts_info.json</c> 上取得的词；匹配条件）。</summary>
+        public const string SourceColumnName = "MsifDevName";
 
-        /// <summary>「備考」列名（可选）。</summary>
-        public const string NoteColumnName = "Remarks";
+        /// <summary>「置换后」列名（要置换成的词）。</summary>
+        public const string TargetColumnName = "GenpinName";
 
-        /// <summary>「更新日時」列名（保存时自动刷新；DATETIME2）。</summary>
-        public const string UpdatedAtColumnName = "UpdatedAt";
+        /// <summary>「削除フラグ」列名（只采用 0 / false / NULL 的行）。</summary>
+        public const string DeleteFlagColumnName = "DeleteFlg";
 
-        /// <summary>部品名列的长度（对应 NVARCHAR(100)）。</summary>
-        public const int SourceColumnMaxLength = 100;
+        /// <summary>查询参数的长度（<c>nvarchar(max)</c>）：表的列长未定，按不截断传值。</summary>
+        private const int ParameterSize = -1;
 
-        /// <summary>部材名列的长度（对应 NVARCHAR(100)）。</summary>
-        public const int TargetColumnMaxLength = 100;
-
-        /// <summary>備考列的长度（对应 NVARCHAR(255)）。</summary>
-        public const int NoteColumnMaxLength = 255;
-
-        /// <summary>读出全部行（按「部品名」+「部材名」排序）。</summary>
+        /// <summary>
+        /// 读出全部行（按「分類」+「置换前」+「置换后」排序）。
+        /// <c>DeleteFlg</c> 转成文字取回来，在 C# 侧过滤 —— bit / int / char 都能用。
+        /// </summary>
         private const string SelectSql =
-            "SELECT [" + SourceColumnName + "], [" + TargetColumnName + "], [" + NoteColumnName +
-            "] FROM [" + TableName + "] ORDER BY [" + SourceColumnName + "], [" + TargetColumnName + "];";
+            "SELECT [" + ClassificationColumnName + "], [" + SourceColumnName + "], [" + TargetColumnName +
+            "], CONVERT(NVARCHAR(20), [" + DeleteFlagColumnName + "]) FROM [" + TableName +
+            "] ORDER BY [" + ClassificationColumnName + "], [" + SourceColumnName + "], [" +
+            TargetColumnName + "];";
 
         private readonly MemberMappingDbSettings _settings;
         private readonly SqlConnection _connection;
@@ -119,7 +125,9 @@ namespace MSIFAITOOLS.Services
             get { return _settings; }
         }
 
-        /// <summary>读出全部行（按「部品名」+「部材名」排序）。</summary>
+        /// <summary>
+        /// 读出全部有效行（<c>DeleteFlg = 0</c> / 未设置的行），已削除的行跳过。
+        /// </summary>
         public IList<MemberNameReplacement> Query()
         {
             List<MemberNameReplacement> rows = new List<MemberNameReplacement>();
@@ -129,10 +137,13 @@ namespace MSIFAITOOLS.Services
             {
                 while (reader.Read())
                 {
+                    if (IsDeleted(GetText(reader, 3)))
+                    {
+                        continue;
+                    }
+
                     rows.Add(new MemberNameReplacement(
-                        reader.IsDBNull(0) ? string.Empty : reader.GetString(0),
-                        reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
-                        reader.IsDBNull(2) ? string.Empty : reader.GetString(2)));
+                        GetText(reader, 1), GetText(reader, 2), GetText(reader, 0)));
                 }
             }
 
@@ -140,11 +151,11 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 按「部品名」（<c>BuhinName</c>）查对应的「部材名」（<c>BuzaiName</c>）一览
-        /// （「选择部材名」窗口按部品名提示部材名 用；按 <c>BuzaiName</c> 排序，没有时返回空列表）。
-        /// 主键是 <c>(BuhinName, BuzaiName)</c>，所以同一个部品名 可能对应多个部材名（全部返回）。
+        /// 按「置换前」（<c>MsifDevName</c>）查对应的「置换后」（<c>GenpinName</c>）一览
+        /// （「选择部材名」窗口按部品名提示部材名 用；按 <c>GenpinName</c> 排序，没有时返回空列表）。
+        /// 已削除（<c>DeleteFlg</c> 非 0）的行不算；同一个词可能对应多个置换后（全部返回、去重）。
         /// </summary>
-        /// <param name="source">部品名（精确匹配；前后空白会被去掉）。</param>
+        /// <param name="source">置换前（精确匹配；前后空白会被去掉）。</param>
         public IList<string> QueryTargets(string source)
         {
             List<string> targets = new List<string>();
@@ -156,18 +167,24 @@ namespace MSIFAITOOLS.Services
             }
 
             const string sql =
-                "SELECT [" + TargetColumnName + "] FROM [" + TableName + "] WHERE [" + SourceColumnName +
-                "] = @source ORDER BY [" + TargetColumnName + "];";
+                "SELECT [" + TargetColumnName + "], CONVERT(NVARCHAR(20), [" + DeleteFlagColumnName +
+                "]) FROM [" + TableName + "] WHERE [" + SourceColumnName + "] = @source ORDER BY [" +
+                TargetColumnName + "];";
 
             using (SqlCommand command = new SqlCommand(sql, _connection))
             {
-                command.Parameters.Add("@source", SqlDbType.NVarChar, SourceColumnMaxLength).Value = value;
+                command.Parameters.Add("@source", SqlDbType.NVarChar, ParameterSize).Value = value;
 
                 using (SqlDataReader reader = command.ExecuteReader())
                 {
                     while (reader.Read())
                     {
-                        string target = reader.IsDBNull(0) ? string.Empty : reader.GetString(0).Trim();
+                        if (IsDeleted(GetText(reader, 1)))
+                        {
+                            continue;
+                        }
+
+                        string target = GetText(reader, 0);
 
                         if (target.Length > 0 && !targets.Contains(target))
                         {
@@ -180,172 +197,38 @@ namespace MSIFAITOOLS.Services
             return targets;
         }
 
+        /// <summary>取单元格文本（null / DBNull → 空串，去首尾空格）。</summary>
+        private static string GetText(SqlDataReader reader, int index)
+        {
+            return reader.IsDBNull(index) ? string.Empty : (reader.GetValue(index) ?? string.Empty).ToString().Trim();
+        }
+
         /// <summary>
-        /// 按主键 <c>(BuhinName, BuzaiName)</c> 精确同步（维护画面点【保存】时调用）：
-        /// 库里有、这次没提交的键 → <c>DELETE</c>；提交的键库里没有 → <c>INSERT</c>；
-        /// 其它 → <c>UPDATE</c>（同时刷新 <c>UpdatedAt</c>）。空「部品名」/ 空「部材名」的行跳过。
+        /// <c>DeleteFlg</c> 是否表示「已削除」：<c>0</c> / <c>false</c> / <c>F</c> / <c>N</c> / NULL = 未削除，
+        /// 其它（<c>1</c> / <c>true</c> / <c>T</c> / <c>Y</c> / 其它削除代码）= 已削除（bit / int / char 都按文字判断）。
         /// </summary>
-        public void Save(IList<MemberNameReplacement> rows)
+        private static bool IsDeleted(string value)
         {
-            using (SqlTransaction transaction = _connection.BeginTransaction())
+            string text = (value ?? string.Empty).Trim();
+
+            if (text.Length == 0)
             {
-                HashSet<string> existingKeys = QueryKeys(transaction);
-                HashSet<string> submittedKeys = new HashSet<string>(StringComparer.Ordinal);
-
-                if (rows != null)
-                {
-                    foreach (MemberNameReplacement row in rows)
-                    {
-                        if (row != null && row.Source.Length > 0 && row.Target.Length > 0)
-                        {
-                            submittedKeys.Add(BuildKey(row.Source, row.Target));
-                        }
-                    }
-                }
-
-                DeleteMissingRows(transaction, existingKeys, submittedKeys);
-                UpsertRows(transaction, rows, existingKeys);
-
-                transaction.Commit();
-            }
-        }
-
-        /// <summary>把 1 行的主键拼成 1 个字符串（<c>BuhinName</c> + 分隔符 + <c>BuzaiName</c>）。</summary>
-        private static string BuildKey(string source, string target)
-        {
-            return (source ?? string.Empty) + "\u0001" + (target ?? string.Empty);
-        }
-
-        /// <summary>把主键字符串拆成 <c>@source</c> / <c>@target</c> 两个参数值。</summary>
-        private static void SplitKey(string key, SqlParameter source, SqlParameter target)
-        {
-            int separator = key.IndexOf('\u0001');
-
-            source.Value = separator < 0 ? key : key.Substring(0, separator);
-            target.Value = separator < 0 ? string.Empty : key.Substring(separator + 1);
-        }
-
-        /// <summary>读出现有行的主键（判断「删除 / 更新 / 插入」用）。</summary>
-        private HashSet<string> QueryKeys(SqlTransaction transaction)
-        {
-            HashSet<string> keys = new HashSet<string>(StringComparer.Ordinal);
-
-            using (SqlCommand command = new SqlCommand(
-                "SELECT [" + SourceColumnName + "], [" + TargetColumnName + "] FROM [" + TableName + "];",
-                _connection, transaction))
-            using (SqlDataReader reader = command.ExecuteReader())
-            {
-                while (reader.Read())
-                {
-                    string source = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-                    string target = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-
-                    keys.Add(BuildKey(source.Trim(), target.Trim()));
-                }
+                return false;
             }
 
-            return keys;
+            return !string.Equals(text, "0", StringComparison.Ordinal) &&
+                !string.Equals(text, "false", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(text, "f", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(text, "n", StringComparison.OrdinalIgnoreCase);
         }
 
-        /// <summary>删除「库里有、这次提交里没有」的行（= 画面里删掉的行）。</summary>
-        private void DeleteMissingRows(SqlTransaction transaction, HashSet<string> existingKeys,
-            HashSet<string> submittedKeys)
-        {
-            using (SqlCommand command = new SqlCommand(
-                "DELETE FROM [" + TableName + "] WHERE [" + SourceColumnName + "] = @source AND [" +
-                TargetColumnName + "] = @target;",
-                _connection, transaction))
-            {
-                SqlParameter source = command.Parameters.Add("@source", SqlDbType.NVarChar, SourceColumnMaxLength);
-                SqlParameter target = command.Parameters.Add("@target", SqlDbType.NVarChar, TargetColumnMaxLength);
-
-                foreach (string key in existingKeys)
-                {
-                    if (submittedKeys.Contains(key))
-                    {
-                        continue;
-                    }
-
-                    SplitKey(key, source, target);
-                    command.ExecuteNonQuery();
-                }
-            }
-        }
-
-        /// <summary>更新 / 插入行（主键 <c>(BuhinName, BuzaiName)</c> 在库里存在 → UPDATE，否则 INSERT）。</summary>
-        private void UpsertRows(SqlTransaction transaction, IList<MemberNameReplacement> rows,
-            HashSet<string> existingKeys)
-        {
-            string updateSql = "UPDATE [" + TableName + "] SET [" + NoteColumnName + "] = @note, [" +
-                UpdatedAtColumnName + "] = GETDATE() WHERE [" + SourceColumnName + "] = @source AND [" +
-                TargetColumnName + "] = @target;";
-
-            string insertSql = "INSERT INTO [" + TableName + "] ([" + SourceColumnName + "], [" +
-                TargetColumnName + "], [" + NoteColumnName + "], [" + UpdatedAtColumnName +
-                "]) VALUES (@source, @target, @note, GETDATE());";
-
-            using (SqlCommand update = new SqlCommand(updateSql, _connection, transaction))
-            using (SqlCommand insert = new SqlCommand(insertSql, _connection, transaction))
-            {
-                AddValueParameters(update);
-                AddValueParameters(insert);
-
-                if (rows == null)
-                {
-                    return;
-                }
-
-                foreach (MemberNameReplacement row in rows)
-                {
-                    if (row == null || row.Source.Length == 0 || row.Target.Length == 0)
-                    {
-                        continue;
-                    }
-
-                    SetValueParameters(row, update.Parameters);
-
-                    if (existingKeys.Contains(BuildKey(row.Source, row.Target)) &&
-                        update.ExecuteNonQuery() > 0)
-                    {
-                        continue;
-                    }
-
-                    SetValueParameters(row, insert.Parameters);
-                    insert.ExecuteNonQuery();
-                }
-            }
-        }
-
-        /// <summary>加 @source / @target / @note 三个参数。</summary>
-        private static void AddValueParameters(SqlCommand command)
-        {
-            command.Parameters.Add("@source", SqlDbType.NVarChar, SourceColumnMaxLength);
-            command.Parameters.Add("@target", SqlDbType.NVarChar, TargetColumnMaxLength);
-            command.Parameters.Add("@note", SqlDbType.NVarChar, NoteColumnMaxLength);
-        }
-
-        /// <summary>把 1 行写进参数（備考 为空时存 NULL）。</summary>
-        private static void SetValueParameters(MemberNameReplacement row, SqlParameterCollection parameters)
-        {
-            parameters["@source"].Value = row.Source;
-            parameters["@target"].Value = row.Target;
-            parameters["@note"].Value = row.Note.Length == 0 ? (object)DBNull.Value : row.Note;
-        }
-
-        /// <summary>表里的行数（日志 / 画面提示用）。</summary>
+        /// <summary>表里的有效行数（日志 / 画面提示用；已削除的行不算，与 <see cref="Query"/> 一致）。</summary>
         public int Count()
         {
-            using (SqlCommand command = new SqlCommand("SELECT COUNT(*) FROM [" + TableName + "];", _connection))
-            {
-                object value = command.ExecuteScalar();
-
-                return value == null || value == DBNull.Value
-                    ? 0
-                    : Convert.ToInt32(value, CultureInfo.InvariantCulture);
-            }
+            return Query().Count;
         }
 
-        /// <summary>表是否存在于当前库（不存在时画面给出「请先建表」提示）。</summary>
+        /// <summary>表是否存在于当前库（不存在时画面提示确认 DB 名 / 表名）。</summary>
         public bool TableExists()
         {
             using (SqlCommand command = new SqlCommand(
@@ -370,7 +253,7 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 用当前生效的连接信息描述目标（日志 / 画面用），
-        /// 例：<c>SQL Server 10.103.126.209,1433 / DB MSIF / 表 DL_BuhinBuzaiMapping</c>。
+        /// 例：<c>SQL Server 10.103.126.208,1433 / DB genpin / 表 T_M_MergeName</c>。
         /// </summary>
         public static string DescribeTarget()
         {
@@ -387,7 +270,7 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 【测试连接】：真的连一次库，并检查表 <see cref="TableName"/> 是否存在
-        /// （表不存在也算连上了，只是结果文字里提示建表）。
+        /// （表不存在也算连上了，只是结果文字里提示确认 DB 名）。
         /// </summary>
         /// <param name="settings">要测试的连接信息。</param>
         /// <param name="message">结果文字（成功 / 失败原因）。</param>
@@ -429,8 +312,11 @@ namespace MSIFAITOOLS.Services
 
                     if (tableExists)
                     {
+                        // 与 Query() 一致：只数有效行（DeleteFlg 为 0 / false / F / N / NULL）
                         using (SqlCommand command = new SqlCommand(
-                            "SELECT COUNT(*) FROM [" + TableName + "];", connection))
+                            "SELECT COUNT(*) FROM [" + TableName + "] WHERE CONVERT(NVARCHAR(20), ISNULL([" +
+                            DeleteFlagColumnName + "], 0)) NOT IN (N'1', N'true', N'True', N't', N'T', " +
+                            "N'y', N'Y', N'-1');", connection))
                         {
                             object value = command.ExecuteScalar();
                             rowCount = value == null || value == DBNull.Value
@@ -441,9 +327,9 @@ namespace MSIFAITOOLS.Services
 
                     message = tableExists
                         ? "连接成功：" + settings.DescribeTarget() + " / 表 " + TableName +
-                          "（" + rowCount + " 条）"
+                          "（有效 " + rowCount + " 条）"
                         : "连接成功，但库 " + settings.Database + " 里没有表 " + TableName +
-                          "。请先用建表 SQL 创建该表。";
+                          "。请确认 DB 名（本工具读 genpin 库）以及该表是否存在。";
 
                     return true;
                 }

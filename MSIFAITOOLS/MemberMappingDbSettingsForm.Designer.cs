@@ -53,7 +53,7 @@ namespace MSIFAITOOLS
             this.lblTitle.Name = "lblTitle";
             this.lblTitle.Size = new System.Drawing.Size(572, 26);
             this.lblTitle.TabIndex = 0;
-            this.lblTitle.Text = "部材名置换表 · 数据库连接设置";
+            this.lblTitle.Text = "部材名面板 · 数据库连接设置";
             // 
             // lblHint
             // 
@@ -64,7 +64,7 @@ namespace MSIFAITOOLS
             this.lblHint.Name = "lblHint";
             this.lblHint.Size = new System.Drawing.Size(570, 20);
             this.lblHint.TabIndex = 1;
-            this.lblHint.Text = "部材名置换表使用 SQL Server 的表 DL_BuhinBuzaiMapping。保存后立即生效（不用重启程序）。";
+            this.lblHint.Text = "读取表 genpin.dbo.T_M_MergeName（MsifDevName → GenpinName）。保存后立即生效，无需重启程序。";
             // 
             // grpConnection
             // 
@@ -280,7 +280,7 @@ namespace MSIFAITOOLS
             this.ShowIcon = false;
             this.ShowInTaskbar = false;
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
-            this.Text = "部材名置换表 · 连接设置";
+            this.Text = "部材名面板 · 连接设置";
             this.grpConnection.ResumeLayout(false);
             this.grpConnection.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)(this.numPort)).EndInit();

@@ -147,8 +147,9 @@ namespace MSIFAITOOLS.Services
         /// <summary>
         /// 使い分け（同一部品按品種 / 尺寸分用哪一个时的区分）。数据库列名 = 使い分け。
         /// 由【CMD 分析】第 6 步「使い分け自動設定」按拾い出し表（<c>hiroidashiData\*.xlsx</c> 第 12 列）
-        /// 自动填（<see cref="CmdUsageKindCollector"/>）：同一図番内 7 个字段全同的 2 行以上才算对象，
-        /// 已有值的行不覆盖，所以画面上仍可手工改。本来没有数据源时留空。
+        /// 自动填（<see cref="CmdUsageKindCollector"/>）：同一図番内「<b>部品名</b> + 区分 / 参照元 /
+        /// 部品コード / H・W 上下限」全同的 2 行以上才算对象（按位置拆开的 右… / 左… 部品名不同，
+        /// 不算同一部品、不成组），已有值的行不覆盖，所以画面上仍可手工改。本来没有数据源时留空。
         /// </summary>
         public string UsageKind { get; set; }
 

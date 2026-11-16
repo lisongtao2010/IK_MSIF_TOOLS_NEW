@@ -8,10 +8,15 @@ namespace MSIFAITOOLS.Services
     /// 内存里的「部材名置换表」（<see cref="MemberNameReplacementRepository"/> 的只读缓存）。
     ///
     /// <para>
-    /// 用途：图上 / <c>parts_info.json</c> 里的文字不一定是想要的部材名（例：<c>鴨居</c> 要登录成 <c>上枠</c>），
-    /// 维护画面（<see cref="MemberNameReplacementForm"/>）在 SQL Server 表 <c>DL_BuhinBuzaiMapping</c>
-    /// 里配好「部品名（BuhinName）→ 部材名（BuzaiName）」后，
+    /// 用途：图上 / <c>parts_info.json</c> 上取得的词不一定是想要的部材名（例：<c>鴨居</c> 要登录成 <c>上枠</c>），
+    /// genpin 侧在 SQL Server 表 <c>genpin.dbo.T_M_MergeName</c> 里配好
+    /// 「置换前（<c>MsifDevName</c>）→ 置换后（<c>GenpinName</c>）」后，
     /// 写进 <see cref="PartBasicInfo.MemberName"/> 的部材名会按这张表自动置换。
+    /// </para>
+    ///
+    /// <para>
+    /// <b>读取时机</b>：程序启动时（<c>Program.Main</c> → <see cref="Preload"/>）把整表读进内存，
+    /// 之后置换不再连数据库；【部材名面板】的【重新载入】/【连接设置】保存后调 <see cref="Reload"/> 刷新。
     /// </para>
     ///
     /// <para>
@@ -28,7 +33,7 @@ namespace MSIFAITOOLS.Services
     ///
     /// <para>
     /// 置换表为空 / 数据库打不开时 <see cref="Replace"/> <b>原样返回</b>（不影响任何现有行为），
-    /// 原因记在 <see cref="LastError"/>。维护画面保存后会调 <see cref="Reload"/> 立即生效。
+    /// 原因记在 <see cref="LastError"/>。
     /// </para>
     /// </summary>
     internal static class MemberNameReplacementCatalog
@@ -39,12 +44,14 @@ namespace MSIFAITOOLS.Services
         /// <summary>当前生效的置换表（键 = 置换前，Ordinal；不可变，整表替换）。</summary>
         private static Dictionary<string, string> _map = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        /// <summary>是否已经读过数据库（第一次 <see cref="Replace"/> 时惰性加载）。</summary>
+        /// <summary>
+        /// 是否已经读过数据库（程序启动时 <see cref="Preload"/>；没预读成功的话第一次 <see cref="Replace"/> 会再试一次）。
+        /// </summary>
         private static bool _loaded;
 
         /// <summary>
         /// 当前使用的连接目标
-        /// （例：<c>SQL Server 10.103.126.209,1433 / DB MSIF / 表 DL_BuhinBuzaiMapping</c>；解析失败时是解析出来的目标）。
+        /// （例：<c>SQL Server 10.103.126.208,1433 / DB genpin / 表 T_M_MergeName</c>；解析失败时是解析出来的目标）。
         /// </summary>
         private static string _targetDescription = string.Empty;
 
@@ -91,12 +98,38 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 重新从数据库读一次（维护画面打开 / 重新载入 / 保存后调用，保证内存里的规则是最新的）。
+        /// 程序启动时预读用的连接超时（秒）：数据库连不上时不要把启动卡太久。
+        /// 预读失败的话，第一次置换时还会按默认超时（<see cref="MemberMappingDbSettings.ConnectTimeoutSeconds"/>）再试一次。
+        /// </summary>
+        public const int PreloadTimeoutSeconds = 3;
+
+        /// <summary>
+        /// 重新从数据库读一次（【部材名面板】的【重新载入】/【连接设置】保存后调用，保证内存里的规则是最新的）。
         /// </summary>
         public static void Reload()
         {
             _loaded = true;
-            Load();
+            Load(null);
+        }
+
+        /// <summary>
+        /// 程序启动时把整张置换表读进内存（<c>Program.Main</c> 调用）。
+        /// 失败只记 <see cref="LastError"/>（置换表为空 → 原样返回），不影响启动；
+        /// 启动时连不上的话保持「未加载」，第一次置换时用正常超时再试一次。
+        /// </summary>
+        public static void Preload()
+        {
+            _loaded = true;
+
+            MemberMappingDbSettings resolved = MemberMappingDbSettingsStore.Resolve();
+            MemberMappingDbSettings quick = new MemberMappingDbSettings(resolved.Server, resolved.Port,
+                resolved.Database, resolved.UserId, resolved.Password, resolved.ConfigurationSource,
+                PreloadTimeoutSeconds);
+
+            if (!Load(quick))
+            {
+                _loaded = false;
+            }
         }
 
         /// <summary>
@@ -144,18 +177,22 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 读 SQL Server 表 <c>DL_BuhinBuzaiMapping</c>
-        /// （失败只记 <see cref="LastError"/>，置换表置空 → 不影响原值）。
+        /// 读 SQL Server 表 <c>T_M_MergeName</c>（只取 <c>DeleteFlg = 0</c> 的行）。
+        /// 失败只记 <see cref="LastError"/>，置换表置空 → 不影响原值。
         /// </summary>
-        private static void Load()
+        /// <param name="settings">
+        /// 要用的连接信息；<c>null</c> = 按当前生效的配置（<see cref="MemberMappingDbSettingsStore.Resolve"/>）。
+        /// </param>
+        /// <returns>是否读成功（失败时 <see cref="LastError"/> 有原因）。</returns>
+        private static bool Load(MemberMappingDbSettings settings)
         {
             Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.Ordinal);
-            string target = MemberNameReplacementRepository.DescribeTarget();
+            string target = MemberNameReplacementRepository.ResolveTargetDescription(settings);
             string error = string.Empty;
 
             try
             {
-                using (MemberNameReplacementRepository repository = new MemberNameReplacementRepository())
+                using (MemberNameReplacementRepository repository = new MemberNameReplacementRepository(settings))
                 {
                     target = repository.TargetDescription;
 
@@ -183,6 +220,8 @@ namespace MSIFAITOOLS.Services
             _targetDescription = target;
             _lastError = error;
             _map = map;
+
+            return error.Length == 0;
         }
 
         /// <summary>第一次使用时加载（之后用缓存，直到 <see cref="Reload"/>）。</summary>
@@ -194,7 +233,7 @@ namespace MSIFAITOOLS.Services
             }
 
             _loaded = true;
-            Load();
+            Load(null);
         }
 
         /// <summary>

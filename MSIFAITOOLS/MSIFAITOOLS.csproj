@@ -166,15 +166,17 @@
   </ItemGroup>
   <!--
     【开始分解】第 1 步执行的是外部 CadPartSplitter.exe
-    （默认与 MSIFAITOOLS.exe 同一目录：<程序目录>\CadPartSplitter.exe；
-      旧布局 <程序目录>\CadPartSplitter\CadPartSplitter.exe 仍兼容，见 Services\CadPartSplitterRunner.cs）。
+    （默认位置：<程序目录>\CadPartSplitter\CadPartSplitter.exe，即 bin\{Debug,Release}\CadPartSplitter\；
+      旧布局 <程序目录>\CadPartSplitter.exe —— 与 MSIFAITOOLS.exe 同一目录 —— 仍兼容，
+      见 Services\CadPartSplitterRunner.cs）。
 
     本工程**不再链接 / 编译分割工程的源码**（原先这里用 ..\CadPartSplitter\*.cs 链接进来）：
     图像处理（OpenCvSharp4）、PDF 渲染（pdfium.dll）、部品表导出全都在那个 exe 里，
     升级分割逻辑时只替换 exe，本程序不用重新编译；两个程序各自一份原生库，也不会互相覆盖。
     分割逻辑的说明见 CadPartSplitter 工程与 docs\分割原理.md。
-    （本工程目录下的 CadPartSplitter\PdfRenderer.cs 是当时为了链接源码而写的渲染器，现在也不编译了，
-      可以直接把这个文件夹删掉；外部 exe 不在这里，而是在 MSIFAITOOLS.exe 同一目录下，不要混为一谈。）
+    （本工程**源码目录**下的 CadPartSplitter\PdfRenderer.cs 是当时为了链接源码而写的渲染器，现在也不编译了，
+      可以直接把这个源码文件夹删掉；它与输出目录里的 bin\{Debug,Release}\CadPartSplitter\ 不是一回事 ——
+      那里放的是外部 CadPartSplitter.exe 和它依赖的 pdfium.dll / OpenCvSharp 原生库。）
   -->
   <ItemGroup>
     <!-- 【CMD 分析】第 0 步 · 特注品.json 维护：Excel 整表原文导出（.xls/.xlsx/.xlsm → 文本送 AI） -->
@@ -185,6 +187,13 @@
          不引用本文件时，PdfiumViewer 会自己按「x64\Pdfium.dll」找，找不到就按名字搜，
          容易加载到版本不匹配的 pdfium.dll（预览报「找不到入口点 FPDF_Release」）。 -->
     <Compile Include="Services\PdfiumRuntime.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 【AI 分析】追加机能 · 特注品记录数量设定：
+         特注品 Excel（文件名第 5 位 Z，.xls / .xlsx / .xlsm）的整表原文 → AI 判数量 →
+         写部品基本信息「数量」列 + classify\特注品.json 的「員数」。 -->
+    <Compile Include="Services\SpecialProductQuantityAdvisor.cs" />
+    <Compile Include="Services\SpecialProductQuantityPromptStore.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
@@ -216,6 +225,13 @@
     <EmbeddedResource Include="Prompts\TzJsonMaintain.Prompt.txt">
       <LogicalName>MSIFAITOOLS.Prompts.TzJsonMaintain.Prompt.txt</LogicalName>
     </EmbeddedResource>
+    <!-- 【AI 分析】追加机能 · 特注品记录数量设定的 AI 判定提示语：同样既编译进 exe（兜底），又复制到输出目录（可运行时编辑） -->
+    <EmbeddedResource Include="Prompts\SpecialProductQuantityAdvisor.Prompt.txt">
+      <LogicalName>MSIFAITOOLS.Prompts.SpecialProductQuantityAdvisor.Prompt.txt</LogicalName>
+    </EmbeddedResource>
+    <None Include="Prompts\SpecialProductQuantityAdvisor.Prompt.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Include="Prompts\TzJsonMaintain.Prompt.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

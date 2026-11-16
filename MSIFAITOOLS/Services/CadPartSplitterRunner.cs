@@ -52,12 +52,12 @@ namespace MSIFAITOOLS.Services
     /// 已去掉 <c>..\CadPartSplitter\*.cs</c> 链接），日志里的输出根目录由本类的
     /// <see cref="GetDefaultBatchOutputDirectory"/> 按 exe 的同一规则复刻。
     ///
-    /// exe 位置：首选 <c>&lt;程序目录&gt;\CadPartSplitter.exe</c> —— 与 <c>MSIFAITOOLS.exe</c>
-    /// 同一个文件夹（现在的发布布局：把分割工程输出目录里的 CadPartSplitter.exe 连同它依赖的
-    /// pdfium.dll / OpenCvSharp 原生库一起放到 MSIFAITOOLS.exe 旁边即可）。
-    /// 兼容旧布局：<c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c>
-    /// （分割工程的 <c>OutputPath</c> 仍是 <c>..\MSIFAITOOLS\bin\{Debug,Release}\CadPartSplitter\</c>，
-    /// VS 里 F5 出来的只有这一份），同目录那份不存在时才用它。
+    /// exe 位置：<b>首选 <c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c></b> ——
+    /// 即 <c>MSIFAITOOLS.exe</c> 旁边的 <c>CadPartSplitter</c> 子文件夹（现在的发布布局：
+    /// 把分割工程输出目录里的 CadPartSplitter.exe 连同它依赖的 pdfium.dll / OpenCvSharp
+    /// 原生库一起放到 <c>bin\{Debug,Release}\CadPartSplitter\</c> 下即可）。
+    /// 兼容旧布局：<c>&lt;程序目录&gt;\CadPartSplitter.exe</c>（与 <c>MSIFAITOOLS.exe</c> 同一个
+    /// 文件夹），子文件夹那份不存在时才用它。
     /// 优先级最高的是环境变量 <c>CADPARTSPLITTER_EXE</c> 显式指定的路径（调试时临时指向别的版本用；
     /// 不会去上级目录 / 分割工程源码目录里找）。
     ///
@@ -74,7 +74,10 @@ namespace MSIFAITOOLS.Services
         /// <summary>可选：显式指定 CadPartSplitter.exe 路径的环境变量（优先级最高，不设就走 &lt;程序目录&gt; 下的默认位置）。</summary>
         public const string ExePathEnvironmentVariable = "CADPARTSPLITTER_EXE";
 
-        /// <summary>旧布局的子目录名（&lt;程序目录&gt;\CadPartSplitter\），只作兼容兜底用（见 <see cref="FindExePath"/>）。</summary>
+        /// <summary>
+        /// exe 所在的子目录名（<c>&lt;程序目录&gt;\CadPartSplitter\</c>）。
+        /// 默认调用位置就是这里的 <see cref="ExeFileName"/>（见 <see cref="FindExePath"/>）。
+        /// </summary>
         public const string ExeFolderName = "CadPartSplitter";
 
         /// <summary>最多缓存多少行输出（只用于失败时提示，不落盘，防止内存无限增长）。</summary>
@@ -87,8 +90,8 @@ namespace MSIFAITOOLS.Services
         /// 取要执行的 <c>CadPartSplitter.exe</c>，优先级依次为：
         /// <list type="number">
         ///   <item><description>环境变量 <c>CADPARTSPLITTER_EXE</c> 指定的路径（文件确实存在才算）；</description></item>
-        ///   <item><description><c>&lt;程序目录&gt;\CadPartSplitter.exe</c> —— 与 MSIFAITOOLS.exe 同目录（现在的发布布局）；</description></item>
-        ///   <item><description><c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c> —— 旧布局 / VS 调试输出，兼容兜底。</description></item>
+        ///   <item><description><c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c> —— 默认位置（发布布局 / VS 调试输出）；</description></item>
+        ///   <item><description><c>&lt;程序目录&gt;\CadPartSplitter.exe</c> —— 旧布局（与 MSIFAITOOLS.exe 同目录），兼容兜底。</description></item>
         /// </list>
         /// 全都找不到时返回 null，由 <see cref="RunBatch"/> 转成「已跳过第 1 步」的警告。
         /// </summary>
@@ -125,20 +128,20 @@ namespace MSIFAITOOLS.Services
 
             string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
 
-            // 首选：<程序目录>\CadPartSplitter.exe —— 与 MSIFAITOOLS.exe 同一个文件夹。
-            // 发布时把分割工程输出里的 CadPartSplitter.exe 连同它依赖的 pdfium.dll /
-            // OpenCvSharp 原生库一起放到 MSIFAITOOLS.exe 旁边即可。
-            string sameFolder = TryResolveExistingFile(baseDirectory, null, ExeFileName);
+            // 默认位置：<程序目录>\CadPartSplitter\CadPartSplitter.exe
+            // （发布 / VS 调试输出都用这一份：分割工程的 OutputPath 就是
+            //   ..\MSIFAITOOLS\bin\{Debug,Release}\CadPartSplitter\，
+            //   exe 与它依赖的 pdfium.dll / OpenCvSharp 原生库都放在这个子文件夹里）
+            string inSubFolder = TryResolveExistingFile(baseDirectory, ExeFolderName, ExeFileName);
 
-            if (sameFolder != null)
+            if (inSubFolder != null)
             {
-                return sameFolder;
+                return inSubFolder;
             }
 
-            // 兼容旧布局：<程序目录>\CadPartSplitter\CadPartSplitter.exe
-            // （分割工程的 OutputPath 仍是 ..\MSIFAITOOLS\bin\{Debug,Release}\CadPartSplitter\，
-            //   VS 里 F5 出来的只有这一份）。两处都没有就返回 null —— 跳过第 1 步，不阻断第 2 步。
-            return TryResolveExistingFile(baseDirectory, ExeFolderName, ExeFileName);
+            // 兼容旧布局：<程序目录>\CadPartSplitter.exe（与 MSIFAITOOLS.exe 同一个文件夹）。
+            // 两处都没有就返回 null —— 跳过第 1 步，不阻断第 2 步。
+            return TryResolveExistingFile(baseDirectory, null, ExeFileName);
         }
 
         /// <summary>
@@ -262,12 +265,12 @@ namespace MSIFAITOOLS.Services
                 {
                     // 找不到 exe：不阻断第 2 步，界面会显示「已跳过 CadPartSplitter 零件分割」
                     result.ExitCode = 1;
-                    // 提示按「首选位置」写：与 MSIFAITOOLS.exe 同目录
-                    // （旧布局 <程序目录>\CadPartSplitter\ 也仍然能用，见 FindExePath）
+                    // 提示按「默认位置」写：<程序目录>\CadPartSplitter\（与 FindExePath 一致）
+                    // 旧布局（与 MSIFAITOOLS.exe 同目录）也仍然能用，见 FindExePath
                     result.ErrorMessage =
                         "找不到 " + ExeFileName + "：请把它放到 "
-                        + Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ExeFileName)
-                        + "（与 MSIFAITOOLS.exe 同目录），或用环境变量 "
+                        + Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ExeFolderName, ExeFileName)
+                        + "（MSIFAITOOLS.exe 旁边的 " + ExeFolderName + " 文件夹），或用环境变量 "
                         + ExePathEnvironmentVariable + " 指定完整路径";
 
                     onLine("[ERROR] " + result.ErrorMessage);
@@ -295,6 +298,18 @@ namespace MSIFAITOOLS.Services
                     onLine("[INFO] 命令行：\"" + exePath + "\" " + startInfo.Arguments);
                     onLine("[INFO] 输出根目录："
                            + GetDefaultBatchOutputDirectory(folder));
+
+                    // exe 在子文件夹（默认布局）时，它自己的依赖（pdfium.dll / OpenCvSharp 系列）
+                    // 必须与它放在同一文件夹，否则进程一启动就会因找不到 DLL 而失败
+                    // （BaseDirectory 结尾自带 "\"，所以先去掉末尾分隔符再比较）
+                    if (!string.Equals(
+                            startInfo.WorkingDirectory.TrimEnd(Path.DirectorySeparatorChar),
+                            AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        onLine("[INFO] 零件分割：exe 位于子文件夹，它依赖的原生库"
+                               + "（pdfium.dll / OpenCvSharp 相关 dll）需要与它放在同一文件夹");
+                    }
 
                     using (Process process = new Process())
                     {
@@ -499,3 +514,4 @@ namespace MSIFAITOOLS.Services
 
     }
 }
+

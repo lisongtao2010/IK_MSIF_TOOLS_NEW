@@ -17,6 +17,7 @@ namespace MSIFAITOOLS
             Application.SetCompatibleTextRenderingDefault(false);
 
             PrepareMemberPartDatabase();
+            PrepareMemberNameMapping();
             PreparePdfRenderer();
 
             Application.Run(new Form1());
@@ -44,6 +45,26 @@ namespace MSIFAITOOLS
             catch (Exception)
             {
                 // 自检本身出问题也不影响启动（预览时会再检查一次并给出提示）
+            }
+        }
+
+        /// <summary>
+        /// 程序启动时把「部材名置换表」（SQL Server 的表 <c>genpin.dbo.T_M_MergeName</c>）整表读进内存
+        /// （<see cref="MemberNameReplacementCatalog.Preload"/>）：之后分析 / 保存时的部材名置换不再连数据库。
+        /// <para>
+        /// 连不上也不影响启动：置换表为空 → 部材名原样保留，原因记在
+        /// <see cref="MemberNameReplacementCatalog.LastError"/>；【部材名面板】点【重新载入】可再试。
+        /// </para>
+        /// </summary>
+        private static void PrepareMemberNameMapping()
+        {
+            try
+            {
+                MemberNameReplacementCatalog.Preload();
+            }
+            catch (Exception)
+            {
+                // 预读本身出问题也不影响启动（第一次置换时会用正常超时再试一次）
             }
         }
 

@@ -61,10 +61,13 @@ namespace MSIFAITOOLS.Services
     ///         用「色」把部品コード 里的颜色换成 <c>□</c>（<c>MEACC429</c> → <c>MEA□429</c>），
     ///         再把连续的符号压成一个 <c>□</c>（<c>MEA□□405</c> → <c>MEA□405</c>，只改这一列）。
     ///         换完和同図番 / 同页码 / 同番号 的另一行撞键的行跳过（= 重複チェック，记警告）。</item>
-    ///   <item><b>設定使い分け</b>（<see cref="CmdUsageKindCollector"/>）：同一図番内「区分 / 参照元 / 部品コード /
-    ///         H下限 / H上限 / W下限 / W上限」全相同的 2 行以上，按「部品コード」查
+    ///   <item><b>設定使い分け</b>（<see cref="CmdUsageKindCollector"/>）：同一図番内「<b>部品名</b> / 区分 / 参照元 /
+    ///         部品コード / H下限 / H上限 / W下限 / W上限」全相同的 2 行以上，按「部品コード」查
     ///         <c>hiroidashiData</c> 里的 <c>*.xlsx</c> 第 4 列（部品ｺｰﾄﾞ/形材番号）相同的行，
     ///         把第 12 列（使い分け）的值按顺序填到这些行上（只改这一列）。
+    ///         <b>「部品名」也算在「同一部品」的判定里</b>：<c>右縦枠上部スペーサー</c> /
+    ///         <c>左縦枠上部スペーサー</c> 这种按位置拆开的行部品名不同 → <b>不算同一部品</b>、
+    ///         不成组，所以不会因为部品コード 相同就被填 使い分け。
     ///         填值前<b>逐行核对</b>该行记录在库里的部品コード 与拾い出し表那条明细的部品ｺｰﾄﾞ
     ///         （<c>□ / △ / ○ …</c> 按通配，<c>MEA□429</c> = <c>MEACC429</c>），对不上的行<b>不填</b>并记警告。
     ///         <b>放在部品コード 正規化（第 5 步）之后</b>：这时部品コード 已经是 <c>MEA□429</c> 这种写法，
@@ -1143,7 +1146,7 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 第 6 步「使い分け自動設定」：同一図番内「区分 / 参照元 / 部品コード /
+        /// 第 6 步「使い分け自動設定」：同一図番内「<b>部品名</b> / 区分 / 参照元 / 部品コード /
         /// H下限 / H上限 / W下限 / W上限」全部相同的 2 行以上 = 同一个部品的多条，
         /// 按「部品コード」去 <c>hiroidashiData</c> 里的 <c>*.xlsx</c> 第 4 列
         /// （部品ｺｰﾄﾞ/形材番号）找相同的行，把第 12 列「使い分け」的值按顺序填到这些行上。
@@ -1157,7 +1160,10 @@ namespace MSIFAITOOLS.Services
         ///         自己记录的「部品ｺｰﾄﾞ/形材番号」再比一次（<see cref="CmdUsageKindCollector.PartCodeMatches"/>，
         ///         <c>□ / △ / ○ …</c> 按通配处理）—— 对不上的行<b>不填</b>，记警告后跳过，
         ///         绝不会把别的部品コード 的「使い分け」写进来；</item>
-        ///   <item>7 个字段相同但只有 1 行时不算「两条数据都一样」，不处理。</item>
+        ///   <item><b>「部品名」也参与分组</b>：按位置拆开的行（<c>右縦枠上部スペーサー</c> /
+        ///         <c>左縦枠上部スペーサー</c>）部品名不同 → 不属于同一个组，不会因为部品コード
+        ///         相同就被填 使い分け；</item>
+        ///   <item>8 个字段（部品名 + 上面 7 个）相同但只有 1 行时不算「两条数据都一样」，不处理。</item>
         /// </list>
         /// <para>
         /// 这一步<b>不建行、不删行</b>，只改「使い分け」一列（<see cref="PartBasicInfoRepository.UpdateUsageKinds"/>），
@@ -1175,7 +1181,7 @@ namespace MSIFAITOOLS.Services
         {
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Empty);
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
-                "{0}同一図番内「区分 / 参照元 / 部品コード / H下限 / H上限 / W下限 / W上限」全同的 2 行以上 " +
+                "{0}同一図番内「部品名 / 区分 / 参照元 / 部品コード / H下限 / H上限 / W下限 / W上限」全同的 2 行以上 " +
                 "→ 按部品コード查 {1} 里的 xlsx 第 4 列 → 逐行核对部品コード 后填入第 12 列「使い分け」",
                 CmdAnalysisSteps.UsageKindStep.LogHeader, CmdUsageKindCollector.FolderName));
 
@@ -1242,13 +1248,13 @@ namespace MSIFAITOOLS.Services
             if (summary.UsageKindGroupCount == 0 && summary.UsageKindMissGroupCount == 0)
             {
                 PartAnalysisService.ReportLog(onLog, LogKind.Info,
-                    "  没有需要设置使い分け的多行（没有 7 个字段全同的 2 行以上）");
+                    "  没有需要设置使い分け的多行（没有「部品名 + 7 个字段」全同的 2 行以上）");
             }
         }
 
         /// <summary>
-        /// 一个図番的第 6 步：读该図番的行 → 按 7 个字段分组 → 组内<b>逐行核对部品コード 后</b>填「使い分け」
-        /// → 只更新这一列。
+        /// 一个図番的第 6 步：读该図番的行 → 按「部品名 + 7 个字段」分组
+        /// → 组内<b>逐行核对部品コード 后</b>填「使い分け」→ 只更新这一列。
         /// </summary>
         private static void AssignUsageKindsForDrawing(string drawingNo, PartBasicInfoRepository repository,
             CmdUsageKindIndex index, PartAnalysisSummary summary, Action<LogKind, string> onLog)
@@ -1281,8 +1287,8 @@ namespace MSIFAITOOLS.Services
                     summary.UsageKindMissGroupCount++;
 
                     PartAnalysisService.ReportLog(onLog, LogKind.Warning, string.Format(
-                        "  {0}：{1} 行（部品コード {2}）在拾い出し表里找不到，跳过",
-                        drawingNo, group.Parts.Count, group.PartCode));
+                        "  {0}：{1} 行（部品名 {2} / 部品コード {3}）在拾い出し表里找不到，跳过",
+                        drawingNo, group.Parts.Count, group.PartName, group.PartCode));
 
                     continue;
                 }
@@ -1324,8 +1330,8 @@ namespace MSIFAITOOLS.Services
                 matchedGroups++;
 
                 PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
-                    "  {0}：{1} 行（部品コード {2}）← 使い分け {3}（拾い出し表 {4} 条{5}）",
-                    drawingNo, group.Parts.Count, group.PartCode,
+                    "  {0}：{1} 行（部品名 {2} / 部品コード {3}）← 使い分け {4}（拾い出し表 {5} 条{6}）",
+                    drawingNo, group.Parts.Count, group.PartName, group.PartCode,
                     assigned.Count == 0 ? "（都已有值，不改）" : string.Join(" / ", assigned.ToArray()),
                     entries.Count,
                     mismatchCount == 0 ? string.Empty : "，部品コード 不一致 " + mismatchCount + " 行"));
@@ -1348,9 +1354,14 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 按「区分 / 参照元 / 部品コード / H下限 / H上限 / W下限 / W上限」分组，
+        /// 按「部品名 / 区分 / 参照元 / 部品コード / H下限 / H上限 / W下限 / W上限」分组，
         /// 只返回 2 行以上的组（顺序 = 首次出现的顺序 = 页码 → 番号）。
         /// 空值与空值视为相同（区分 / H・W 上下限 经常是空）。
+        /// <para>
+        /// <b>部品名也是「同一个部品」的判定条件</b>：<c>右縦枠上部スペーサー</c> 与
+        /// <c>左縦枠上部スペーサー</c> 这种按位置拆开的行部品名不同，<b>不属于同一组</b>，
+        /// 所以即使部品コード 相同也不会被自动填 使い分け。
+        /// </para>
         /// </summary>
         private static List<UsageKindGroup> BuildUsageKindGroups(IList<PartBasicInfo> parts)
         {
@@ -1370,7 +1381,7 @@ namespace MSIFAITOOLS.Services
 
                 if (!map.TryGetValue(key, out group))
                 {
-                    group = new UsageKindGroup(part.PartCode);
+                    group = new UsageKindGroup(part.PartName, part.PartCode);
                     map[key] = group;
                     ordered.Add(group);
                 }
@@ -1391,12 +1402,20 @@ namespace MSIFAITOOLS.Services
             return result;
         }
 
-        /// <summary>7 个字段拼成分组键（空 = 空，不去区分大小写，与画面显示一致）。</summary>
+        /// <summary>
+        /// 8 个字段拼成分组键（<b>部品名</b> + 区分 / 参照元 / 部品コード / H下限 / H上限 / W下限 / W上限；
+        /// 空 = 空，不去区分大小写，与画面显示一致）。
+        /// <para>
+        /// <b>部品名按原样比较</b>（只去首尾空白）：<c>右縦枠上部スペーサー</c> 与
+        /// <c>左縦枠上部スペーサー</c> 是<b>不同</b>的键，各自成组 → 不会互相套用 使い分け。
+        /// </para>
+        /// </summary>
         private static string BuildUsageKindGroupKey(PartBasicInfo part)
         {
             return string.Join("\u0001", new string[]
             {
-                NormalizeKey(part.FrameKind), NormalizeKey(part.SourceTag), NormalizeKey(part.PartCode),
+                NormalizeKey(part.PartName), NormalizeKey(part.FrameKind), NormalizeKey(part.SourceTag),
+                NormalizeKey(part.PartCode),
                 NormalizeKey(part.HeightMin), NormalizeKey(part.HeightMax),
                 NormalizeKey(part.WidthMin), NormalizeKey(part.WidthMax)
             });
@@ -2040,15 +2059,20 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 第 6 步的分组：同一図番内「区分 / 参照元 / 部品コード / H・W 上下限」全部相同的 2 行以上。
+        /// 第 6 步的分组：同一図番内「<b>部品名</b> / 区分 / 参照元 / 部品コード / H・W 上下限」
+        /// 全部相同的 2 行以上。
         /// </summary>
         private sealed class UsageKindGroup
         {
-            public UsageKindGroup(string partCode)
+            public UsageKindGroup(string partName, string partCode)
             {
+                PartName = partName ?? string.Empty;
                 PartCode = partCode ?? string.Empty;
                 Parts = new List<PartBasicInfo>();
             }
+
+            /// <summary>部品名（组内相同；右縦枠… / 左縦枠… 这种按位置拆开的行属于不同的组）。</summary>
+            public string PartName { get; private set; }
 
             /// <summary>部品コード（组内相同，用来查拾い出し表）。</summary>
             public string PartCode { get; private set; }

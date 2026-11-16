@@ -83,7 +83,8 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 窗体首次显示：输出启动信息并显示内置 PDF 引擎版本（已不再依赖 Python）。
+        /// 窗体首次显示：输出启动信息、内置 PDF 解析引擎（PdfPig）版本，
+        /// 以及 PDF 预览用的原生库（pdfium.dll）实际使用的是哪一份。
         /// </summary>
         private void Form1_Shown(object sender, EventArgs e)
         {
@@ -969,6 +970,12 @@ namespace MSIFAITOOLS
         /// （<c>部品ｾｯﾄ</c> / <c>取説</c>）、或者根本没写部材名。
         /// </para>
         /// <para>
+        /// <b>追加机能</b>：部材名判定之后，再把 PDF 文件夹下文件名第 5 位是 <c>Z</c> 的 Excel
+        /// （<c>.xls</c> / <c>.xlsx</c> / <c>.xlsm</c>）交给 AI 判「数量」，
+        /// 写进部品基本信息表的「数量」列与 <c>classify\特注品.json</c> 的「員数」
+        /// （见 <see cref="SpecialProductQuantityAdvisor"/>；失败不影响部材名结果）。
+        /// </para>
+        /// <para>
         /// 旧版本这里是「用 AI 从 plu_table.txt 提取整张部品表」，该功能已停用
         /// （<see cref="PartAnalysisService.AnalyzeAndSave"/> 不再被按钮调用）。
         /// </para>
@@ -1123,6 +1130,35 @@ namespace MSIFAITOOLS
                 failure = ex;
             }
 
+            // 【AI 分析】追加机能 · 特注品记录的数量设定：
+            // 部材名判定之后，再把 PDF 文件夹下文件名第 5 位是 Z 的 Excel（.xls / .xlsx / .xlsm）交给 AI 判数量，
+            // 写进部品基本信息表的「数量」列与 classify\特注品.json 的「員数」。
+            // 数量判定失败只记日志，不影响上面已经完成的部材名结果（见 SpecialProductQuantityAdvisor）。
+            SpecialProductQuantitySummary quantitySummary = null;
+
+            if (failure == null)
+            {
+                string databasePath = ResolvePartDatabasePath();
+
+                try
+                {
+                    Func<SpecialProductQuantitySummary> quantityWork = delegate
+                    {
+                        string root = outputDir.TrimEnd(Path.DirectorySeparatorChar,
+                            Path.AltDirectorySeparatorChar);
+
+                        return SpecialProductQuantityAdvisor.Run(Path.GetDirectoryName(root), outputDir,
+                            databasePath, options, OnServiceLog);
+                    };
+
+                    quantitySummary = await Task.Run(quantityWork);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("特注品数量设定失败：" + ex.Message, Color.FromArgb(255, 200, 120));
+                }
+            }
+
             SetRunning(false);
 
             if (failure != null)
@@ -1154,12 +1190,23 @@ namespace MSIFAITOOLS
                 : Color.FromArgb(255, 200, 120));
             AppendLog("部品基本信息数据库：" + summary.DatabasePath, Color.FromArgb(180, 180, 180));
 
+            if (quantitySummary != null)
+            {
+                AppendLog(SpecialProductQuantityAdvisor.BuildSummaryText(quantitySummary),
+                    quantitySummary.DatabaseUpdatedCount > 0 || quantitySummary.JsonUpdatedCount > 0
+                        ? Color.FromArgb(150, 220, 150)
+                        : Color.FromArgb(255, 200, 120));
+            }
+
             SetStatus(summaryText, summary.FailedDrawingCount > 0
                 ? Color.FromArgb(255, 140, 140)
                 : Color.FromArgb(46, 125, 50));
 
             MessageBox.Show(this,
                 "AI 分析完成！\n\n" + summaryText + "\n\n" +
+                (quantitySummary == null
+                    ? string.Empty
+                    : SpecialProductQuantityAdvisor.BuildSummaryText(quantitySummary) + "\n\n") +
                 "部品基本信息数据库：\n" + summary.DatabasePath + "\n\n" +
                 "可在【分类结果】选中 PDF 行后点击【部品信息】，查看「" +
                 PartBasicInfoRepository.MemberNameAiColumnName + "」列。",

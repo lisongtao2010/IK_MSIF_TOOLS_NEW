@@ -5,7 +5,9 @@
 > `Services\MemberPartCatalog.cs`、`Services\MemberPartRepository.cs`、
 > `Services\MemberNamePromptStore.cs`、`Services\ChatCompletionClient.cs`、
 > `Services\AiApiOptions.cs`、`Services\PartBasicInfoRepository.cs`、`Services\PartsInfoIndex.cs`
-> 提示词：`Prompts\MemberNameAdvisor.Prompt.txt`
+> 追加机能（特注品数量设定）：`Services\SpecialProductQuantityAdvisor.cs`、
+> `Services\SpecialProductQuantityPromptStore.cs`
+> 提示词：`Prompts\MemberNameAdvisor.Prompt.txt`、`Prompts\SpecialProductQuantityAdvisor.Prompt.txt`
 > 主程序：`MSIFAITOOLS\bin\Debug\MSIFAITOOLS.exe`
 > 更新日期：2026-11-15
 
@@ -56,6 +58,11 @@ Form1（主窗口）
         │     │     ├─ ChatCompletionClient.Complete(...)     每页 1 次（429 / 5xx / 超时自动重试 3 次）
         │     │     └─ ApplyResponse(...)                     AI 答案 + 兜底链 → 得到每行推荐值
         │     └─ PartBasicInfoRepository.UpdateMemberNameSuggestions(図番, 变化行)  只更新「部材名AI推荐」
+        ├─ Task.Run → SpecialProductQuantityAdvisor.Run(PDF 文件夹, 分解输出目录, DB, AI, 日志)  ← 追加机能
+        │     ├─ 扫描文件名第 5 位是 Z 的 Excel（.xls / .xlsx / .xlsm）：ExcelSheetDumper 整表原文
+        │     ├─ ChatCompletionClient.Complete(...)                每个文件 1 次（判「整份数量 / 逐条員数」）
+        │     ├─ PartBasicInfoRepository.UpdateQuantityBySourceFile / UpdateQuantityByPart → DB「数量」列
+        │     └─ 写 classify\特注品.json 的「員数」
         └─ 汇总 → 日志 + 状态栏 + 完成弹窗
 ```
 
@@ -487,3 +494,68 @@ H310-三方枠：需要判定 23 行（部材名 空 0 行 / その他 5 行 / �
 - `docs\CMD分析_步骤命名.md`：CMD 分析第 0 ~ 6 步的命名与顺序（第 1 步就是部材名 `|` 的来源）。
 - `PdfPreviewForm_功能说明.md`：PDF 预览窗口（核对图纸时用）。
 - 提示词原文：`MSIFAITOOLS\Prompts\MemberNameAdvisor.Prompt.txt`（文件头注释里也写了判定顺序）。
+
+---
+
+## 18. 追加机能：特注品记录的数量设定（2026-11-15）
+
+> 与部材名判定同一批次执行：**先**部材名判定（`MemberNameAiAdvisor`），**再**跑本节的数量设定；
+> 数量设定失败只写日志，不影响已经完成的部材名结果。
+
+### 18.1 做什么
+
+对选择的 PDF 文件夹下**文件名第 5 位是 `Z`**（特注品，判定口径 = `CmdSpecialProductRule`）的
+Excel（`.xls` / `.xlsx` / `.xlsm`）判断数量，并写到：
+
+| 写入目标 | 具体位置 | 定位方式 |
+|----------|----------|----------|
+| 部品基本信息表 | 「数量」列（`QuantityColumnName`） | 「来源表格文件 = 该図番的 `AiAppData\<図番>\特注品.csv`」（= 【CMD 分析】第 4 步登录的行） |
+| `classify\特注品.json` | 每条明细的「員数」 | `file` 相同的条目 |
+| `特注品.csv` | **不写** | 该文件由【CMD 分析】最前面一步重新生成，手改会被覆盖 |
+
+### 18.2 两种典型写法（提示词里写死的判定规则）
+
+| 情形 | 例子 | 结果 |
+|------|------|------|
+| 文章型 | `I400Z10006.xls` 正文 / 注記 写着「1個追加(同梱)」 | `fileQuantity = 1` → 该文件全部行的「数量」= 1（有「同梱」没写数字也按 1） |
+| 表型 | `I400Z10002.xls` 的 sheet1 表格里有 数量 / 員数 / 個数 / 入数 / QTY 列 | 逐条 `items[].員数` → 按 部品コード / 部品名 对上行的「数量」 |
+
+两种都有时**表型优先**；数量只照抄 Excel 原文（全角数字、`A` / `C` / `G` 类型代号都不换算、不合计）。
+
+### 18.3 处理流程（一个文件）
+
+1. `ExcelSheetDumper.Read` → 整表原文（所有工作表 + 行号 + 单元格原文，最多 3 万字符）；
+2. 从 `特注品.json` 取该 `file` 的已有条目（品種 / 部品名 / 部品コード）作对照；
+3. `ChatCompletionClient.Complete` → 解析 `{"fileQuantity", "source", "reason", "items":[…]}`；
+4. `UpdateTzJson`：`fileQuantity` 先写该文件全部条目，逐条 `items` 再覆盖；
+5. `UpdateDatabase`：`UpdateQuantityBySourceFile`（整份）→ `UpdateQuantityByPart`（逐条，部品コード OR 部品名）。
+
+### 18.4 安全约定
+
+- 数据库文件不存在（还没做过【CMD 分析】）时**不新建库**，只写 `特注品.json`，日志「数据库还不存在…」；
+- 判不到数量 / AI 解析失败：该文件不动任何数据，其它文件继续；
+- 只改「数量」与「員数」两处，其它列（部材名 / 部品名 / 备注 / 登录时间…）不动；
+- 【CMD 分析】第 4 步现在也会把 `特注品.csv` 的「員数」写进「数量」列，
+  所以重跑【CMD 分析】后想保留 AI 判的数量，**再点一次【AI 分析】**即可。
+
+### 18.5 日志长什么样
+
+```text
+特注品数量设定：扫描 <PDF 文件夹> 下的 Excel（文件名第 5 位是 Z = 特注品）→ AI 判数量 → 写部品基本信息「数量」列 + 特注品.json 的「員数」
+  提示语：外部文件（…\Prompts\SpecialProductQuantityAdvisor.Prompt.txt）
+  I400Z10006.xls：整份 1（依据：文章）→ DB 数量 3 行 / 特注品.json 3 条
+  I400Z10002.xls：逐条 4 条（依据：表）→ DB 数量 4 行 / 特注品.json 0 条
+  特注品数量设定：扫描 6 个 Excel（特注品 2 个），AI 调用 2 次 → 写数据库 7 行 / 特注品.json 的「員数」3 条（整份 1 个 / 逐条 4 条 / 没读到数量 0 个 / 跳过 0 个）
+```
+
+数字对不上时先看「提示：」行（`特注品.json` 里没有该文件 / 数据库里没有对应的行 等）。
+
+### 18.6 常见问题
+
+| 现象 | 原因 / 处理 |
+|------|-------------|
+| 日志「读不到 Excel 文字」 | 该 `.xls` 是扫描图 / 加密文件；把文件另存成 `.xlsx` 再试 |
+| 日志「数据库里没有对应的行」 | 该図番还没做过【CMD 分析】第 4 步，或该図番的部品没命中分类依据 |
+| 数量写成空 | AI 没在文件里找到数量（提示行会带 AI 的说明） |
+| 表型的数量对不上部品 | AI 给的 品種 / 部品名 / 部品コード 与 `特注品.json` 不一致；改提示词让 AI 以「已登记的部品」为准 |
+

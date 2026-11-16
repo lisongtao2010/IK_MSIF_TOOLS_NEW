@@ -30,13 +30,11 @@ namespace MSIFAITOOLS
         {
             this.lblTitle = new System.Windows.Forms.Label();
             this.dgvMap = new System.Windows.Forms.DataGridView();
+            this.colClassification = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colSource = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colTarget = new System.Windows.Forms.DataGridViewTextBoxColumn();
-            this.colNote = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.lblDatabase = new System.Windows.Forms.Label();
-            this.btnSave = new System.Windows.Forms.Button();
             this.btnReload = new System.Windows.Forms.Button();
-            this.btnDeleteRow = new System.Windows.Forms.Button();
             this.btnConnection = new System.Windows.Forms.Button();
             this.btnClose = new System.Windows.Forms.Button();
             ((System.ComponentModel.ISupportInitialize)(this.dgvMap)).BeginInit();
@@ -51,13 +49,13 @@ namespace MSIFAITOOLS
             this.lblTitle.Name = "lblTitle";
             this.lblTitle.Size = new System.Drawing.Size(672, 50);
             this.lblTitle.TabIndex = 0;
-            this.lblTitle.Text = "把 SQL Server 表 DL_BuhinBuzaiMapping 的「部品名（BuhinName）」换成「部材名（BuzaiName）」（例：鴨居 → 上枠）。\r\n" +
-                "保存后需重新执行第 1 · 2 · 3 步（或重新保存）才会写进数据库。";
+            this.lblTitle.Text = "部材名面板：T_M_MergeName 的 MsifDevName（置换前）→ GenpinName（置换后）。\r\n" +
+                "只读画面（只显示 DeleteFlg = 0 的行）：改完请到维护方系统改，再点【重新载入】。";
             // 
             // dgvMap
             // 
-            this.dgvMap.AllowUserToAddRows = true;
-            this.dgvMap.AllowUserToDeleteRows = true;
+            this.dgvMap.AllowUserToAddRows = false;
+            this.dgvMap.AllowUserToDeleteRows = false;
             this.dgvMap.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
@@ -65,9 +63,9 @@ namespace MSIFAITOOLS
             this.dgvMap.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
             this.dgvMap.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
             this.dgvMap.Columns.AddRange(new System.Windows.Forms.DataGridViewColumn[] {
+            this.colClassification,
             this.colSource,
-            this.colTarget,
-            this.colNote});
+            this.colTarget});
             this.dgvMap.Location = new System.Drawing.Point(14, 68);
             this.dgvMap.MultiSelect = true;
             this.dgvMap.Name = "dgvMap";
@@ -76,32 +74,31 @@ namespace MSIFAITOOLS
             this.dgvMap.SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.RowHeaderSelect;
             this.dgvMap.Size = new System.Drawing.Size(672, 320);
             this.dgvMap.TabIndex = 1;
-            this.dgvMap.CellValueChanged += new System.Windows.Forms.DataGridViewCellEventHandler(this.DgvMap_CellValueChanged);
-            this.dgvMap.RowsRemoved += new System.Windows.Forms.DataGridViewRowsRemovedEventHandler(this.DgvMap_RowsRemoved);
+            this.dgvMap.ReadOnly = true;
             // 
             // colSource
             // 
-            this.colSource.HeaderText = "部品名（置换前）";
+            this.colSource.HeaderText = "置换前（MsifDevName）";
             this.colSource.Name = "colSource";
-            this.colSource.ReadOnly = false;
+            this.colSource.ReadOnly = true;
             this.colSource.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
             this.colSource.Width = 200;
             // 
             // colTarget
             // 
-            this.colTarget.HeaderText = "部材名（置换后）";
+            this.colTarget.HeaderText = "置换后（GenpinName）";
             this.colTarget.Name = "colTarget";
-            this.colTarget.ReadOnly = false;
+            this.colTarget.ReadOnly = true;
             this.colTarget.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
-            this.colTarget.Width = 200;
+            this.colTarget.AutoSizeMode = System.Windows.Forms.DataGridViewAutoSizeColumnMode.Fill;
             // 
-            // colNote
+            // colClassification
             // 
-            this.colNote.AutoSizeMode = System.Windows.Forms.DataGridViewAutoSizeColumnMode.Fill;
-            this.colNote.HeaderText = "備考";
-            this.colNote.Name = "colNote";
-            this.colNote.ReadOnly = false;
-            this.colNote.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
+            this.colClassification.HeaderText = "分類（Classification）";
+            this.colClassification.Name = "colClassification";
+            this.colClassification.ReadOnly = true;
+            this.colClassification.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
+            this.colClassification.Width = 160;
             // 
             // lblDatabase
             // 
@@ -116,25 +113,6 @@ namespace MSIFAITOOLS
             this.lblDatabase.TabIndex = 2;
             this.lblDatabase.Text = "连接：";
             // 
-            // btnSave
-            // 
-            this.btnSave.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
-            this.btnSave.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(46)))), ((int)(((byte)(125)))), ((int)(((byte)(50)))));
-            this.btnSave.Cursor = System.Windows.Forms.Cursors.Hand;
-            this.btnSave.FlatAppearance.BorderSize = 0;
-            this.btnSave.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(27)))), ((int)(((byte)(94)))), ((int)(((byte)(32)))));
-            this.btnSave.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(76)))), ((int)(((byte)(175)))), ((int)(((byte)(80)))));
-            this.btnSave.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnSave.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.btnSave.ForeColor = System.Drawing.Color.White;
-            this.btnSave.Location = new System.Drawing.Point(14, 422);
-            this.btnSave.Name = "btnSave";
-            this.btnSave.Size = new System.Drawing.Size(120, 32);
-            this.btnSave.TabIndex = 3;
-            this.btnSave.Text = "保存";
-            this.btnSave.UseVisualStyleBackColor = false;
-            this.btnSave.Click += new System.EventHandler(this.BtnSave_Click);
-            // 
             // btnReload
             // 
             this.btnReload.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
@@ -145,31 +123,13 @@ namespace MSIFAITOOLS
             this.btnReload.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnReload.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnReload.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.btnReload.Location = new System.Drawing.Point(142, 422);
+            this.btnReload.Location = new System.Drawing.Point(14, 422);
             this.btnReload.Name = "btnReload";
             this.btnReload.Size = new System.Drawing.Size(120, 32);
-            this.btnReload.TabIndex = 4;
+            this.btnReload.TabIndex = 3;
             this.btnReload.Text = "重新载入";
             this.btnReload.UseVisualStyleBackColor = false;
             this.btnReload.Click += new System.EventHandler(this.BtnReload_Click);
-            // 
-            // btnDeleteRow
-            // 
-            this.btnDeleteRow.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
-            this.btnDeleteRow.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(240)))), ((int)(((byte)(242)))), ((int)(((byte)(245)))));
-            this.btnDeleteRow.Cursor = System.Windows.Forms.Cursors.Hand;
-            this.btnDeleteRow.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(199)))), ((int)(((byte)(208)))), ((int)(((byte)(219)))));
-            this.btnDeleteRow.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(226)))), ((int)(((byte)(232)))), ((int)(((byte)(240)))));
-            this.btnDeleteRow.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnDeleteRow.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.btnDeleteRow.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.btnDeleteRow.Location = new System.Drawing.Point(270, 422);
-            this.btnDeleteRow.Name = "btnDeleteRow";
-            this.btnDeleteRow.Size = new System.Drawing.Size(150, 32);
-            this.btnDeleteRow.TabIndex = 5;
-            this.btnDeleteRow.Text = "删除选中行";
-            this.btnDeleteRow.UseVisualStyleBackColor = false;
-            this.btnDeleteRow.Click += new System.EventHandler(this.BtnDeleteRow_Click);
             // 
             // btnConnection
             // 
@@ -181,10 +141,10 @@ namespace MSIFAITOOLS
             this.btnConnection.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnConnection.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnConnection.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.btnConnection.Location = new System.Drawing.Point(428, 422);
+            this.btnConnection.Location = new System.Drawing.Point(142, 422);
             this.btnConnection.Name = "btnConnection";
             this.btnConnection.Size = new System.Drawing.Size(132, 32);
-            this.btnConnection.TabIndex = 6;
+            this.btnConnection.TabIndex = 4;
             this.btnConnection.Text = "连接设置";
             this.btnConnection.UseVisualStyleBackColor = false;
             this.btnConnection.Click += new System.EventHandler(this.BtnConnection_Click);
@@ -215,9 +175,7 @@ namespace MSIFAITOOLS
             this.ClientSize = new System.Drawing.Size(700, 468);
             this.Controls.Add(this.btnClose);
             this.Controls.Add(this.btnConnection);
-            this.Controls.Add(this.btnDeleteRow);
             this.Controls.Add(this.btnReload);
-            this.Controls.Add(this.btnSave);
             this.Controls.Add(this.lblDatabase);
             this.Controls.Add(this.dgvMap);
             this.Controls.Add(this.lblTitle);
@@ -225,8 +183,7 @@ namespace MSIFAITOOLS
             this.MinimumSize = new System.Drawing.Size(620, 420);
             this.Name = "MemberNameReplacementForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
-            this.Text = "部材名置换表维护";
-            this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.MemberNameReplacementForm_FormClosing);
+            this.Text = "部材名面板（部材名置换表）";
             ((System.ComponentModel.ISupportInitialize)(this.dgvMap)).EndInit();
             this.ResumeLayout(false);
 
@@ -236,13 +193,11 @@ namespace MSIFAITOOLS
 
         private System.Windows.Forms.Label lblTitle;
         private System.Windows.Forms.DataGridView dgvMap;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colClassification;
         private System.Windows.Forms.DataGridViewTextBoxColumn colSource;
         private System.Windows.Forms.DataGridViewTextBoxColumn colTarget;
-        private System.Windows.Forms.DataGridViewTextBoxColumn colNote;
         private System.Windows.Forms.Label lblDatabase;
-        private System.Windows.Forms.Button btnSave;
         private System.Windows.Forms.Button btnReload;
-        private System.Windows.Forms.Button btnDeleteRow;
         private System.Windows.Forms.Button btnConnection;
         private System.Windows.Forms.Button btnClose;
     }

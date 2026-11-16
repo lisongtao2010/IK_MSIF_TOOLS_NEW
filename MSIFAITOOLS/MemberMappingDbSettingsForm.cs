@@ -6,11 +6,11 @@ using MSIFAITOOLS.Services;
 namespace MSIFAITOOLS
 {
     /// <summary>
-    /// 部材名置换表用的 SQL Server 连接信息维护画面（表 <c>DL_BuhinBuzaiMapping</c>）。
+    /// 部材名面板用的 SQL Server 连接信息维护画面（表 <c>genpin.dbo.T_M_MergeName</c>）。
     ///
     /// <para>
     /// 保存到 <c>%APPDATA%\MSIFAITOOLS\mapping-db-settings.json</c>（密码用 DPAPI 加密），
-    /// 保存后立即生效：【部材名置换表】画面会用新连接重新读表，无需重启程序。
+    /// 保存后立即生效：【部材名面板】会用新连接重新读表，程序启动时的整表预读也用新连接，无需重启程序。
     /// 【测试连接】会真的连一次数据库，并顺带检查表是否存在。
     /// </para>
     ///
@@ -81,7 +81,7 @@ namespace MSIFAITOOLS
 
             if (database.Length == 0)
             {
-                error = "请填写 DB 名（本工具用 MSIF）。";
+                error = "请填写 DB 名（本工具用 genpin）。";
                 txtDatabase.Focus();
                 return null;
             }
