@@ -157,7 +157,8 @@ namespace MSIFAITOOLS.Services
                     int number = prefixIndex == 0 ? part.Number : nextNumber++;
 
                     // 部材名：取该条对应零件图的部材名再加同一个方向前缀（右縦枠 / 左縦枠）；
-                    // 算不出来（空 / 「その他」）时不加前缀
+                    // 算不出来（空 / 「その他」）时不加前缀。
+                    // 置换在 Clone 里赋值给 MemberName 时做一次（先拼前缀再置换 → 右鴨居 → 右上枠）
                     string memberName = plan.PrefixedMemberNameAt(prefixIndex, part.MemberName);
 
                     rows.Add(Clone(part, number, prefix + part.PartName,
@@ -271,6 +272,13 @@ namespace MSIFAITOOLS.Services
         /// <summary>
         /// 复制一行并换掉「番号 / 部品名 / 部材名 / 备注」——
         /// <see cref="PartBasicInfo"/> 的部品名只有构造函数能设，所以拆条时必须重建对象。
+        /// <para>
+        /// <b>部材名的顺序</b>：先加位置前缀（<c>右縦枠</c>），再交给
+        /// <see cref="PartBasicInfo.MemberName"/> 的 setter 置换一次 —— setter 会先剥掉
+        /// <c>右 / 左 / 上 / 下</c> 再查置换表，然后把前缀加回，所以
+        /// <c>縦枠 → 上枠</c> 的规则对 <c>右縦枠</c> 同样有效（→ <c>右上枠</c>）。
+        /// 库里存的就是置换后的值，读回时不再置换（<see cref="PartBasicInfo.SetMemberNameFromStore"/>）。
+        /// </para>
         /// </summary>
         private static PartBasicInfo Clone(PartBasicInfo source, int number, string partName, string remark,
             string memberName)

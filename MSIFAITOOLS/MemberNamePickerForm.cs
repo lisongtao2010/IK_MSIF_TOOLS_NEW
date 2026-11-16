@@ -54,8 +54,8 @@ namespace MSIFAITOOLS
         /// <summary>能用数字键选的最多项数（1～9）。</summary>
         private const int MaxShortcutNumber = 9;
 
-        /// <summary>没有数字快捷键的行用的对齐空白（与「编号 + 2 个空格」同宽）。</summary>
-        private const string NumberPadding = "   ";
+        /// <summary>没有数字快捷键的行用的对齐空白（约等于「编号 + 2 个半角空格」的宽度）。</summary>
+        private const string NumberPadding = "    ";
 
         /// <summary>「已写入」那行文字的正常颜色。</summary>
         private static readonly Color PreviewNormalColor = Color.FromArgb(52, 73, 94);
@@ -268,10 +268,11 @@ namespace MSIFAITOOLS
                 return settings;
             }
 
-            MemberMappingDbSettings resolved = MemberMappingDbSettingsStore.Resolve();
+            MemberMappingDbSettings resolved = MemberMappingDbSettingsStore.ResolveJp1();
 
             settings = new MemberMappingDbSettings(resolved.Server, resolved.Port, resolved.Database,
-                resolved.UserId, resolved.Password, resolved.ConfigurationSource, MappingConnectTimeoutSeconds);
+                resolved.UserId, resolved.Password, resolved.ConfigurationSource, MappingConnectTimeoutSeconds,
+                resolved.ConnectionName);
             _mappingSettings = settings;
 
             return settings;
@@ -360,6 +361,13 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 组装候选项：置换表的推荐项 → 原值拆出来的项 → 部材部品マスタ 的部材名（去重后保持这个顺序）。
+        /// <para>
+        /// 置换表的推荐项（<c>GenpinName</c>）已经是置换<b>后</b>的词，原样加入；
+        /// 原值拆出来的项与部材部品マスタ 的部材名 是图面上的叫法（<c>MsifDevName</c>），
+        /// 加入前先按 <see cref="MemberNameReplacementCatalog.Replace"/> 置换一次
+        /// （与 <see cref="PartBasicInfo.MemberName"/> 的 setter 同一规则：<c>鴨居 → 上枠</c>、
+        /// <c>右鴨居 → 右上枠</c>），所以在这里挑名字写入的就是置换后的值。
+        /// </para>
         /// </summary>
         private void LoadItems()
         {
@@ -372,12 +380,12 @@ namespace MSIFAITOOLS
 
             foreach (string part in SplitValue(_currentValue))
             {
-                AddItem(part);
+                AddItem(MemberNameReplacementCatalog.Replace(part));
             }
 
             if (_catalog != null)
             {
-                foreach (string memberName in _catalog.MemberNames)
+                foreach (string memberName in MemberNameReplacementCatalog.ReplaceMany(_catalog.MemberNames))
                 {
                     AddItem(memberName);
                 }
@@ -464,7 +472,7 @@ namespace MSIFAITOOLS
         /// 前 9 项是 <c>1</c>～<c>9</c>，第 10 项是 <c>0</c>，再往后没有快捷键、只留对齐的空白。
         /// </summary>
         /// <param name="index">这一项在列表里的位置（从 0 开始）。</param>
-        /// <returns>宽度一致的前缀（编号 + 2 个空格，或 3 个空格）。</returns>
+        /// <returns>宽度一致的前缀（编号 + 2 个半角空格，或等宽的对齐空白）。</returns>
         private static string NumberPrefix(int index)
         {
             if (index < MaxShortcutNumber)
@@ -510,15 +518,12 @@ namespace MSIFAITOOLS
             return value == null ? row.Text : value;
         }
 
-        /// <summary>把列表里等于目标单元格当前值的那一项选中（没有相同项时清空选择）。</summary>
+        /// <summary>
+        /// 把列表里等于目标单元格当前值的那一项选中（没有相同项时清空选择）。
+        /// <b>不滚动</b>列表：列表顶部始终是第 1 号候选，数字键和编号才对得上。
+        /// </summary>
         private void SelectCurrentValue()
         {
-            if (_isLoading)
-            {
-                // 重建列表期间不要动选择（重建完 ApplyFilter 会再调一次）
-                return;
-            }
-
             lvNames.SelectedItems.Clear();
 
             if (_currentValue.Length == 0)
@@ -533,14 +538,15 @@ namespace MSIFAITOOLS
                 if (item != null && string.Equals(item, _currentValue, StringComparison.Ordinal))
                 {
                     row.Selected = true;
-                    row.EnsureVisible();
+
                     return;
                 }
             }
         }
 
         /// <summary>
-        /// 把一个值交给主画面写入（<paramref name="value"/> 为空串 = 清空这一格），并刷新底部提示。
+        /// 把一个值交给主画面写入（<paramref name="value"/> 为空串 = 清空这一格），并刷新底部提示；
+        /// 写完让列表的选中项跟写入的值保持一致（手工输入的名字不在列表里时就没有选中项）。
         /// </summary>
         /// <param name="value">要写进「部材名」单元格的值。</param>
         private void Pick(string value)
@@ -548,6 +554,7 @@ namespace MSIFAITOOLS
             _currentValue = value == null ? string.Empty : value.Trim();
 
             UpdatePreview();
+            SelectCurrentValue();
 
             MemberNamePickedHandler handler = MemberNamePicked;
 
@@ -576,7 +583,7 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 单击列表里的一项 = 直接把这个部材名 写进主画面（不用复选框、也不用再点确定）。
-        /// 同一项再点一次也会重新写入（改回原来的值很方便）。
+        /// 同一项再点一次也会重新写入（改回原来的值很方便）；写完把焦点还给输入框，可以接着打字过滤。
         /// </summary>
         private void LvNames_MouseClick(object sender, MouseEventArgs e)
         {
@@ -591,27 +598,97 @@ namespace MSIFAITOOLS
             row.Selected = true;
             row.Focused = true;
 
-            Pick((row.Tag as string) ?? row.Text);
+            Pick(GetItemValue(row));
+
+            txtFilter.Focus();
+            txtFilter.SelectAll();
         }
 
         /// <summary>
-        /// 【写入】/「手工输入」里按回车：把输入的内容写进主画面（列表里没有的部材名 用这里写）。
-        /// 输入框是空的时确认之后才写空值（= 清空这一格）。
+        /// 键盘：<c>1</c>～<c>9</c> / <c>0</c> 按编号写入，<c>↑</c> / <c>↓</c> 换候选项，<c>Enter</c> 写入。
+        /// 按住 <c>Ctrl</c> 的数字不拦截（想把它当关键字打进输入框时用）。
         /// </summary>
-        private void BtnOk_Click(object sender, EventArgs e)
+        /// <param name="msg">要处理的 Windows 消息。</param>
+        /// <param name="keyData">按键（含修饰键）。</param>
+        /// <returns>true = 已经处理掉（不要再交给控件）。</returns>
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            string custom = txtCustom.Text.Trim();
+            bool inPicker = txtFilter.Focused || lvNames.Focused;
 
-            if (custom.Length == 0 &&
-                MessageBox.Show(this,
-                    "「手工输入」是空的：点【写入】会清空主画面这一格。\n\n要清空吗？",
-                    "确认清空", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
-                    MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            if (!inPicker || (keyData & (Keys.Control | Keys.Alt)) != 0)
+            {
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+
+            Keys keyCode = keyData & Keys.KeyCode;
+
+            if (keyCode == Keys.Enter)
+            {
+                Commit();
+
+                return true;
+            }
+
+            if (keyCode == Keys.Down || keyCode == Keys.Up)
+            {
+                MoveSelection(keyCode == Keys.Down ? 1 : -1);
+
+                return true;
+            }
+
+            int number = GetNumberKey(keyCode);
+
+            if (number >= 0 && PickByNumber(number))
+            {
+                return true;
+            }
+
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>把主键（字母区的 <c>D0</c>～<c>D9</c> 和数字小键盘）换成数字；不是数字键时返回 -1。</summary>
+        /// <param name="keyCode">按键的主键部分。</param>
+        /// <returns>0～9；不是数字键时 -1。</returns>
+        private static int GetNumberKey(Keys keyCode)
+        {
+            if (keyCode >= Keys.D0 && keyCode <= Keys.D9)
+            {
+                return keyCode - Keys.D0;
+            }
+
+            if (keyCode >= Keys.NumPad0 && keyCode <= Keys.NumPad9)
+            {
+                return keyCode - Keys.NumPad0;
+            }
+
+            return -1;
+        }
+
+        /// <summary>在列表里上下移动选中项（在输入框里按 <c>↑</c> / <c>↓</c> 时用）。</summary>
+        /// <param name="delta">+1 = 下一项，-1 = 上一项。</param>
+        private void MoveSelection(int delta)
+        {
+            if (lvNames.Items.Count == 0)
             {
                 return;
             }
 
-            Pick(custom);
+            int current = lvNames.FocusedItem == null ? -1 : lvNames.FocusedItem.Index;
+            int next = current < 0
+                ? (delta > 0 ? 0 : lvNames.Items.Count - 1)
+                : current + delta;
+
+            if (next < 0 || next >= lvNames.Items.Count)
+            {
+                return;
+            }
+
+            lvNames.SelectedItems.Clear();
+
+            ListViewItem row = lvNames.Items[next];
+            row.Selected = true;
+            row.Focused = true;
+            row.EnsureVisible();
         }
 
         /// <summary>【关闭】：关掉本窗口（已经写入的值留在主画面的单元格里）。</summary>

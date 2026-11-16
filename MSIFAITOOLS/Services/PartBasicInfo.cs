@@ -83,6 +83,29 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
+        /// 从数据库（部品基本信息表）读出来的部材名<b>原样</b>写入，<b>不再</b>走
+        /// <see cref="MemberNameReplacementCatalog.Replace"/>。
+        /// <para>
+        /// <b>为什么</b>：置换只在「取得部材名的那个点」做一次 —— 第 1 步按圈号取
+        /// （<c>CmdPartAnalysisService.ApplyMemberNames</c>）、第 2 / 3 步按位置拆条
+        /// （<c>CmdCalloutPartSplitter.Clone</c> / <c>CmdInstructionPartCollector</c>）、
+        /// 以及【部材名面板】的候选项。库里存的已经是置换后的值；读取时再换一次的话，
+        /// 置换表里存在链式规则（<c>A → B</c> 且 <c>B → C</c>）时会连换两次（<c>A → C</c>），
+        /// 第 2 / 3 步「读出来 → 改 → 整张表写回」（<c>PartBasicInfoRepository.Query</c> →
+        /// <c>Save</c>）更会把置换结果一层层叠加。
+        /// </para>
+        /// <para>
+        /// 由 <see cref="PartBasicInfoRepository.Query"/> 调用；分析流程 / 画面上给部材名赋值
+        /// 一律用 <see cref="MemberName"/>（会置换）。
+        /// </para>
+        /// </summary>
+        /// <param name="memberName">数据库里的部材名（<c>null</c> 视为空）。</param>
+        internal void SetMemberNameFromStore(string memberName)
+        {
+            _memberName = memberName ?? string.Empty;
+        }
+
+        /// <summary>
         /// 「部材名AI推荐」：点【AI 分析】时为「数据来源 = CMD分析・アッセンブリ図」的行算出的推荐值。
         /// <para>
         /// 需要 AI 的原因：第 1 步按「番号」找圈号（<c>callouts</c>），再取圈号所在零件图的

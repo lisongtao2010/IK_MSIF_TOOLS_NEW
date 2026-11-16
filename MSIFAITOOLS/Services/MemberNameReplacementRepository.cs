@@ -257,13 +257,13 @@ namespace MSIFAITOOLS.Services
         /// </summary>
         public static string DescribeTarget()
         {
-            return ResolveTargetDescription(MemberMappingDbSettingsStore.Resolve());
+            return ResolveTargetDescription(MemberMappingDbSettingsStore.ResolveJp1());
         }
 
         /// <summary>用指定连接信息描述目标（画面用）。</summary>
         public static string ResolveTargetDescription(MemberMappingDbSettings settings)
         {
-            MemberMappingDbSettings resolved = settings ?? MemberMappingDbSettingsStore.Resolve();
+            MemberMappingDbSettings resolved = settings ?? MemberMappingDbSettingsStore.ResolveJp1();
 
             return resolved.DescribeTarget() + " / 表 " + TableName;
         }

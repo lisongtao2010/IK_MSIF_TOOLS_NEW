@@ -19,9 +19,9 @@ namespace MSIFAITOOLS
     /// <b>表格操作</b>：单击 = 只选中<b>这一格</b>（不再整行选中）并<b>直接进入编辑、内容全选</b>，
     /// 再打一次字就替换掉原来的值（见 <see cref="DgvParts_CellClick"/>）。
     /// 「部材名」这一格单击时改为打开「选择部材名」窗口 <see cref="MemberNamePickerForm"/>
-    /// （<b>非模态</b>：开着也能操作本画面；单击里面的一项就立刻写进这一格，不用复选框 / 不用确定）。
-    /// 窗口顶部会按同一行的「部品名」（<c>colPartName</c>）去置换表
-    /// （SQL Server 表 <c>DL_BuhinBuzaiMapping</c>）查出对应的部材名，点那一行就直接写入。
+    /// （<b>非模态</b>：开着也能操作本画面；候选列表像输入法那样每项带编号，按 1～9 / 0 或单击就立刻写进这一格）。
+    /// 窗口里按同一行的「部品名」（<c>colPartName</c>）去置换表
+    /// （SQL Server 表 <c>genpin.dbo.T_M_MergeName</c>）查到的部材名排在<b>第 1 号</b>，按 <c>1</c> 就写入。
     /// 删除 / 追加行以<b>选中单元格所在的行</b>为基准（<see cref="GetSelectedRows"/>）。
     /// <b>右键菜单</b>（Excel 那样）：在表格上点右键 →「在上方插入行」「在下方插入行」「删除行」，
     /// 作用在右键的那一行上（见 <see cref="InitializePartsContextMenu"/>）。
@@ -1089,10 +1089,18 @@ namespace MSIFAITOOLS
             // 失败只提示，不影响上面的保存结果。
             string ruleMessage = MemberPartCatalogLoader.RegisterRules(parts);
 
+            // 同一个时机，把画面上的「部品名 + 部材名 + 部品コード」登录 / 更新到 MSIF 库的
+            // 部材不材 mapping 表（SQL Server 10.103.126.209 / MSIF 的 dbo.DL_BuhinBuzaiMapping，
+            // 连接名 connJP2）。表的主键是 BuhinName + BuzaiName，部品CD = 画面上的「部品コード」
+            // （BuhinCd），所以更新时会把部品CD 一起刷新；BuhinCd 为空时保留表里原来的值。
+            // 同样失败只提示（连不上 / 没权限 / 表不存在），不影响部品基本信息的保存。
+            string buhinBuzaiMessage = BuhinBuzaiMappingRepository.Register(parts);
+
             LoadParts();
 
             MessageBox.Show(this, "已保存 " + written + " 条部品基本信息。" +
-                (ruleMessage.Length == 0 ? string.Empty : "\n" + ruleMessage), "完成",
+                (ruleMessage.Length == 0 ? string.Empty : "\n" + ruleMessage) +
+                (buhinBuzaiMessage.Length == 0 ? string.Empty : "\n" + buhinBuzaiMessage), "完成",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
 
             return true;
@@ -1318,9 +1326,31 @@ namespace MSIFAITOOLS
                 _previewForm.FormClosed += PreviewForm_FormClosed;
                 // 不设 Owner（不用 Show(this)）：预览窗口是独立的顶层窗口，不会「始终浮在本画面之上」，
                 // 本画面关闭时由 OnFormClosed 一并关闭预览窗口。
-                _previewForm.Show();
             }
-            else if (!_previewForm.Visible)
+
+            // 先摆位置再 Show：窗口直接出现在最终位置，不会先在屏幕中央闪一下再跳走
+            bool placeEditor = !_editorPlaced;
+
+            if (created && placeEditor)
+            {
+                // 首次打开：PDF 预览 → 主画面以外的屏幕（不和主画面挤在一块屏上），
+                // 部品基本信息 → 主画面所在的屏幕（单屏时左右并排）
+                _editorPlaced = true;
+                WindowLayoutHelper.ArrangePreviewAndEditor(_previewForm, this, ResolveMainWindowForm());
+            }
+            else if (created)
+            {
+                // 用户关闭预览后再次打开：只把预览窗口放回「主画面以外的屏幕」
+                WindowLayoutHelper.ArrangePreview(_previewForm, ResolveMainWindowForm());
+            }
+            else if (placeEditor)
+            {
+                // 预览窗口由主画面打开并已摆好，只把编辑画面移到主画面所在的屏幕
+                _editorPlaced = true;
+                WindowLayoutHelper.ArrangeEditor(this, ResolveMainWindowForm());
+            }
+
+            if (!_previewForm.Visible)
             {
                 _previewForm.Show();
             }
@@ -1331,31 +1361,28 @@ namespace MSIFAITOOLS
                 _previewForm.ShowPdf(_pdfPath, activatePreview);
             }
 
-            bool placeEditor = !_editorPlaced;
-
-            if (created && placeEditor)
-            {
-                // 首次打开：PDF 预览 → 屏幕 1，部品基本信息 → 屏幕 2（单屏时左右并排）
-                _editorPlaced = true;
-                WindowLayoutHelper.ArrangePreviewAndEditor(_previewForm, this);
-            }
-            else if (created)
-            {
-                // 用户关闭预览后再次打开：只把预览窗口放回屏幕 1
-                WindowLayoutHelper.ArrangePreview(_previewForm);
-            }
-            else if (placeEditor)
-            {
-                // 预览窗口由主画面打开并已摆好，只把编辑画面移到屏幕 2
-                _editorPlaced = true;
-                WindowLayoutHelper.ArrangeEditor(this);
-            }
-
             if (activatePreview)
             {
                 _previewForm.BringToFront();
                 _previewForm.Activate();
             }
+        }
+
+        /// <summary>
+        /// 摆放窗口时用的「主画面」：PDF 预览窗口要避开它所在的屏幕
+        /// （多屏时不要把预览窗口开在主画面所在的那块屏上）。
+        /// <para>
+        /// 本画面由主画面（<see cref="Form1"/>）打开时 <see cref="Form.Owner"/> 就是它；
+        /// Owner 为空（单独打开 / Owner 已释放）时退回本画面自己 ——
+        /// 预览窗口至少不会和编辑画面挤在同一块屏上。
+        /// </para>
+        /// </summary>
+        /// <returns>主画面窗口（一定不为 <c>null</c>）。</returns>
+        private Form ResolveMainWindowForm()
+        {
+            Form owner = Owner;
+
+            return owner != null && !owner.IsDisposed ? owner : this;
         }
 
         /// <summary>把已打开的 PDF 预览窗口同步到当前图番的 PDF（不抢焦点）。</summary>
@@ -2288,7 +2315,8 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 窗口显示后与部品基本信息画面同时打开 PDF 预览窗口：
-        /// PDF 预览 → 屏幕 1，部品基本信息 → 屏幕 2（只有 1 块屏幕时左右并排）。
+        /// PDF 预览 → 主画面以外的屏幕（不占用主画面所在的那块屏），
+        /// 部品基本信息 → 主画面所在的屏幕（只有 1 块屏幕时左右并排）。
         /// </summary>
         protected override void OnShown(EventArgs e)
         {

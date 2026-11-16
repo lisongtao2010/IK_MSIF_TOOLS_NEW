@@ -622,8 +622,9 @@ namespace MSIFAITOOLS.Services
                 }
 
                 // 部材名：用「番号」在 parts_info.json 的 callouts 里找圈号，取该圈号所在零件图的
-                // texts（去掉数字、去掉「XX部」）用 | 连接（例：番号 4 → 縦枠）
-                int memberNamed = ApplyMemberNames(outputDirectory, stem, result.Parts);
+                // texts（去掉数字、去掉「XX部」）用 | 连接（例：番号 4 → 縦枠）；
+                // 取得的同时按 connJP1 / T_M_MergeName 置换一次（例：鴨居 → 上枠）
+                int memberNamed = ApplyMemberNames(outputDirectory, stem, result.Parts, onLog);
 
                 // 図番（PDF 文件名）第 5 位是 Z = 特注品：读到的行一律记「特注品」（已有值的行不覆盖）
                 ReportSpecialProducts(CmdSpecialProductRule.MarkSpecialProducts(result.Parts, stem), stem, onLog);
@@ -671,9 +672,18 @@ namespace MSIFAITOOLS.Services
         /// <b>去掉「XX部」形式的位置标记</b>，剩下的去重后用 <c>|</c> 连接
         /// （见 <see cref="PartsInfoIndex.ResolveCalloutMemberName(int)"/>）。
         /// 同一页的 <c>parts_info.json</c> 只读一次；读不到时该页的行留空（不报错、不影响入库）。
+        /// <para>
+        /// <b>部材名置换</b>：这里的赋值走 <see cref="PartBasicInfo.MemberName"/> 的 setter，
+        /// 按 <c>connJP1</c> 的 <c>genpin.dbo.T_M_MergeName</c>（<c>MsifDevName</c> → <c>GenpinName</c>）
+        /// <b>置换一次</b>：图面上取得的词（<c>鴨居</c> / <c>鴨居|上レール</c>）在这里就变成要登录的词
+        /// （<c>上枠</c> / <c>上枠|上レール</c>），之后第 2 / 3 步读回来时<b>不再置换</b>
+        /// （<see cref="PartBasicInfo.SetMemberNameFromStore"/>），避免链式规则被换两次。
+        /// </para>
         /// </summary>
+        /// <param name="onLog">日志输出（置换结果 / 置换表读不到时的提示）。</param>
         /// <returns>填了部材名的行数。</returns>
-        private static int ApplyMemberNames(string outputDirectory, string drawingNo, IList<PartBasicInfo> parts)
+        private static int ApplyMemberNames(string outputDirectory, string drawingNo, IList<PartBasicInfo> parts,
+            Action<LogKind, string> onLog)
         {
             if (parts == null || parts.Count == 0)
             {
@@ -682,6 +692,7 @@ namespace MSIFAITOOLS.Services
 
             Dictionary<int, PartsInfoIndex> indexes = new Dictionary<int, PartsInfoIndex>();
             int named = 0;
+            int replaced = 0;
 
             foreach (PartBasicInfo part in parts)
             {
@@ -705,10 +716,51 @@ namespace MSIFAITOOLS.Services
                 }
 
                 part.MemberName = memberName;
+
+                if (!string.Equals(part.MemberName, memberName, StringComparison.Ordinal))
+                {
+                    replaced++;
+                }
+
                 named++;
             }
 
+            ReportMemberNameReplacement(named, replaced, onLog);
+
             return named;
+        }
+
+        /// <summary>
+        /// 本次运行是否已经提示过「置换表读不到」（避免每个 PDF 都刷一条警告）。
+        /// </summary>
+        private static bool _memberNameReplacementWarningLogged;
+
+        /// <summary>
+        /// 日志：第 1 步的部材名置换结果 —— <c>connJP1 / T_M_MergeName N 条，命中 M / K 行</c>；
+        /// 置换表读不到时只提示一次（<see cref="LogKind.Warning"/>），部材名保持原样继续跑。
+        /// </summary>
+        private static void ReportMemberNameReplacement(int named, int replaced, Action<LogKind, string> onLog)
+        {
+            int count = MemberNameReplacementCatalog.Count;
+
+            if (count == 0)
+            {
+                string error = MemberNameReplacementCatalog.LastError;
+
+                if (error.Length > 0 && !_memberNameReplacementWarningLogged)
+                {
+                    _memberNameReplacementWarningLogged = true;
+
+                    PartAnalysisService.ReportLog(onLog, LogKind.Warning, string.Format(
+                        "  部材名置换：置换表读不到（{0}）→ 部材名保持原样", error));
+                }
+
+                return;
+            }
+
+            PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
+                "  部材名置换：{0} / {1} 条，命中 {2} / {3} 行",
+                MemberNameReplacementCatalog.TargetDescription, count, replaced, named));
         }
 
         /// <summary>
@@ -1148,18 +1200,19 @@ namespace MSIFAITOOLS.Services
         /// <summary>
         /// 第 6 步「使い分け自動設定」：同一図番内「<b>部品名</b> / 区分 / 参照元 / 部品コード /
         /// H下限 / H上限 / W下限 / W上限」全部相同的 2 行以上 = 同一个部品的多条，
-        /// 按「部品コード」去 <c>hiroidashiData</c> 里的 <c>*.xlsx</c> 第 4 列
-        /// （部品ｺｰﾄﾞ/形材番号）找相同的行，把第 12 列「使い分け」的值按顺序填到这些行上。
+        /// 按「部品コード」去 SQL Server 的 <c>[genpin].[dbo].[T_M_PartsMaster]</c>
+        /// 查 <c>[ShapeNumber]</c>（形材番号）相同的行，把 <c>[BranchNumber]</c>
+        /// 「使い分け」的值按顺序填到这些行上。
         ///
         /// <para>规则：</para>
         /// <list type="bullet">
-        ///   <item>组内行按「页码 → 番号」排序，依次取拾い出し表里该部品コード 的值（见下面第 4 条）；</item>
+        ///   <item>组内行按「页码 → 番号」排序，依次取部品マスタ表里该部品コード 的值（见下面第 4 条）；</item>
         ///   <item>找到的值比行数少时，多出来的行保持原样（不写空值）；</item>
         ///   <item>该行已经有「使い分け」（手工填过）时不覆盖，重复执行不会改掉人工数据；</item>
-        ///   <item><b>逐行核对部品コード</b>：填值前把这一行<b>记录在库里的部品コード</b>和拾い出し表那条明细
-        ///         自己记录的「部品ｺｰﾄﾞ/形材番号」再比一次（<see cref="CmdUsageKindCollector.PartCodeMatches"/>，
-        ///         <c>□ / △ / ○ …</c> 按通配处理）—— 对不上的行<b>不填</b>，记警告后跳过，
-        ///         绝不会把别的部品コード 的「使い分け」写进来；</item>
+        ///   <item><b>逐行核对部品コード</b>：填值前把这一行<b>记录在库里的部品コード</b>和表里那条明细
+        ///         记录的 <c>[ShapeNumber]</c> 再比一次（<see cref="CmdUsageKindCollector.PartCodeMatches"/>，
+        ///         <c>□ / △ / ○ …</c> 按通配处理：一个符号 = <b>任意 1～2 个字符</b>）—— 对不上的行<b>不填</b>，
+        ///         记警告后跳过，绝不会把别的部品コード 的「使い分け」写进来；</item>
         ///   <item><b>「部品名」也参与分组</b>：按位置拆开的行（<c>右縦枠上部スペーサー</c> /
         ///         <c>左縦枠上部スペーサー</c>）部品名不同 → 不属于同一个组，不会因为部品コード
         ///         相同就被填 使い分け；</item>
@@ -1171,9 +1224,13 @@ namespace MSIFAITOOLS.Services
         /// </para>
         /// <para>
         /// <b>执行顺序在第 5 步 部品コード正規化 之后</b>：这时部品コード 已经统一成
-        /// <c>MEA□429</c> 这种写法（和拾い出し表第 4 列一致），查表最准；
+        /// <c>MEA□429</c> 这种写法（和 <c>[ShapeNumber]</c> 的写法一致），查表最准；
         /// 正規化时撞键被跳过的行保持原样，这里按原写法照样能查（符号按通配处理）。
         /// 「重複チェック」本身在第 5 步做（撞键的行不写），所以本步看到的部品コード 都是唯一的。
+        /// </para>
+        /// <para>
+        /// 数据库连不上时（网络 / SQL Server 停机 / 没有权限）会退回读旧的 <c>hiroidashiData</c>
+        /// 拾い出し表 xlsx，日志里会写明原因 —— 见 <see cref="CmdUsageKindCollector"/>。
         /// </para>
         /// </summary>
         private static void AssignUsageKinds(IList<PdfClassification> targets, string outputDirectory,
@@ -1182,29 +1239,11 @@ namespace MSIFAITOOLS.Services
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Empty);
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
                 "{0}同一図番内「部品名 / 区分 / 参照元 / 部品コード / H下限 / H上限 / W下限 / W上限」全同的 2 行以上 " +
-                "→ 按部品コード查 {1} 里的 xlsx 第 4 列 → 逐行核对部品コード 后填入第 12 列「使い分け」",
-                CmdAnalysisSteps.UsageKindStep.LogHeader, CmdUsageKindCollector.FolderName));
+                "→ 按部品コード查 {1} 的 [ShapeNumber] → 逐行核对部品コード 后填入「使い分け」（[BranchNumber]）",
+                CmdAnalysisSteps.UsageKindStep.LogHeader, CmdUsageKindCollector.PartsMasterTableName));
 
             List<string> notes = new List<string>();
-            string directory = CmdUsageKindCollector.ResolveDirectory(outputDirectory, notes);
-
-            if (string.IsNullOrEmpty(directory))
-            {
-                foreach (string note in notes)
-                {
-                    PartAnalysisService.ReportLog(onLog, LogKind.Warning, "  " + note);
-                }
-
-                PartAnalysisService.ReportLog(onLog, LogKind.Warning,
-                    "  找不到拾い出し表文件夹，跳过 " + CmdAnalysisSteps.UsageKindStep.Label);
-
-                return;
-            }
-
-            PartAnalysisService.ReportLog(onLog, LogKind.Info, "  拾い出し表文件夹：" + directory);
-
-            notes.Clear();
-            CmdUsageKindIndex index = CmdUsageKindCollector.LoadIndex(directory, notes);
+            CmdUsageKindIndex index = CmdUsageKindCollector.LoadIndex(outputDirectory, notes);
 
             foreach (string note in notes)
             {
@@ -1214,14 +1253,15 @@ namespace MSIFAITOOLS.Services
             if (index.EntryCount == 0)
             {
                 PartAnalysisService.ReportLog(onLog, LogKind.Warning, string.Format(
-                    "  {0} 里没有读到有效明细（第 4 列 = 部品ｺｰﾄﾞ/形材番号、第 12 列 = 使い分け），跳过 {1}",
-                    directory, CmdAnalysisSteps.UsageKindStep.Label));
+                    "  {0} 表里没读到「ShapeNumber → BranchNumber」的明细，旧的 hiroidashiData 文件夹也没有，跳过 {1}",
+                    CmdUsageKindCollector.PartsMasterTableName, CmdAnalysisSteps.UsageKindStep.Label));
 
                 return;
             }
 
+            PartAnalysisService.ReportLog(onLog, LogKind.Info, "  数据来源：" + index.SourceDescription);
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
-                "  读到 xlsx {0} 个 / 明细 {1} 条", index.FileCount, index.EntryCount));
+                "  读到明细 {0} 条（[ShapeNumber] → [BranchNumber]）", index.EntryCount));
 
             foreach (PdfClassification item in targets)
             {
@@ -1278,7 +1318,7 @@ namespace MSIFAITOOLS.Services
 
             foreach (UsageKindGroup group in groups)
             {
-                // 拾い出し表里该部品コード 的明细：每条都带着它自己记录的 部品コード / 来源文件 / 行号，
+                // 表里该部品コード 的明细：每条都带着它自己记录的 部品コード / 来源（表名 / 文件名） / 行序号，
                 // 下面填值前要逐行核对（不是只按顺序硬填）
                 List<CmdUsageKindEntry> entries = index.FindEntries(group.PartCode);
 
@@ -1287,8 +1327,9 @@ namespace MSIFAITOOLS.Services
                     summary.UsageKindMissGroupCount++;
 
                     PartAnalysisService.ReportLog(onLog, LogKind.Warning, string.Format(
-                        "  {0}：{1} 行（部品名 {2} / 部品コード {3}）在拾い出し表里找不到，跳过",
-                        drawingNo, group.Parts.Count, group.PartName, group.PartCode));
+                        "  {0}：{1} 行（部品名 {2} / 部品コード {3}）在 {4} 里找不到，跳过",
+                        drawingNo, group.Parts.Count, group.PartName, group.PartCode,
+                        CmdUsageKindCollector.PartsMasterTableName));
 
                     continue;
                 }
@@ -1307,14 +1348,15 @@ namespace MSIFAITOOLS.Services
                         continue;
                     }
 
-                    // 填值前逐行核对：这一行「记录在库里的部品コード」必须和拾い出し表这条明细记录的
-                    // 部品ｺｰﾄﾞ 一致（□ / △ / ○ … 按通配，MEA□429 = MEACC429）；对不上就不填
+                    // 填值前逐行核对：这一行「记录在库里的部品コード」必须和表里这条明细记录的
+                    // [ShapeNumber] 一致（□ / △ / ○ … 按通配，一个符号 = 任意 1～2 个字符，MEA□429 = MEACC429）；
+                    // 对不上就不填
                     if (!CmdUsageKindCollector.PartCodeMatches(part.PartCode, entry.PartCode))
                     {
                         mismatchCount++;
 
                         PartAnalysisService.ReportLog(onLog, LogKind.Warning, string.Format(
-                            "  {0}：番号 {1} 的部品コード「{2}」与拾い出し表 {3} 第 {4} 行的「{5}」对不上，" +
+                            "  {0}：番号 {1} 的部品コード「{2}」与 {3} 第 {4} 行的「{5}」对不上，" +
                             "这一行不填 使い分け",
                             drawingNo, part.Number, part.PartCode, entry.FileName, entry.RowNumber,
                             entry.PartCode));
@@ -1330,7 +1372,7 @@ namespace MSIFAITOOLS.Services
                 matchedGroups++;
 
                 PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
-                    "  {0}：{1} 行（部品名 {2} / 部品コード {3}）← 使い分け {4}（拾い出し表 {5} 条{6}）",
+                    "  {0}：{1} 行（部品名 {2} / 部品コード {3}）← 使い分け {4}（命中明细 {5} 条{6}）",
                     drawingNo, group.Parts.Count, group.PartName, group.PartCode,
                     assigned.Count == 0 ? "（都已有值，不改）" : string.Join(" / ", assigned.ToArray()),
                     entries.Count,

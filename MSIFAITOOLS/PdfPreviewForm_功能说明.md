@@ -35,13 +35,15 @@ Form1（主窗口）
   ├─【选中即预览】勾选框开启 + 分类结果列表当前行变化 → ShowPdfPreview(item, false)   ← 不激活预览窗口
   ├─ 双击分类结果某一行（「分类」列除外）              → ShowPdfPreview(item, true)    ← 前置窗口
   └─ 点【预览 PDF】按钮                              → ShowPdfPreview(item, true)    ← 前置窗口
-        └─ 首次：new PdfPreviewForm() → 挂 FormClosed → Show()（不设 Owner）
-           之后：复用同一实例 → ShowPdf(item.FilePath, bringToFront)
+        └─ 首次：new PdfPreviewForm() → 挂 FormClosed
+                 → WindowLayoutHelper.ArrangePreview(预览窗口, 主窗口) → Show()（不设 Owner）
+                 （多屏时搬到「主画面以外的屏幕」，单屏时占左侧一半）
+           之后：复用同一实例 → ShowPdf(item.FilePath, bringToFront)（不再移动窗口）
 ```
 
 | 行为 | 说明 |
 |------|------|
-| 首次预览 | 新建窗口，**不设 `Owner`**：预览窗口是独立的顶层窗口，不会「始终浮在主窗口之上」（点一下主窗口即可把它压到后面）；`Show()` 非模态显示且**不抢焦点**（`ShowWithoutActivation`），需要前置时由调用方 `BringToFront()` + `Activate()` |
+| 首次预览 | 新建窗口，**不设 `Owner`**：预览窗口是独立的顶层窗口，不会「始终浮在主窗口之上」（点一下主窗口即可把它压到后面）；`Show()` 非模态显示且**不抢焦点**（`ShowWithoutActivation`），需要前置时由调用方 `BringToFront()` + `Activate()`。**位置**：`Show()` 之前由 `WindowLayoutHelper.ArrangePreview(_previewForm, this)` 摆好 —— 多屏（≥2 块）时放到**主画面（Form1）以外的屏幕**（不要和主画面挤在同一块屏上），只有 1 块屏幕时占左侧一半；只在**新建窗口**时摆，之后保留用户拖动的位置 |
 | 切换到另一个 PDF | 复用同一窗口，直接换文档（页号回到第 1 页，缩放回到「适合宽度」） |
 | 再次预览**同一个** PDF | 不重新加载，**保留当前页与缩放**；`bringToFront = true`（双击 /【预览 PDF】）时还原最小化 + `Activate()` 前置，`false`（选中即预览）时窗口位置与焦点都不变 |
 | 「选中即预览」 | 同一文件不会重复触发（`_lastAutoPreviewKey` 去重），键盘上下移动列表行即可快速浏览 |
@@ -53,8 +55,19 @@ Form1（主窗口）
 ## 3. 界面布局
 
 窗口标题为 **`PDF 预览 - <文件名>`**（加载失败时显示「PDF 预览 - 读取失败」，未加载时为「PDF 预览」）。
-客户区 **1084 × 688**，最小尺寸 **760 × 560**，`CenterScreen` 屏幕居中，字体「微软雅黑 9pt」。
-（预览窗口是独立窗口，没有 Owner，因此不跟随主窗口位置；与部品基本信息画面成对打开时由 `WindowLayoutHelper` 指定位置。）
+客户区 **1084 × 688**，最小尺寸 **760 × 560**，设计器里 `StartPosition = CenterScreen`（由 `WindowLayoutHelper` 摆放时会改成 `Manual`），字体「微软雅黑 9pt」。
+
+窗口位置规则（`WindowLayoutHelper`，**只在新建窗口时摆一次**，之后保留用户拖动的位置）：
+
+| 屏幕数 | PDF 预览窗口 | 部品基本信息窗口 |
+|--------|--------------|------------------|
+| **≥ 2 块** | **主画面（Form1）以外的屏幕** —— 不和主画面挤在同一块屏上 | 主画面所在的屏幕 |
+| 1 块 | 工作区**左侧**（约 55%） | 工作区**右侧**（约 45%，不小于 860px） |
+
+- 「主画面」由调用方传入：`Form1` 自己打开预览时传 `this`；部品基本信息画面传 `Owner`（= `Form1`），取不到时退回部品基本信息画面自己。
+- `Screen.AllScreens` 的下标不保证主屏 / 主画面在最前，所以先按「主画面以外 → 主画面所在」排序，再取 `[0]` 给预览、**最后一块**给编辑画面（见 `WindowLayoutHelper.GetOrderedWorkingAreas`）；3 块以上屏幕时中间那些屏幕不用。
+- 主画面搬到副屏时，预览窗口会自动改到另一块屏（按 `Screen.FromControl(主画面)` 判定）。
+- 预览窗口是独立窗口、没有 Owner，因此不跟随主窗口移动。
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐

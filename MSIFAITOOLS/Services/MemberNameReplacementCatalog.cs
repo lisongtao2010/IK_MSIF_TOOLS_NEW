@@ -10,8 +10,10 @@ namespace MSIFAITOOLS.Services
     /// <para>
     /// 用途：图上 / <c>parts_info.json</c> 上取得的词不一定是想要的部材名（例：<c>鴨居</c> 要登录成 <c>上枠</c>），
     /// genpin 侧在 SQL Server 表 <c>genpin.dbo.T_M_MergeName</c> 里配好
-    /// 「置换前（<c>MsifDevName</c>）→ 置换后（<c>GenpinName</c>）」后，
+    /// 「置换前（<c>MsifDevName</c> = 图面上取得的词）→ 置换后（<c>GenpinName</c> = 要登录的词）」后，
     /// 写进 <see cref="PartBasicInfo.MemberName"/> 的部材名会按这张表自动置换。
+    /// 连接用 App.config 的具名连接 <c>connJP1</c>（10.103.126.208 / genpin，
+    /// <see cref="MemberMappingDbSettingsStore.ResolveJp1"/>）；没配时退回老的单连接配置。
     /// </para>
     ///
     /// <para>
@@ -51,7 +53,8 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 当前使用的连接目标
-        /// （例：<c>SQL Server 10.103.126.208,1433 / DB genpin / 表 T_M_MergeName</c>；解析失败时是解析出来的目标）。
+        /// （例：<c>connJP1 = SQL Server 10.103.126.208,1433 / DB genpin / 表 T_M_MergeName</c>；
+        /// 解析失败时是解析出来的目标）。
         /// </summary>
         private static string _targetDescription = string.Empty;
 
@@ -121,10 +124,10 @@ namespace MSIFAITOOLS.Services
         {
             _loaded = true;
 
-            MemberMappingDbSettings resolved = MemberMappingDbSettingsStore.Resolve();
+            MemberMappingDbSettings resolved = MemberMappingDbSettingsStore.ResolveJp1();
             MemberMappingDbSettings quick = new MemberMappingDbSettings(resolved.Server, resolved.Port,
                 resolved.Database, resolved.UserId, resolved.Password, resolved.ConfigurationSource,
-                PreloadTimeoutSeconds);
+                PreloadTimeoutSeconds, resolved.ConnectionName);
 
             if (!Load(quick))
             {
@@ -177,22 +180,54 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
+        /// 对一串部材名逐个走 <see cref="Replace"/>（例：【部材名面板】的候选项 ——
+        /// 从原值拆出来的项、部材部品マスタ 的部材名 一览）。
+        /// 返回<b>新</b>列表（去空白、去空、去重，保持原顺序）；<paramref name="memberNames"/> 为 <c>null</c> 时返回空列表。
+        /// </summary>
+        /// <param name="memberNames">原来的部材名（可含 <c>null</c> / 空项）。</param>
+        public static List<string> ReplaceMany(IEnumerable<string> memberNames)
+        {
+            List<string> replaced = new List<string>();
+
+            if (memberNames == null)
+            {
+                return replaced;
+            }
+
+            foreach (string memberName in memberNames)
+            {
+                string text = Replace(memberName).Trim();
+
+                if (text.Length > 0 && !replaced.Contains(text))
+                {
+                    replaced.Add(text);
+                }
+            }
+
+            return replaced;
+        }
+
+        /// <summary>
         /// 读 SQL Server 表 <c>T_M_MergeName</c>（只取 <c>DeleteFlg = 0</c> 的行）。
         /// 失败只记 <see cref="LastError"/>，置换表置空 → 不影响原值。
         /// </summary>
         /// <param name="settings">
-        /// 要用的连接信息；<c>null</c> = 按当前生效的配置（<see cref="MemberMappingDbSettingsStore.Resolve"/>）。
+        /// 要用的连接信息；<c>null</c> = 按当前生效的配置
+        /// （<see cref="MemberMappingDbSettingsStore.ResolveJp1"/>，即 <c>connJP1</c> = 10.103.126.208 / genpin）。
         /// </param>
         /// <returns>是否读成功（失败时 <see cref="LastError"/> 有原因）。</returns>
         private static bool Load(MemberMappingDbSettings settings)
         {
+            // 置换表在 <connJP1> = 10.103.126.208 / genpin（App.config 的 connectionStrings）；
+            // 没配具名连接时退回老的单连接配置（Environment / 连接设置画面 / MappingDb* / 默认值）。
+            MemberMappingDbSettings effective = settings ?? MemberMappingDbSettingsStore.ResolveJp1();
             Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.Ordinal);
-            string target = MemberNameReplacementRepository.ResolveTargetDescription(settings);
+            string target = MemberNameReplacementRepository.ResolveTargetDescription(effective);
             string error = string.Empty;
 
             try
             {
-                using (MemberNameReplacementRepository repository = new MemberNameReplacementRepository(settings))
+                using (MemberNameReplacementRepository repository = new MemberNameReplacementRepository(effective))
                 {
                     target = repository.TargetDescription;
 

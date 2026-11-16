@@ -458,7 +458,10 @@ namespace MSIFAITOOLS.Services
                     part.PdfFile = assembly.FilePath ?? string.Empty;
                     part.VerifyStatus = PartVerifyStatus.NotChecked;
 
-                    // 算不出来时留空，写库时由 PartBasicInfoRepository 统一填「その他」
+                    // 算不出来时留空，写库时由 PartBasicInfoRepository 统一填「その他」。
+                    // 部材名置换在这里（赋予 MemberName 时）做一次：connJP1 / T_M_MergeName 的
+                    // MsifDevName（图面上的词）→ GenpinName（要登录的词），位置前缀已先拼好
+                    //（右鴨居 → 右上枠），库里存置换后的值，读回时不再置换。
                     part.MemberName = rowMemberName;
 
                     result.Parts.Add(part);

@@ -1218,7 +1218,9 @@ namespace MSIFAITOOLS.Services
                             ReadText(reader, "切断寸法"),
                             ReadText(reader, "部品コード"));
 
-                        part.MemberName = ReadText(reader, "部材名");
+                        // 部材名：库里已经是置换后的值（置换在取得时做一次），这里原样读入 ——
+                        // 走 MemberName 的 setter 会再置换一次，链式规则（A→B、B→C）会被换两次。
+                        part.SetMemberNameFromStore(ReadText(reader, "部材名"));
                         part.MemberNameAiSuggestion = ReadText(reader, MemberNameAiColumnName);
                         part.HeightMin = ReadText(reader, "H下限");
                         part.HeightMax = ReadText(reader, "H上限");

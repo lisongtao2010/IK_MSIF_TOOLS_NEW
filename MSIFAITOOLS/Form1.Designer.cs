@@ -63,6 +63,7 @@ namespace MSIFAITOOLS
             this.btnStart = new System.Windows.Forms.Button();
             this.btnCmdAnalyze = new System.Windows.Forms.Button();
             this.btnAiAnalyze = new System.Windows.Forms.Button();
+            this.btnRunAll = new System.Windows.Forms.Button();
             this.lblCmdStepHint = new System.Windows.Forms.Label();
             this.btnCmdStep0 = new System.Windows.Forms.Button();
             this.btnCmdStep1 = new System.Windows.Forms.Button();
@@ -449,8 +450,9 @@ namespace MSIFAITOOLS
             this.grpAction.Controls.Add(this.btnStart);
             this.grpAction.Controls.Add(this.btnCmdAnalyze);
             this.grpAction.Controls.Add(this.btnAiAnalyze);
+            this.grpAction.Controls.Add(this.btnRunAll);
             // 分步执行（第 0 步 + 第 1~6 步）已移到独立的 grpSteps（③ 分步执行），
-            // 这里只留「开始分解 / CMD 分析 / AI 分析 / 打开输出目录」与进度显示
+            // 这里只留「开始分解 / CMD 分析 / AI 分析 / 一括执行 / 打开输出目录」与进度显示
             this.grpAction.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.grpAction.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
             this.grpAction.Location = new System.Drawing.Point(20, 126);
@@ -517,10 +519,10 @@ namespace MSIFAITOOLS
             this.btnOpenOutput.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnOpenOutput.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnOpenOutput.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.btnOpenOutput.Location = new System.Drawing.Point(456, 34);
+            this.btnOpenOutput.Location = new System.Drawing.Point(572, 34);
             this.btnOpenOutput.Name = "btnOpenOutput";
-            this.btnOpenOutput.Size = new System.Drawing.Size(128, 46);
-            this.btnOpenOutput.TabIndex = 3;
+            this.btnOpenOutput.Size = new System.Drawing.Size(116, 46);
+            this.btnOpenOutput.TabIndex = 4;
             this.btnOpenOutput.Text = "打开输出目录";
             this.btnOpenOutput.UseVisualStyleBackColor = false;
             this.btnOpenOutput.Click += new System.EventHandler(this.BtnOpenOutput_Click);
@@ -578,6 +580,26 @@ namespace MSIFAITOOLS
             this.btnAiAnalyze.Text = "AI 分析";
             this.btnAiAnalyze.UseVisualStyleBackColor = false;
             this.btnAiAnalyze.Click += new System.EventHandler(this.BtnAiAnalyze_Click);
+            // 
+            // btnRunAll
+            // 
+            // 一括执行：按顺序自动执行【开始分解】→【CMD 分析】→【AI 分析】，
+            // 任何一步失败就停下来（明细见 Form1.BtnRunAll_Click / RunAllStepsAsync）
+            this.btnRunAll.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(106)))), ((int)(((byte)(27)))), ((int)(((byte)(154)))));
+            this.btnRunAll.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnRunAll.FlatAppearance.BorderSize = 0;
+            this.btnRunAll.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(74)))), ((int)(((byte)(20)))), ((int)(((byte)(140)))));
+            this.btnRunAll.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(142)))), ((int)(((byte)(36)))), ((int)(((byte)(170)))));
+            this.btnRunAll.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnRunAll.Font = new System.Drawing.Font("Microsoft YaHei", 11F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnRunAll.ForeColor = System.Drawing.Color.White;
+            this.btnRunAll.Location = new System.Drawing.Point(456, 34);
+            this.btnRunAll.Name = "btnRunAll";
+            this.btnRunAll.Size = new System.Drawing.Size(108, 46);
+            this.btnRunAll.TabIndex = 3;
+            this.btnRunAll.Text = "一括执行";
+            this.btnRunAll.UseVisualStyleBackColor = false;
+            this.btnRunAll.Click += new System.EventHandler(this.BtnRunAll_Click);
             // 
             // lblCmdStepHint
             // 
@@ -949,6 +971,7 @@ namespace MSIFAITOOLS
         private System.Windows.Forms.GroupBox grpSteps;
         private System.Windows.Forms.Button btnStart;
         private System.Windows.Forms.Button btnAiAnalyze;
+        private System.Windows.Forms.Button btnRunAll;
         private System.Windows.Forms.Button btnCmdAnalyze;
         private System.Windows.Forms.Label lblCmdStepHint;
         private System.Windows.Forms.Button btnCmdStep0;

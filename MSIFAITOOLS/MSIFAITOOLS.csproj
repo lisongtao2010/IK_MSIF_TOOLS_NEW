@@ -162,6 +162,9 @@
     <Compile Include="Services\MemberMappingDbSettings.cs" />
     <Compile Include="Services\MemberNameReplacementRepository.cs" />
     <Compile Include="Services\MemberNameReplacementCatalog.cs" />
+    <!-- 部材不材 mapping（MSIF 库的 dbo.DL_BuhinBuzaiMapping，连接名 connJP2）：
+         部品基本信息画面【保存】时把画面的「部品名 / 部材名 / 部品コード」登录 / 更新进该表 -->
+    <Compile Include="Services\BuhinBuzaiMappingRepository.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <!--

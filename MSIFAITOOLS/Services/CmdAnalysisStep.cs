@@ -101,10 +101,12 @@ namespace MSIFAITOOLS.Services
     ///         换完会和同図番 / 同页码 / 同番号 的另一行撞键时，那一行跳过并记警告（= 重複チェック）。</item>
     ///   <item><b>第 6 步 使い分け自動設定</b>（<see cref="CmdUsageKindCollector"/>）：
     ///         同一図番内「<b>部品名</b> / 区分 / 参照元 / 部品コード / H下限 / H上限 / W下限 / W上限」全相同的多行，
-    ///         按「部品コード」查 <c>hiroidashiData</c> 里的 <c>*.xlsx</c> 第 4 列（部品ｺｰﾄﾞ/形材番号）相同的行，
-    ///         把第 12 列（使い分け）的值按顺序填到这些行上。
+    ///         按「部品コード」查 SQL Server 的 <c>[genpin].[dbo].[T_M_PartsMaster]</c>：
+    ///         <c>[ShapeNumber]</c>（形材番号）相同的行 → 把 <c>[BranchNumber]</c>（使い分け）按顺序填到这些行上。
+    ///         <c>□ / △ / ○ …</c> 按通配处理（= 任意 1～2 个字符）；
+    ///         数据库连不上时退回读旧的 <c>hiroidashiData</c> 文件夹里的 xlsx（日志会写明）。
     ///         <b>放在第 5 步之后</b>：这时部品コード 已经是正規化后的写法（<c>MEA□429</c>），
-    ///         和拾い出し表里带 <c>□</c> 的写法一致，查表最准。</item>
+    ///         和 <c>[ShapeNumber]</c> 里带 <c>□</c> 的写法一致，查表最准。</item>
     /// </list>
     /// 这 7 步之前还有一步不属于本按钮：<b>第 0 步 分解与分类</b>
     /// （【开始分解】= CadPartSplitter 分割 + 本工具分解 + <c>classify\PdfInfoList.txt</c>）。
@@ -227,10 +229,12 @@ namespace MSIFAITOOLS.Services
             PartCodeCode, PartCodeName,
             "按 部品マスタ\\Tbl_部品マスタ.csv 的「色」把部品コード 里的颜色换成 □，再把连续的符号（□□ / 〇〇 / △△ …）压成一个 □（撞键的行跳过 = 重複チェック）");
 
-        /// <summary>第 6 步：使い分け自動設定（正規化後の部品コード で拾い出し表を引く）。</summary>
+        /// <summary>第 6 步：使い分け自動設定（正規化後の部品コード で 部品マスタ表 T_M_PartsMaster を引く）。</summary>
         public static readonly CmdAnalysisStep UsageKindStep = new CmdAnalysisStep(UsageKindNumber,
             UsageKindCode, UsageKindName,
-            "同一図番内「区分 / 参照元 / 部品コード / H・W 上下限」全同的多行 → 按部品コード查 hiroidashiData 的 xlsx（第 4 列）→ 依次填入第 12 列「使い分け」");
+            "同一図番内「部品名 / 区分 / 参照元 / 部品コード / H・W 上下限」全同的多行 → 按部品コード查 " +
+            "T_M_PartsMaster 的 [ShapeNumber] → 依次把 [BranchNumber]（使い分け）填入" +
+            "（数据库连不上时退回旧的 hiroidashiData xlsx）");
 
         /// <summary>全部步骤（第 0 步在前），供文档 / 界面提示列出。</summary>
         public static IList<CmdAnalysisStep> All

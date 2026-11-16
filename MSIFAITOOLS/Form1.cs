@@ -30,6 +30,16 @@ namespace MSIFAITOOLS
         /// <summary>【CMD 分析】按钮的初始文字（运行中显示“分析中...”）。</summary>
         private string _cmdButtonText;
 
+        /// <summary>【一括执行】按钮的初始文字（执行中显示“执行中...”）。</summary>
+        private string _runAllButtonText;
+
+        /// <summary>
+        /// 是否正在执行【一括执行】（开始分解 → CMD 分析 → AI 分析 连跑）。
+        /// 三个步骤是分开 await 的，步骤之间 <see cref="_isRunning"/> 会短暂变回 false；
+        /// 用这个标志让 <see cref="SetRunning"/> 在整批结束前保持按钮置灰，避免中途被再点一次。
+        /// </summary>
+        private bool _allStepsRunning;
+
         /// <summary>PDF 预览窗口（非模态，选中分类列表行时复用同一个窗口）。</summary>
         private PdfPreviewForm _previewForm;
 
@@ -44,6 +54,16 @@ namespace MSIFAITOOLS
 
         /// <summary>上一次自动预览过的 PDF 路径，用于避免同一行被重复预览（例如预览窗口关闭后焦点变化）。</summary>
         private string _lastAutoPreviewKey;
+
+        /// <summary>
+        /// 本次「当前行变化」是否由用户按方向键（↑↓ / PgUp / PgDn / Home / End）引起。
+        /// <para>
+        /// 用来区分「用户真的选了一行」和「DataGridView 自己把第一行设成当前行」：
+        /// 切换标签页、表格刚拿到焦点、程序填表之后，表格都会自动把第一行设为当前行，
+        /// 那时如果开着「选中即预览」，就会莫名其妙弹出第一份 PDF 的预览窗口。
+        /// </para>
+        /// </summary>
+        private bool _classifyRowChangeByKey;
 
         /// <summary>
         /// 是否已经把「PDF 预览不可用（pdfium.dll）」的原因写进日志。
@@ -64,6 +84,7 @@ namespace MSIFAITOOLS
             _startButtonText = btnStart.Text;
             _aiButtonText = btnAiAnalyze.Text;
             _cmdButtonText = btnCmdAnalyze.Text;
+            _runAllButtonText = btnRunAll.Text;
 
             // 七个子按钮（第 0 步 + 第 1~6 步）的文字统一取自 CmdAnalysisSteps
             // （步骤名的唯一定义处），保证按钮 / 日志叫法一致
@@ -128,10 +149,11 @@ namespace MSIFAITOOLS
                     DescribeSizeF(AutoScaleDimensions), DescribeSizeF(CurrentAutoScaleDimensions)),
                     Color.FromArgb(180, 180, 180));
 
-                AppendLog(string.Format("布局：grpInput={0}，grpAction={1}，grpSteps={2}，grpLog={3}，btnCmdAnalyze={4}",
+                AppendLog(string.Format("布局：grpInput={0}，grpAction={1}，grpSteps={2}，grpLog={3}，btnCmdAnalyze={4}，btnRunAll={5}，btnOpenOutput={6}",
                     DescribeControlBounds(grpInput), DescribeControlBounds(grpAction),
                     DescribeControlBounds(grpSteps), DescribeControlBounds(grpLog),
-                    DescribeControlBounds(btnCmdAnalyze)),
+                    DescribeControlBounds(btnCmdAnalyze), DescribeControlBounds(btnRunAll),
+                    DescribeControlBounds(btnOpenOutput)),
                     Color.FromArgb(180, 180, 180));
             }
             catch (Exception)
@@ -506,24 +528,29 @@ namespace MSIFAITOOLS
         {
             _isRunning = running;
 
-            btnStart.Enabled = !running;
-            btnAiAnalyze.Enabled = !running;
-            btnCmdAnalyze.Enabled = !running;
+            // 一括执行中（三个步骤之间的空档）也保持置灰：running 会在每步结束时短暂变回 false
+            bool busy = running || _allStepsRunning;
+
+            btnStart.Enabled = !busy;
+            btnAiAnalyze.Enabled = !busy;
+            btnCmdAnalyze.Enabled = !busy;
+            btnRunAll.Enabled = !busy;
             // 七个子按钮（第 0 步 + 第 1 / 2 / 3 / 4 / 5 / 6 步）执行期间只置灰，文字保持不变
-            btnCmdStep0.Enabled = !running;
-            btnCmdStep1.Enabled = !running;
-            btnCmdStep2.Enabled = !running;
-            btnCmdStep3.Enabled = !running;
-            btnCmdStep4.Enabled = !running;
-            btnCmdStep5.Enabled = !running;
-            btnCmdStep6.Enabled = !running;
-            btnAiSettings.Enabled = !running;
-            btnBrowse.Enabled = !running;
-            txtFolder.Enabled = !running;
-            chkCadSplit.Enabled = !running;
+            btnCmdStep0.Enabled = !busy;
+            btnCmdStep1.Enabled = !busy;
+            btnCmdStep2.Enabled = !busy;
+            btnCmdStep3.Enabled = !busy;
+            btnCmdStep4.Enabled = !busy;
+            btnCmdStep5.Enabled = !busy;
+            btnCmdStep6.Enabled = !busy;
+            btnAiSettings.Enabled = !busy;
+            btnBrowse.Enabled = !busy;
+            txtFolder.Enabled = !busy;
+            chkCadSplit.Enabled = !busy;
             btnStart.Text = running ? "分解中..." : _startButtonText;
             btnAiAnalyze.Text = running ? "分析中..." : _aiButtonText;
             btnCmdAnalyze.Text = running ? "分析中..." : _cmdButtonText;
+            btnRunAll.Text = busy ? "执行中..." : _runAllButtonText;
 
             if (running)
             {
@@ -678,13 +705,28 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 开始分解：先调用 CadPartSplitter 做零件分割，再调用内置 .NET PDF 引擎（PdfPig）批量处理文件夹内所有 PDF。
+        /// 【开始分解】按钮：单独点击时执行一次分解（结束时弹提示）。
         /// </summary>
         private async void BtnStart_Click(object sender, EventArgs e)
         {
+            await RunSplitAsync(true);
+        }
+
+        /// <summary>
+        /// 开始分解的实体：先调用 CadPartSplitter 做零件分割，再调用内置 .NET PDF 引擎（PdfPig）批量处理文件夹内所有 PDF。
+        /// <para>
+        /// 【一括执行】（<see cref="BtnRunAll_Click"/>）也调用这里，但传
+        /// <paramref name="showCompletionDialog"/> = <c>false</c>：中间步骤不弹「完成 / 失败」框（日志里照样有），
+        /// 由一括执行最后统一提示，避免连跑三个按钮时要连点三次 OK。
+        /// </para>
+        /// </summary>
+        /// <param name="showCompletionDialog">是否弹出结束 / 失败对话框。</param>
+        /// <returns>分解结果可用（含「直接使用现有结果」）返回 <c>true</c>；前置检查失败 / 执行异常返回 <c>false</c>。</returns>
+        private async Task<bool> RunSplitAsync(bool showCompletionDialog)
+        {
             if (_isRunning)
             {
-                return;
+                return false;
             }
 
             string folder = txtFolder.Text.Trim();
@@ -694,7 +736,7 @@ namespace MSIFAITOOLS
                 MessageBox.Show(this, "请确认已选择有效的 PDF 文件夹！", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("文件夹无效", Color.FromArgb(239, 108, 0));
-                return;
+                return false;
             }
 
             // 统计文件夹中的 PDF 数量（严格匹配 .pdf 扩展名）
@@ -708,7 +750,7 @@ namespace MSIFAITOOLS
             {
                 MessageBox.Show(this, "读取文件夹失败：\n" + ex.Message, "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
+                return false;
             }
 
             if (pdfFiles.Length == 0)
@@ -716,7 +758,7 @@ namespace MSIFAITOOLS
                 MessageBox.Show(this, "该文件夹中没有找到 PDF 文件！", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("未找到 PDF 文件", Color.FromArgb(239, 108, 0));
-                return;
+                return false;
             }
 
             lblPdfInfo.Text = "PDF：" + pdfFiles.Length + " 个";
@@ -735,7 +777,7 @@ namespace MSIFAITOOLS
                 if (answer != DialogResult.Yes)
                 {
                     UseExistingSplitResult(folder, pdfFiles);
-                    return;
+                    return true;
                 }
             }
 
@@ -787,16 +829,21 @@ namespace MSIFAITOOLS
                 AppendLog("分解失败：" + failure.Message, Color.FromArgb(255, 140, 140));
                 SetStatus("分解异常", Color.FromArgb(198, 40, 40));
                 lblProgress.Text = "执行异常";
-                MessageBox.Show(this, "分解失败：\n" + failure.Message, "异常",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
+
+                if (showCompletionDialog)
+                {
+                    MessageBox.Show(this, "分解失败：\n" + failure.Message, "异常",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+
+                return false;
             }
 
             if (result == null)
             {
                 SetStatus("分解失败", Color.FromArgb(198, 40, 40));
                 lblProgress.Text = "分解失败";
-                return;
+                return false;
             }
 
             string outputDir = result.OutputDirectory;
@@ -831,22 +878,25 @@ namespace MSIFAITOOLS
                 progressBar.Style = ProgressBarStyle.Continuous;
                 progressBar.Value = progressBar.Maximum;
 
-                MessageBox.Show(this,
-                    "批量分解成功！\n\n共处理 " + result.Total + " 个 PDF\n\n" +
-                    "输出根目录（每个 PDF 一个以図番号命名的子文件夹）：\n" + outputDir + "\n\n" +
-                    "各 PDF 子文件夹中的文件：\n" +
-                    "xy.txt / xy_imgtext.txt / table.txt /\n" +
-                    "plu_text.txt / plu_layout.txt / plu_table.txt / plu_image.txt / plu_all.txt\n\n" +
-                    "CadPartSplitter 生成的部品表（CMD 分析用）：\n" +
-                    CmdPartAnalyzer.LtStep1FileName + "（アッセンブリ図）/ " +
-                    CmdInstructionPartCollector.YoryoListFileName + "（要領図一覧）/ " +
-                    CmdInstructionPartCollector.YoryoPartFileName + "（要領図）\n\n" +
-                    "分类清单（PdfInfoList.txt）：\n" + _classifyDirectory + "\n\n" +
-                    PdfClassifier.BuildSummaryText(result.Classifications) +
-                    (unknownCount > 0
-                        ? "\n\n有 " + unknownCount + " 个 PDF 在分类清单里没有记录，请在上游工具的分类清单里补充。"
-                        : "\n\n分类已全部确定。"),
-                    "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                if (showCompletionDialog)
+                {
+                    MessageBox.Show(this,
+                        "批量分解成功！\n\n共处理 " + result.Total + " 个 PDF\n\n" +
+                        "输出根目录（每个 PDF 一个以図番号命名的子文件夹）：\n" + outputDir + "\n\n" +
+                        "各 PDF 子文件夹中的文件：\n" +
+                        "xy.txt / xy_imgtext.txt / table.txt /\n" +
+                        "plu_text.txt / plu_layout.txt / plu_table.txt / plu_image.txt / plu_all.txt\n\n" +
+                        "CadPartSplitter 生成的部品表（CMD 分析用）：\n" +
+                        CmdPartAnalyzer.LtStep1FileName + "（アッセンブリ図）/ " +
+                        CmdInstructionPartCollector.YoryoListFileName + "（要領図一覧）/ " +
+                        CmdInstructionPartCollector.YoryoPartFileName + "（要領図）\n\n" +
+                        "分类清单（PdfInfoList.txt）：\n" + _classifyDirectory + "\n\n" +
+                        PdfClassifier.BuildSummaryText(result.Classifications) +
+                        (unknownCount > 0
+                            ? "\n\n有 " + unknownCount + " 个 PDF 在分类清单里没有记录，请在上游工具的分类清单里补充。"
+                            : "\n\n分类已全部确定。"),
+                        "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
             }
             else
             {
@@ -865,12 +915,17 @@ namespace MSIFAITOOLS
                 progressBar.Style = ProgressBarStyle.Continuous;
                 progressBar.Value = 0;
 
-                MessageBox.Show(this,
-                    "分解完成，但有 " + result.Failed + " 个文件处理失败。\n\n" +
-                    "成功 " + result.Succeeded + " / 共 " + result.Total + " 个 PDF\n\n" +
-                    "首个错误：\n" + result.Errors[0],
-                    "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                if (showCompletionDialog)
+                {
+                    MessageBox.Show(this,
+                        "分解完成，但有 " + result.Failed + " 个文件处理失败。\n\n" +
+                        "成功 " + result.Succeeded + " / 共 " + result.Total + " 个 PDF\n\n" +
+                        "首个错误：\n" + result.Errors[0],
+                        "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
+
+            return true;
         }
 
 
@@ -958,6 +1013,12 @@ namespace MSIFAITOOLS
             SetStatus("AI 设置已保存", Color.FromArgb(46, 125, 50));
         }
 
+        /// <summary>【AI 分析】按钮：单独点击时执行一次 AI 分析（结束时弹提示）。</summary>
+        private async void BtnAiAnalyze_Click(object sender, EventArgs e)
+        {
+            await RunAiAnalysisAsync(true);
+        }
+
         /// <summary>
         /// 【AI 分析】＝部材名 AI 推荐：遍历【分类结果】中「アッセンブリ図」的 PDF，
         /// 对该図番里「数据来源 = CMD分析・アッセンブリ図」的<b>全部</b>行，
@@ -980,11 +1041,13 @@ namespace MSIFAITOOLS
         /// （<see cref="PartAnalysisService.AnalyzeAndSave"/> 不再被按钮调用）。
         /// </para>
         /// </summary>
-        private async void BtnAiAnalyze_Click(object sender, EventArgs e)
+        /// <param name="showCompletionDialog">是否弹出结束 / 失败对话框（【一括执行】的中间步骤传 <c>false</c>）。</param>
+        /// <returns>AI 分析正常结束返回 <c>true</c>；前置检查失败 / 执行异常返回 <c>false</c>。</returns>
+        private async Task<bool> RunAiAnalysisAsync(bool showCompletionDialog)
         {
             if (_isRunning)
             {
-                return;
+                return false;
             }
 
             if (_classifications == null || _classifications.Count == 0)
@@ -992,7 +1055,7 @@ namespace MSIFAITOOLS
                 MessageBox.Show(this, "请先点击【开始分解】，并在【分类结果】页确认分类后再执行 AI 分析。",
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("尚未分解，无法 AI 分析", Color.FromArgb(239, 108, 0));
-                return;
+                return false;
             }
 
             string outputDir = _lastOutputDir;
@@ -1003,7 +1066,7 @@ namespace MSIFAITOOLS
                     "找不到分解输出目录，请先执行【开始分解】。\n\n" + (outputDir ?? string.Empty),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("找不到分解输出目录", Color.FromArgb(239, 108, 0));
-                return;
+                return false;
             }
 
             // 后台线程只读快照，避免分析期间界面修改分类造成并发问题
@@ -1025,7 +1088,7 @@ namespace MSIFAITOOLS
                     "请在【分类结果】页确认分类（分类由上游工具写入 PdfInfoList.txt）后再执行。",
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("没有「" + PdfCategoryNames.Assembly + "」，无需分析", Color.FromArgb(239, 108, 0));
-                return;
+                return false;
             }
 
             // 【开发调试】PartAnalysisService.DebugSingleFileOnly = true 时只分析指定 PDF
@@ -1043,7 +1106,7 @@ namespace MSIFAITOOLS
                         "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     SetStatus("【调试模式】未找到 " + PartAnalysisService.DebugSingleFileName,
                         Color.FromArgb(239, 108, 0));
-                    return;
+                    return false;
                 }
 
                 snapshot = debugTargets;
@@ -1079,7 +1142,7 @@ namespace MSIFAITOOLS
                     (string.IsNullOrEmpty(settingsError) ? string.Empty : "（用户设置读取失败：" + settingsError + "）"),
                     Color.FromArgb(255, 200, 120));
                 SetStatus("未配置 AI 密钥", Color.FromArgb(239, 108, 0));
-                return;
+                return false;
             }
 
             progressBar.Style = ProgressBarStyle.Continuous;
@@ -1166,16 +1229,21 @@ namespace MSIFAITOOLS
                 AppendLog("AI 分析失败：" + failure.Message, Color.FromArgb(255, 140, 140));
                 SetStatus("AI 分析异常", Color.FromArgb(198, 40, 40));
                 lblProgress.Text = "AI 分析异常";
-                MessageBox.Show(this, "AI 分析失败：\n" + failure.Message, "异常",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
+
+                if (showCompletionDialog)
+                {
+                    MessageBox.Show(this, "AI 分析失败：\n" + failure.Message, "异常",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+
+                return false;
             }
 
             if (summary == null)
             {
                 SetStatus("AI 分析未返回结果", Color.FromArgb(198, 40, 40));
                 lblProgress.Text = "AI 分析未返回结果";
-                return;
+                return false;
             }
 
             string summaryText = MemberNameAiAdvisor.BuildSummaryText(summary);
@@ -1202,15 +1270,20 @@ namespace MSIFAITOOLS
                 ? Color.FromArgb(255, 140, 140)
                 : Color.FromArgb(46, 125, 50));
 
-            MessageBox.Show(this,
-                "AI 分析完成！\n\n" + summaryText + "\n\n" +
-                (quantitySummary == null
-                    ? string.Empty
-                    : SpecialProductQuantityAdvisor.BuildSummaryText(quantitySummary) + "\n\n") +
-                "部品基本信息数据库：\n" + summary.DatabasePath + "\n\n" +
-                "可在【分类结果】选中 PDF 行后点击【部品信息】，查看「" +
-                PartBasicInfoRepository.MemberNameAiColumnName + "」列。",
-                "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (showCompletionDialog)
+            {
+                MessageBox.Show(this,
+                    "AI 分析完成！\n\n" + summaryText + "\n\n" +
+                    (quantitySummary == null
+                        ? string.Empty
+                        : SpecialProductQuantityAdvisor.BuildSummaryText(quantitySummary) + "\n\n") +
+                    "部品基本信息数据库：\n" + summary.DatabasePath + "\n\n" +
+                    "可在【分类结果】选中 PDF 行后点击【部品信息】，查看「" +
+                    PartBasicInfoRepository.MemberNameAiColumnName + "」列。",
+                    "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -1307,11 +1380,13 @@ namespace MSIFAITOOLS
         /// 单步执行时只跑该步，日志里仍用「【第 N 步 · 名字】」前缀。
         /// </summary>
         /// <param name="stepKind">要执行的步骤。</param>
-        private async Task RunCmdAnalysisAsync(CmdAnalysisStepKind stepKind)
+        /// <param name="showCompletionDialog">是否弹出结束 / 失败对话框（【一括执行】的中间步骤传 <c>false</c>）。</param>
+        /// <returns>步骤正常结束返回 <c>true</c>；前置检查失败 / 执行异常返回 <c>false</c>。</returns>
+        private async Task<bool> RunCmdAnalysisAsync(CmdAnalysisStepKind stepKind, bool showCompletionDialog = true)
         {
             if (_isRunning)
             {
-                return;
+                return false;
             }
 
             if (_classifications == null || _classifications.Count == 0)
@@ -1319,7 +1394,7 @@ namespace MSIFAITOOLS
                 MessageBox.Show(this, "请先点击【开始分解】，并在【分类结果】页确认分类后再执行 CMD 分析。",
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("尚未分解，无法 CMD 分析", Color.FromArgb(239, 108, 0));
-                return;
+                return false;
             }
 
             string outputDir = _lastOutputDir;
@@ -1330,7 +1405,7 @@ namespace MSIFAITOOLS
                     "找不到分解输出目录，请先执行【开始分解】。\n\n" + (outputDir ?? string.Empty),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("找不到分解输出目录", Color.FromArgb(239, 108, 0));
-                return;
+                return false;
             }
 
             // 后台线程只读快照，避免分析期间界面修改分类造成并发问题
@@ -1356,7 +1431,7 @@ namespace MSIFAITOOLS
                     "请在【分类结果】页确认分类（分类由上游工具写入 PdfInfoList.txt）后再执行。",
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("没有「" + PdfCategoryNames.Assembly + "」，无需分析", Color.FromArgb(239, 108, 0));
-                return;
+                return false;
             }
 
             progressBar.Style = ProgressBarStyle.Continuous;
@@ -1420,16 +1495,21 @@ namespace MSIFAITOOLS
                 AppendLog(actionName + " 失败：" + failure.Message, Color.FromArgb(255, 140, 140));
                 SetStatus(actionName + " 异常", Color.FromArgb(198, 40, 40));
                 lblProgress.Text = actionName + " 异常";
-                MessageBox.Show(this, actionName + " 失败：\n" + failure.Message, "异常",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
+
+                if (showCompletionDialog)
+                {
+                    MessageBox.Show(this, actionName + " 失败：\n" + failure.Message, "异常",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+
+                return false;
             }
 
             if (summary == null)
             {
                 SetStatus(actionName + " 未返回结果", Color.FromArgb(198, 40, 40));
                 lblProgress.Text = actionName + " 未返回结果";
-                return;
+                return false;
             }
 
             string summaryText = CmdPartAnalysisService.BuildSummaryText(summary);
@@ -1455,10 +1535,124 @@ namespace MSIFAITOOLS
                 ? Color.FromArgb(255, 140, 140)
                 : Color.FromArgb(46, 125, 50));
 
+            if (showCompletionDialog)
+            {
+                MessageBox.Show(this,
+                    actionName + " 完成！\n\n" + summaryText + "\n\n" +
+                    "部品基本信息数据库：\n" + summary.DatabasePath + "\n\n" +
+                    "可在【分类结果】选中 PDF 行后点击【部品信息】查看登录的部品基本信息。",
+                    "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 【一括执行】：按顺序自动跑【开始分解】→【CMD 分析】→【AI 分析】。
+        /// <para>
+        /// 三个按钮各自的实体分别复用：<see cref="RunSplitAsync"/> / <see cref="RunCmdAnalysisAsync"/> /
+        /// <see cref="RunAiAnalysisAsync"/>，中间步骤传 <c>showCompletionDialog = false</c>
+        /// （日志、状态栏、进度条照常刷新，只是不弹「完成」框），最后统一弹一次结果。
+        /// </para>
+        /// <para>
+        /// 任何一步返回 <c>false</c>（前置检查不通过 / 执行异常 / 用户取消）就停下，
+        /// 不再跑后面的步骤 —— 后面的步骤都依赖前一步的产物（分解结果 → CMD 入库 → AI 判定）。
+        /// 分解时「是否重新分解」的询问框仍然会弹（那是决定，不是提示）。
+        /// </para>
+        /// </summary>
+        private async void BtnRunAll_Click(object sender, EventArgs e)
+        {
+            if (_isRunning || _allStepsRunning)
+            {
+                return;
+            }
+
+            _allStepsRunning = true;
+
+            try
+            {
+                await RunAllStepsAsync();
+            }
+            finally
+            {
+                _allStepsRunning = false;
+                SetRunning(false);
+            }
+        }
+
+        /// <summary>
+        /// 【一括执行】的实体：开始分解 → CMD 分析 → AI 分析 顺序执行，全部结束（或中途失败）后弹一次提示。
+        /// </summary>
+        private async Task RunAllStepsAsync()
+        {
+            AppendLog("==================================================", Color.FromArgb(90, 90, 90));
+            AppendLog("一括执行开始：【开始分解】→【CMD 分析】→【AI 分析】（依次执行，任一步失败即停止）",
+                Color.FromArgb(200, 170, 255));
+            SetStatus("一括执行中：开始分解...", Color.FromArgb(230, 126, 34));
+
+            // ① 开始分解（不弹完成框；「是否重新分解」的询问框照常）
+            bool splitOk = await RunSplitAsync(false);
+
+            if (!splitOk)
+            {
+                AppendLog("一括执行已停止：【开始分解】未成功，后续【CMD 分析】/【AI 分析】未执行。",
+                    Color.FromArgb(255, 140, 140));
+                SetStatus("一括执行已停止（开始分解失败）", Color.FromArgb(198, 40, 40));
+
+                MessageBox.Show(this,
+                    "一括执行已停止。\n\n【开始分解】未成功，后续【CMD 分析】/【AI 分析】没有执行。\n\n" +
+                    "原因见【运行日志】，处理后可以重新点击【一括执行】，或单独重试某一步。",
+                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // ② CMD 分析（第 0 步 + 第 1~6 步，与单个按钮完全相同的流程）
+            SetStatus("一括执行中：CMD 分析...", Color.FromArgb(230, 126, 34));
+
+            bool cmdOk = await RunCmdAnalysisAsync(CmdAnalysisStepKind.All, false);
+
+            if (!cmdOk)
+            {
+                AppendLog("一括执行已停止：【CMD 分析】未成功，后续【AI 分析】未执行。",
+                    Color.FromArgb(255, 140, 140));
+                SetStatus("一括执行已停止（CMD 分析失败）", Color.FromArgb(198, 40, 40));
+
+                MessageBox.Show(this,
+                    "一括执行已停止。\n\n【开始分解】已完成，但【CMD 分析】未成功，" +
+                    "【AI 分析】没有执行。\n\n原因见【运行日志】。",
+                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // ③ AI 分析（部材名 AI 推荐 + 特注品数量）
+            SetStatus("一括执行中：AI 分析...", Color.FromArgb(230, 126, 34));
+
+            bool aiOk = await RunAiAnalysisAsync(false);
+
+            if (!aiOk)
+            {
+                AppendLog("一括执行结束（AI 分析未完成）：分解与 CMD 分析的结果已保存。",
+                    Color.FromArgb(255, 200, 120));
+                SetStatus("一括执行结束（AI 分析未完成）", Color.FromArgb(198, 40, 40));
+
+                MessageBox.Show(this,
+                    "一括执行结束，但【AI 分析】未完成。\n\n" +
+                    "【开始分解】与【CMD 分析】的结果已经保存，原因见【运行日志】。",
+                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            AppendLog("--------------------------------------------------", Color.FromArgb(90, 90, 90));
+            AppendLog("一括执行完成：开始分解 → CMD 分析 → AI 分析 全部结束。",
+                Color.FromArgb(150, 220, 150));
+            SetStatus("一括执行完成", Color.FromArgb(46, 125, 50));
+            lblProgress.Text = "一括执行完成";
+
             MessageBox.Show(this,
-                actionName + " 完成！\n\n" + summaryText + "\n\n" +
-                "部品基本信息数据库：\n" + summary.DatabasePath + "\n\n" +
-                "可在【分类结果】选中 PDF 行后点击【部品信息】查看登录的部品基本信息。",
+                "一括执行完成！\n\n" +
+                "① 开始分解\n② CMD 分析（第 0 ~ 6 步）\n③ AI 分析（部材名 AI 推荐 + 特注品数量）\n\n" +
+                "每一步的结果明细见【运行日志】；部品基本信息可在【分类结果】选中 PDF 行后" +
+                "点击【部品信息】查看。",
                 "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
@@ -1535,8 +1729,50 @@ namespace MSIFAITOOLS
                 _suppressAutoPreview = false;
             }
 
+            // 填完不要留「默认选中第一行」：否则开着「选中即预览」就会直接弹出第一份 PDF
+            ClearClassifySelection();
+
             RefreshClassifySummary();
         }
+
+        /// <summary>
+        /// 清空【分类结果】的选中状态（一行都不选中）。
+        /// <para>
+        /// 切换标签页、程序填表、表格刚拿到焦点时，DataGridView 会自己把<b>第一行</b>设成当前行，
+        /// 于是开着「选中即预览」就会直接弹出第一份 PDF 的预览窗口 —— 看起来就像「点一下
+        /// 【分类结果】标签，PDF 画面就自己打开了」。所以在这些时机主动把选中状态清掉。
+        /// </para>
+        /// <para>
+        /// 必须把 <see cref="DataGridView.CurrentCell"/> 设成 <c>null</c>：只调 <c>ClearSelection()</c>
+        /// 的话 <c>CurrentRow</c> 还停在第一行，【预览 PDF】/【部品信息】仍会作用在那一行上。
+        /// </para>
+        /// </summary>
+        private void ClearClassifySelection()
+        {
+            if (dgvClassify == null || dgvClassify.IsDisposed || dgvClassify.Rows.Count == 0)
+            {
+                _lastAutoPreviewKey = null;
+                return;
+            }
+
+            bool previous = _suppressAutoPreview;
+            _suppressAutoPreview = true;
+            _classifyRowChangeByKey = false;
+
+            try
+            {
+                dgvClassify.CurrentCell = null;
+                dgvClassify.ClearSelection();
+            }
+            finally
+            {
+                _suppressAutoPreview = previous;
+            }
+
+            // 清掉「上次预览过的文件」：用户接下来点任意一行（包括第一行）都应该能预览
+            _lastAutoPreviewKey = null;
+        }
+
         /// <summary>
         /// 按分类状态给行着色：未知（分类清单里没有该图的记录）为淡黄色，其余为白底。
         /// </summary>
@@ -1581,12 +1817,17 @@ namespace MSIFAITOOLS
         /// 分类列表当前行变化：勾选「选中即预览」时自动在预览窗口中显示该 PDF。
         /// 同一行的重复事件会被忽略（避免预览窗口关闭后又被焦点变化重新拉起）。
         /// <para>
-        /// 只有「表格可见 + 表格有焦点」才预览：切换标签页、程序填表、窗口首次布局时
-        /// DataGridView 都会自己把 CurrentCell 设成第一行，那不是用户选了一行。
+        /// 只有「表格可见 + 表格有焦点 + 这次换行是用户操作（鼠标点行 / 方向键）」才预览：
+        /// 切换标签页、程序填表、窗口首次布局时 DataGridView 都会自己把 CurrentCell 设成第一行，
+        /// 那不是用户选了一行 —— 点【分类结果】标签就弹出第一份 PDF 的预览窗口就是这个原因。
         /// </para>
         /// </summary>
         private void DgvClassify_CurrentCellChanged(object sender, EventArgs e)
         {
+            // 键盘标志只对「本次」变化有效：先取走再判断（后面的提前 return 不会把它留到下一次）
+            bool changeByKey = _classifyRowChangeByKey;
+            _classifyRowChangeByKey = false;
+
             if (_suppressAutoPreview || !chkAutoPreview.Checked)
             {
                 return;
@@ -1594,8 +1835,18 @@ namespace MSIFAITOOLS
 
             // 只有用户真的在表格里移动选中行时才预览：
             // 切换标签页、程序刷新表格、窗口首次布局都会把 CurrentCell 设成第一行，
-            // 那不算「选了一行」，不应该弹出预览窗口（点【分类结果】标签就弹 PDF 就是这个原因）。
+            // 那不算「选了一行」，不应该弹出预览窗口。
             if (!dgvClassify.Visible || !dgvClassify.ContainsFocus)
+            {
+                return;
+            }
+
+            // 鼠标左键还按着 = 用户正在点某一行；按方向键 = 用户在用键盘换行。
+            // 两者都不是（表格自己把第一行设成当前行）就什么都不做。
+            bool changeByMouse =
+                (System.Windows.Forms.Control.MouseButtons & MouseButtons.Left) == MouseButtons.Left;
+
+            if (!changeByMouse && !changeByKey)
             {
                 return;
             }
@@ -1642,6 +1893,20 @@ namespace MSIFAITOOLS
         /// </summary>
         private void DgvClassify_KeyDown(object sender, KeyEventArgs e)
         {
+            // 方向键 / PgUp / PgDn / Home / End 会移动当前行：记下「这次换行是用户按出来的」，
+            // 供 DgvClassify_CurrentCellChanged 判断要不要弹出预览窗口
+            switch (e.KeyCode)
+            {
+                case Keys.Up:
+                case Keys.Down:
+                case Keys.PageUp:
+                case Keys.PageDown:
+                case Keys.Home:
+                case Keys.End:
+                    _classifyRowChangeByKey = true;
+                    break;
+            }
+
             if (e.KeyCode == Keys.Escape && _classifyFullScreen)
             {
                 e.Handled = true;
@@ -1786,6 +2051,11 @@ namespace MSIFAITOOLS
                 // 不设 Owner：预览窗口是独立的顶层窗口，不会「始终浮在主窗口之上」，
                 // 点一下主窗口即可把它压到后面；关闭主窗口时由 OnFormClosed 一并关闭。
                 _previewForm.FormClosed += PreviewForm_FormClosed;
+
+                // 多屏时把预览窗口放到「主画面以外的屏幕」：不要和主画面（本窗口）挤在同一块屏上，
+                // 一弹出就把【分类结果】一览挡住；单屏时占左侧一半（和部品基本信息左右并排）。
+                WindowLayoutHelper.ArrangePreview(_previewForm, this);
+
                 _previewForm.Show();
             }
 
@@ -1801,7 +2071,7 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 部品基本信息画面已打开且显示同一份 PDF 时，使用它自己的预览窗口显示 / 前置预览。
-        /// （两个画面成对显示：预览在屏幕 1、部品基本信息在屏幕 2）
+        /// （两个画面成对显示：预览在主画面以外的屏幕、部品基本信息在主画面所在的屏幕）
         /// </summary>
         /// <param name="item">要预览的分类结果。</param>
         /// <param name="bringToFront">是否把预览窗口提到最前。</param>
@@ -1849,7 +2119,8 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 在独立窗口（PartBasicInfoForm）中显示指定 PDF（図番）已登录到 SQLite 的部品基本信息；
         /// 窗口已存在时复用并切换到该 PDF。PDF 预览画面与本画面同时打开：
-        /// 预览窗口在屏幕 1、部品基本信息在屏幕 2（只有 1 块屏幕时左右并排）。
+        /// 预览窗口在主画面以外的屏幕（不和主画面挤在一块屏上）、部品基本信息在主画面所在的屏幕
+        /// （只有 1 块屏幕时左右并排）。
         /// </summary>
         /// <param name="item">要查看的分类结果。</param>
         /// <param name="bringToFront">是否把窗口提到最前。</param>
@@ -2015,6 +2286,14 @@ namespace MSIFAITOOLS
                 RunAfterCurrentMessage(ExitClassifyFullScreen);
             }
 
+            // 切到【分类结果】时不要默认选中第一行：表格拿到焦点 / 变成可见时，DataGridView
+            // 会自己把第一行设成当前行，开着「选中即预览」就直接弹出第一份 PDF 的预览窗口。
+            // 排在「进入全画面」之后注册：那一步会把焦点交给表格，表格因此才会选中第一行。
+            if (tabMain.SelectedTab == tabPageClassify)
+            {
+                RunAfterCurrentMessage(ClearClassifySelection);
+            }
+
             // 恢复放在全画面切换之后注册：先做完「最大化 + 重新布局」，再放开「选中即预览」
             RunAfterCurrentMessage(delegate { _suppressAutoPreview = false; });
         }
@@ -2145,6 +2424,10 @@ namespace MSIFAITOOLS
             if (dgvClassify != null && dgvClassify.Visible)
             {
                 dgvClassify.Focus();
+
+                // 表格拿到焦点时 DataGridView 会自动把第一行设成当前行 → 立刻清掉：
+                // 不要「点一下【分类结果】标签就默认选中第一行、还弹出第一份 PDF 的预览窗口」。
+                ClearClassifySelection();
             }
         }
 
