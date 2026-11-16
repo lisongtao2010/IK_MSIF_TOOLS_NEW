@@ -53,7 +53,7 @@
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
-    <OutputPath>..\MSIFAITOOLS\bin\Debug\CadPartSplitter\</OutputPath>
+    <OutputPath>..\MSIFAITOOLS\bin\Debug\</OutputPath>
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>

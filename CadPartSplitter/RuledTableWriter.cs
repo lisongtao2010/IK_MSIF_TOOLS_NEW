@@ -80,6 +80,83 @@ namespace CadPartSplitter
             return written;
         }
 
+        // ── struck_words.txt（图面划线清单）─────────────────────────────────────
+
+        /// <summary>图面划线清单的文件名（与 <see cref="AssemblyYoryoBuilder"/> 读回来的名字一致）。</summary>
+        public const string StruckWordsFileName = "struck_words.txt";
+
+        /// <summary>
+        /// 写出「图面上被 取り消し線 划掉的词」清单（<c>struck_words.txt</c>，带 BOM）。
+        ///
+        /// 与 <see cref="Save"/> 分开、**有没有表格都要调用**：图纸上没画表格、把要領図索引写成
+        /// 自由文字的組立図（<c>H527U10001</c>）也可能把其中一条（<c>J部詳細：H325U10017</c>）划掉，
+        /// 那时这张图没有 <c>tables_info.json</c>，下游只能靠这份清单剔除作废条目。
+        ///
+        /// <paramref name="struck"/> 为空时**删掉上一轮留下的旧文件**并返回 0 ——
+        /// 否则图纸改过（这轮不再划线）之后，下游还会按旧清单剔条目。
+        /// </summary>
+        /// <returns>写出的文件个数（0 或 1）。</returns>
+        public static int SaveStruckWords(
+            List<StruckWordMark> struck, string outputDirectory, string sourceFile, DetectorOptions opts)
+        {
+            if (string.IsNullOrWhiteSpace(outputDirectory)) return 0;
+
+            DetectorOptions o = opts ?? new DetectorOptions();
+
+            string path = Path.Combine(outputDirectory, StruckWordsFileName);
+
+            int count = 0;
+
+            if (struck != null)
+                foreach (var w in struck)
+                    if (w != null && !string.IsNullOrEmpty(w.Text)) count++;
+
+            if (count == 0)
+            {
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                        o.Log("[INFO] 划线清单：本轮没有划线，已清掉上一轮的 " + path);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    o.Log("[WARN] 旧划线清单删不掉（不影响本次结果）：" + path + " —— " + ex.Message);
+                }
+
+                return 0;
+            }
+
+            Directory.CreateDirectory(outputDirectory);
+
+            var sb = new StringBuilder();
+
+            sb.AppendLine("# CadPartSplitter 划线清单（图面上被 取り消し線 划掉的文字 —— 划掉 = 那一条作废）");
+            sb.AppendLine("# 生成时间   : " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            sb.AppendLine("# 源文件     : "
+                          + (string.IsNullOrEmpty(sourceFile) ? "（未提供）" : Path.GetFullPath(sourceFile)));
+            sb.AppendLine("# 说明       : 与「有没有表格」无关；x / y / w / h 是页面绝对像素坐标（左上原点）");
+            sb.AppendLine("# 下游用途   : 01_アッセンブリ図_要領図.csv 写文件前按这份清单剔除作废的 図番");
+            sb.AppendLine("# 词数       : " + count);
+            sb.AppendLine();
+
+            foreach (var w in struck)
+            {
+                if (w == null || string.IsNullOrEmpty(w.Text)) continue;
+
+                sb.AppendLine("x=" + w.PixelX + " y=" + w.PixelY + " w=" + w.PixelW + " h=" + w.PixelH
+                              + "  " + CsvFile.SingleLine(w.Text));
+            }
+
+            // 带 BOM 的 UTF-8：Windows 记事本打开日文、中文不会乱码
+            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
+
+            o.Log("[INFO] 划线清单：图面 " + count + " 个词被 取り消し線 划掉 → " + path);
+            return 1;
+        }
+
         // ── tables_info.json ──────────────────────────────────────────────────
 
         /// <summary>

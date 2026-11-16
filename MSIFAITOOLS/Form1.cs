@@ -45,6 +45,12 @@ namespace MSIFAITOOLS
         /// <summary>上一次自动预览过的 PDF 路径，用于避免同一行被重复预览（例如预览窗口关闭后焦点变化）。</summary>
         private string _lastAutoPreviewKey;
 
+        /// <summary>
+        /// 是否已经把「PDF 预览不可用（pdfium.dll）」的原因写进日志。
+        /// 自动预览每换一行都会尝试一次，只在第一次写，避免刷屏。
+        /// </summary>
+        private bool _pdfiumWarningLogged;
+
         /// <summary>右键点击日志框时记录的选择起点（右键会把插入点移到点击处并清空选择，菜单弹出时用它恢复选择）。</summary>
         private int _logSelectionStartOnRightClick;
 
@@ -68,6 +74,12 @@ namespace MSIFAITOOLS
             btnCmdStep4.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.TzAppend);
             btnCmdStep5.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.PartCode);
             btnCmdStep6.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.UsageKind);
+
+            // 【分类结果】标签选中时进入「一览全画面」，切回【运行日志】时自动还原
+            tabMain.SelectedIndexChanged += TabMain_SelectedIndexChanged;
+            tabMain.MouseDown += TabMain_MouseDown;
+            tabMain.MouseUp += TabMain_MouseUp;
+            pnlContent.SizeChanged += PnlContent_SizeChanged;
         }
 
         /// <summary>
@@ -76,7 +88,69 @@ namespace MSIFAITOOLS
         private void Form1_Shown(object sender, EventArgs e)
         {
             AppendLog("MSIF AI TOOLS 已启动，请选择 PDF 文件夹后开始分解。", Color.FromArgb(120, 200, 255));
+            AppendLogRunInfo();
             ShowEngineInfo();
+            ShowPdfiumInfo();
+
+            // 标题栏 Debug 默认不勾选：收起 ③ 分步执行，④ 运行日志 撑满。
+            // 放在 Shown 里再算一次，用的是 DPI / 字体自动缩放之后的真实尺寸。
+            ApplyStepsPanelLayout();
+        }
+
+        /// <summary>
+        /// 输出「这次运行的是哪个 exe」以及几个控件在运行时的真实坐标 / 自动缩放基准。
+        /// <para>
+        /// 用于排查「在设计画面挪了控件位置、运行起来却还是原来的样子」：
+        /// ① <b>编译时间</b>不是刚刚 → 跑的是旧 exe（编译失败时 VS 会问「是否运行上次成功编译的版本」，
+        ///     选「是」就是这个结果；也可能手动启动的是别的目录里的副本）；
+        /// ② <b>坐标</b>不是设计器里写的值，且「本次实际」与「设计基准」不同 → 被 DPI / 字体自动缩放
+        ///     改了位置（App.config 的 <c>DpiAwareness = PerMonitorV2</c> + <c>AutoScaleMode.Font</c>
+        ///     在非 100% 缩放的显示器上就会这样）；
+        /// ③ 坐标与设计器完全一致、画面却没变 → 挪的是别的控件，或者设计器的改动没有保存进
+        ///     <c>Form1.Designer.cs</c>（该文件被外部改动后 VS 提示重新加载时选「是」也会丢弃未保存的设计改动）。
+        /// </para>
+        /// </summary>
+        private void AppendLogRunInfo()
+        {
+            try
+            {
+                string exePath = Application.ExecutablePath;
+                string builtAt = File.Exists(exePath)
+                    ? File.GetLastWriteTime(exePath).ToString("yyyy-MM-dd HH:mm:ss")
+                    : "未知";
+
+                AppendLog(string.Format("程序：{0}（编译 {1}）", exePath, builtAt),
+                    Color.FromArgb(180, 180, 180));
+
+                AppendLog(string.Format("窗体：ClientSize={0}×{1}，AutoScaleMode={2}，设计基准={3}，本次实际={4}",
+                    ClientSize.Width, ClientSize.Height, AutoScaleMode,
+                    DescribeSizeF(AutoScaleDimensions), DescribeSizeF(CurrentAutoScaleDimensions)),
+                    Color.FromArgb(180, 180, 180));
+
+                AppendLog(string.Format("布局：grpInput={0}，grpAction={1}，grpSteps={2}，grpLog={3}，btnCmdAnalyze={4}",
+                    DescribeControlBounds(grpInput), DescribeControlBounds(grpAction),
+                    DescribeControlBounds(grpSteps), DescribeControlBounds(grpLog),
+                    DescribeControlBounds(btnCmdAnalyze)),
+                    Color.FromArgb(180, 180, 180));
+            }
+            catch (Exception)
+            {
+                // 只为排查布局，取不到就算了，不影响启动
+            }
+        }
+
+        /// <summary>把控件的位置 / 尺寸格式化成「(X,Y) 宽×高」（排查布局时对照设计器用）。</summary>
+        private static string DescribeControlBounds(Control control)
+        {
+            return control == null
+                ? "无"
+                : string.Format("({0},{1}) {2}×{3}", control.Left, control.Top, control.Width, control.Height);
+        }
+
+        /// <summary>把 SizeF 格式化成「7×17」（AutoScaleDimensions 用）。</summary>
+        private static string DescribeSizeF(SizeF size)
+        {
+            return size.Width.ToString("0.##") + "×" + size.Height.ToString("0.##");
         }
 
         /// <summary>
@@ -89,6 +163,27 @@ namespace MSIFAITOOLS
             lblEngine.ForeColor = Color.FromArgb(46, 125, 50);
             AppendLog("PDF 解析引擎：PdfPig " + version + "（纯 .NET，无需 Python 运行时）",
                 Color.FromArgb(150, 220, 150));
+        }
+
+        /// <summary>
+        /// 在日志里说明 PDF 预览用的原生库（pdfium.dll）是哪一份。
+        /// <para>
+        /// 找不到 / 版本不匹配时打印每份候选的失败原因与处理办法：预览不可用，但分解、分类、
+        /// AI 分析等其它功能都不受影响（那些只用纯 .NET 的 PdfPig）。
+        /// </para>
+        /// </summary>
+        private void ShowPdfiumInfo()
+        {
+            string message;
+
+            if (PdfiumRuntime.EnsureAvailable(out message))
+            {
+                AppendLog("PDF 预览引擎：" + message, Color.FromArgb(150, 220, 150));
+                return;
+            }
+
+            _pdfiumWarningLogged = true;
+            AppendLog("PDF 预览不可用：" + message, Color.FromArgb(255, 200, 120));
         }
 
         /// <summary>
@@ -1438,10 +1533,22 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 分类列表当前行变化：勾选「选中即预览」时自动在预览窗口中显示该 PDF。
         /// 同一行的重复事件会被忽略（避免预览窗口关闭后又被焦点变化重新拉起）。
+        /// <para>
+        /// 只有「表格可见 + 表格有焦点」才预览：切换标签页、程序填表、窗口首次布局时
+        /// DataGridView 都会自己把 CurrentCell 设成第一行，那不是用户选了一行。
+        /// </para>
         /// </summary>
         private void DgvClassify_CurrentCellChanged(object sender, EventArgs e)
         {
             if (_suppressAutoPreview || !chkAutoPreview.Checked)
+            {
+                return;
+            }
+
+            // 只有用户真的在表格里移动选中行时才预览：
+            // 切换标签页、程序刷新表格、窗口首次布局都会把 CurrentCell 设成第一行，
+            // 那不算「选了一行」，不应该弹出预览窗口（点【分类结果】标签就弹 PDF 就是这个原因）。
+            if (!dgvClassify.Visible || !dgvClassify.ContainsFocus)
             {
                 return;
             }
@@ -1483,10 +1590,22 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 分类结果表格的快捷键：按 Enter 打开当前行的部品基本信息。
+        /// 分类结果表格的快捷键：按 Enter 打开当前行的部品基本信息；
+        /// 全画面显示时按 Esc 退回【运行日志】标签并还原布局。
         /// </summary>
         private void DgvClassify_KeyDown(object sender, KeyEventArgs e)
         {
+            if (e.KeyCode == Keys.Escape && _classifyFullScreen)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+
+                ExitClassifyFullScreen();
+                tabMain.SelectedTab = tabPageLog;
+                SetStatus("已退出【分类结果】全画面", Color.FromArgb(108, 117, 125));
+                return;
+            }
+
             if (e.KeyCode != Keys.Enter)
             {
                 return;
@@ -1586,6 +1705,23 @@ namespace MSIFAITOOLS
             if (!File.Exists(item.FilePath))
             {
                 SetStatus("PDF 不存在：" + item.FileName, Color.FromArgb(198, 40, 40));
+                return;
+            }
+
+            string pdfiumMessage;
+
+            if (!PdfiumRuntime.EnsureAvailable(out pdfiumMessage))
+            {
+                // 预览引擎不可用时不再打开预览窗口：否则「选中即预览」每换一行都会弹一次
+                // 「无法显示该 PDF」，看起来就像点一下列表就报错。
+                SetStatus("PDF 预览不可用：" + pdfiumMessage, Color.FromArgb(198, 40, 40));
+
+                if (!_pdfiumWarningLogged)
+                {
+                    _pdfiumWarningLogged = true;
+                    AppendLog("PDF 预览不可用：" + pdfiumMessage, Color.FromArgb(255, 200, 120));
+                }
+
                 return;
             }
 
@@ -1766,6 +1902,333 @@ namespace MSIFAITOOLS
             }
 
             base.OnFormClosed(e);
+        }
+
+        /// <summary>是否正处于「【分类结果】一览占满整个窗口」的状态。</summary>
+        private bool _classifyFullScreen;
+
+        /// <summary>
+        /// 本次标签切换是否由用户「点了标签头」引起。
+        /// <para>
+        /// 程序自己也会切换标签（分解结束、<see cref="PdfCategory"/> 里有未知文件时自动切到【分类结果】，
+        /// 运行 AI 分析 / CMD 分析时切到【运行日志】），这些不应该把界面切进 / 切出全画面，
+        /// 否则分解一结束 ② 执行区（含【AI 分析】按钮）就被收起来了。
+        /// </para>
+        /// </summary>
+        private bool _tabSwitchByUser;
+
+        /// <summary>进入全画面之前 grpLog 的位置 / 大小（退出时原样还原）。</summary>
+        private Rectangle _grpLogBoundsBeforeFullScreen;
+
+        /// <summary>进入全画面之前 ① 输入设置 是否可见（退出时还原）。</summary>
+        private bool _grpInputVisibleBeforeFullScreen;
+
+        /// <summary>进入全画面之前 ② 执行 是否可见（退出时还原）。</summary>
+        private bool _grpActionVisibleBeforeFullScreen;
+
+        /// <summary>进入全画面之前日志组的标题（退出时还原）。</summary>
+        private string _grpLogTextBeforeFullScreen;
+
+        /// <summary>进入全画面之前的窗体状态（只在本次确实最大化过时才还原窗口大小）。</summary>
+        private FormWindowState _windowStateBeforeFullScreen;
+
+        /// <summary>进入全画面之前的窗体位置 / 大小（退出时还原）。</summary>
+        private Rectangle _windowBoundsBeforeFullScreen;
+
+        /// <summary>全画面时日志组与内容区四周保留的边距（像素）。</summary>
+        private const int ClassifyFullScreenMargin = 6;
+
+        /// <summary>
+        /// 主标签页切换：用户点【分类结果】→ 一览铺满整个窗口；切回【运行日志】→ 还原原来的四段布局。
+        /// <para>
+        /// 只有用户点击标签头引起的切换才进入全画面（见 <see cref="_tabSwitchByUser"/>）；
+        /// 程序自动切换（分解结束后切到【分类结果】看未知文件、运行时切到【运行日志】）保持原布局。
+        /// </para>
+        /// <para>
+        /// 进入全画面会改动窗口状态（最大化），所以放到消息处理完之后再做：
+        /// 在 <c>MouseDown</c> 的调用栈里直接最大化窗口会打断 TabControl 自己的选中处理。
+        /// </para>
+        /// </summary>
+        private void TabMain_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            bool byUser = _tabSwitchByUser;
+            _tabSwitchByUser = false;
+
+            // 切换标签不是「在列表里选了一行」：切换过程中 DataGridView 会把 CurrentCell
+            // 设成第一行（可能发生在新标签页拿到焦点之后），这里先压住一次「选中即预览」，
+            // 等这条消息处理完再放开 —— 用户随后真的点行 / 按方向键时才会弹预览窗口。
+            _suppressAutoPreview = true;
+
+            if (byUser && tabMain.SelectedTab == tabPageClassify)
+            {
+                RunAfterCurrentMessage(EnterClassifyFullScreen);
+            }
+            else
+            {
+                RunAfterCurrentMessage(ExitClassifyFullScreen);
+            }
+
+            // 恢复放在全画面切换之后注册：先做完「最大化 + 重新布局」，再放开「选中即预览」
+            RunAfterCurrentMessage(delegate { _suppressAutoPreview = false; });
+        }
+
+        /// <summary>
+        /// 只有点在「标签头」上才算用户主动切换标签；点在页面内容（表格 / 日志）上不算。
+        /// </summary>
+        private void TabMain_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left)
+            {
+                return;
+            }
+
+            for (int index = 0; index < tabMain.TabCount; index++)
+            {
+                if (tabMain.GetTabRect(index).Contains(e.Location))
+                {
+                    _tabSwitchByUser = true;
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 点击结束（含点到已经选中的标签头、没有发生切换的情况）后清掉「用户切换」标记。
+        /// <para>
+        /// 这里同样延后一条消息再清：不同 Windows 主题 / TabControl 实现里，选中变化通知
+        /// （TCN_SELCHANGE → <c>SelectedIndexChanged</c>）有可能在 <c>MouseUp</c> 之后才到达，
+        /// 立刻清标记会把同一次点击的切换漏掉（点了标签却不进全画面）。
+        /// </para>
+        /// </summary>
+        private void TabMain_MouseUp(object sender, MouseEventArgs e)
+        {
+            RunAfterCurrentMessage(delegate { _tabSwitchByUser = false; });
+        }
+
+        /// <summary>
+        /// 把动作排到「当前消息处理完之后」执行。
+        /// <para>
+        /// 与 <see cref="RunOnUi"/> 不同：<c>RunOnUi</c> 在 UI 线程上是<b>立即</b>执行的，
+        /// 而这里即使已经在 UI 线程也要 <c>BeginInvoke</c> 排到下一次消息循环 ——
+        /// 切换标签的 <c>SelectedIndexChanged</c> 是在 TabControl 的鼠标消息里触发的，
+        /// 在那里面直接最大化 / 还原窗口会打断 TabControl 自己的选中与绘制。
+        /// </para>
+        /// </summary>
+        private void RunAfterCurrentMessage(Action action)
+        {
+            if (action == null || IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            try
+            {
+                if (IsHandleCreated)
+                {
+                    BeginInvoke(action);
+                    return;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // 窗口正在销毁：忽略
+                return;
+            }
+
+            // 句柄还没创建（极端情况）：直接执行，至少不丢状态
+            action();
+        }
+
+        /// <summary>
+        /// 内容区尺寸变化（窗口最大化 / 还原 / 拖动边框）时，让下半部分继续贴合：
+        /// 全画面 → 一览铺满；正常布局 → ④ 运行日志 按 Debug 状态重排、始终撑到内容区底部。
+        /// </summary>
+        private void PnlContent_SizeChanged(object sender, EventArgs e)
+        {
+            if (_classifyFullScreen)
+            {
+                ApplyClassifyFullScreenLayout();
+                return;
+            }
+
+            ApplyStepsPanelLayout();
+        }
+
+        /// <summary>
+        /// 进入【分类结果】全画面：收起 ① 输入设置、② 执行 与 ③ 分步执行，把整个内容区让给一览表格，
+        /// 并把窗口最大化；切回其它标签时由 <see cref="ExitClassifyFullScreen"/> 全部还原。
+        /// </summary>
+        private void EnterClassifyFullScreen()
+        {
+            if (_classifyFullScreen)
+            {
+                ApplyClassifyFullScreenLayout();
+                return;
+            }
+
+            _classifyFullScreen = true;
+
+            // 先记下原始布局，退出时逐项还原（不写死设计器里的具体数值）
+            _grpLogBoundsBeforeFullScreen = grpLog.Bounds;
+            _grpLogTextBeforeFullScreen = grpLog.Text;
+            _grpInputVisibleBeforeFullScreen = grpInput.Visible;
+            _grpActionVisibleBeforeFullScreen = grpAction.Visible;
+            _windowStateBeforeFullScreen = WindowState;
+            _windowBoundsBeforeFullScreen = Bounds;
+
+            // 看一览时用不到这三块，收起来才能把高度全部让给表格
+            grpInput.Visible = false;
+            grpAction.Visible = false;
+            grpSteps.Visible = false;
+
+            grpLog.Text = "④  分类结果一览（全画面）— 按 Esc 或切回【运行日志】标签即还原布局";
+
+            // 「全画面」= 窗口先最大化；本来就已经最大化 / 最小化时不动窗口
+            if (_windowStateBeforeFullScreen == FormWindowState.Normal)
+            {
+                WindowState = FormWindowState.Maximized;
+            }
+
+            ApplyClassifyFullScreenLayout();
+
+            SetStatus("【分类结果】全画面显示：切回【运行日志】标签还原布局",
+                Color.FromArgb(46, 125, 50));
+
+            // 焦点交给表格：上下键即可逐行浏览、回车查看部品信息
+            if (dgvClassify != null && dgvClassify.Visible)
+            {
+                dgvClassify.Focus();
+            }
+        }
+
+        /// <summary>
+        /// 退出【分类结果】全画面：还原 ① / ② 的显示状态、日志组标题与位置、窗口大小；
+        /// ③ 分步执行 的显示与否由标题栏 Debug 决定（见 <see cref="ApplyStepsPanelLayout"/>）。
+        /// </summary>
+        private void ExitClassifyFullScreen()
+        {
+            if (!_classifyFullScreen)
+            {
+                return;
+            }
+
+            _classifyFullScreen = false;
+
+            grpInput.Visible = _grpInputVisibleBeforeFullScreen;
+            grpAction.Visible = _grpActionVisibleBeforeFullScreen;
+            grpLog.Text = _grpLogTextBeforeFullScreen;
+
+            // 只有本次确实把窗口最大化过，才需要还原窗口大小（用户本来最大化就保持最大化）
+            if (_windowStateBeforeFullScreen == FormWindowState.Normal)
+            {
+                if (WindowState == FormWindowState.Maximized)
+                {
+                    WindowState = FormWindowState.Normal;
+                }
+
+                Bounds = _windowBoundsBeforeFullScreen;
+            }
+
+            grpLog.Bounds = _grpLogBoundsBeforeFullScreen;
+
+            // ③ 分步执行 显示与否由标题栏 Debug 决定；并按内容区实际高度重排 ④（不留空白）
+            ApplyStepsPanelLayout();
+        }
+
+        /// <summary>
+        /// 全画面状态下把 grpLog（里面是 tabMain → 【分类结果】表格）铺满内容区，
+        /// 四周留 <see cref="ClassifyFullScreenMargin"/> 边距，与正常布局的视觉留白一致。
+        /// </summary>
+        private void ApplyClassifyFullScreenLayout()
+        {
+            if (!_classifyFullScreen || pnlContent == null || grpLog == null)
+            {
+                return;
+            }
+
+            int width = pnlContent.ClientSize.Width - ClassifyFullScreenMargin * 2;
+            int height = pnlContent.ClientSize.Height - ClassifyFullScreenMargin * 2;
+
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
+            grpLog.SetBounds(ClassifyFullScreenMargin, ClassifyFullScreenMargin, width, height);
+        }
+
+        /// <summary>
+        /// 按标题栏「Debug」勾选状态摆放内容区下半部分：
+        /// <list type="bullet">
+        /// <item>勾选 → 显示 ③ 分步执行（CMD 分析第 0 ~ 6 步），④ 运行日志 排到它下方；</item>
+        /// <item>不勾选（默认）→ 收起 ③，④ 运行日志 直接顶到 ② 执行 下面，并一直撑到内容区底部（不留空白）。</item>
+        /// </list>
+        /// <para>
+        /// 位置不用写死的常量：② 执行 的底边、③ 的高度都取控件的实际值，
+        /// 这样 DPI / 字体自动缩放改了尺寸后依然贴合。<see cref="_classifyFullScreen"/> 期间不动，
+        /// 那张画面由 <see cref="ApplyClassifyFullScreenLayout"/> 负责（退出全画面时会再调一次本方法）。
+        /// </para>
+        /// </summary>
+        private void ApplyStepsPanelLayout()
+        {
+            if (pnlContent == null || grpAction == null || grpSteps == null || grpLog == null)
+            {
+                return;
+            }
+
+            if (_classifyFullScreen)
+            {
+                // 看一览时 ③ 一直收起，避免盖在表格上
+                grpSteps.Visible = false;
+                return;
+            }
+
+            bool showSteps = chkDebug != null && chkDebug.Checked;
+
+            grpSteps.Visible = showSteps;
+
+            // 左 / 右 / 底留白直接取 ② 执行 的设计左边距（20px），块间距取 ③ 与 ② 之间的设计间距（6px）：
+            // 都是控件运行时的真实值，DPI / 字体自动缩放把尺寸放大后依然保持均匀留白。
+            int margin = grpAction.Left;
+            int gap = Math.Max(0, grpSteps.Top - grpAction.Bottom);
+            int width = pnlContent.ClientSize.Width - margin * 2;
+            int top = grpAction.Bottom + gap;
+            int bottom = pnlContent.ClientSize.Height - margin;
+
+            if (showSteps)
+            {
+                // 有 ③ 时 ④ 排在它下面（grpSteps.Bottom 随 DPI 缩放，别写成常量）
+                top = grpSteps.Bottom + gap;
+            }
+
+            int height = bottom - top;
+
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
+            grpLog.SetBounds(margin, top, width, height);
+        }
+
+        /// <summary>
+        /// 标题栏「Debug」开关：勾选后显示 ③ 分步执行 面板（第 0 ~ 6 步可单独执行），
+        /// 取消勾选则收起该面板，并让 ④ 运行日志 撑满剩余高度（不留空白）。
+        /// </summary>
+        private void ChkDebug_CheckedChanged(object sender, EventArgs e)
+        {
+            ApplyStepsPanelLayout();
+
+            bool debugOn = chkDebug.Checked;
+
+            AppendLog(
+                debugOn
+                    ? "Debug 已开启：显示【分步执行】面板（CMD 分析 第 0 ~ 6 步可单独执行）。"
+                    : "Debug 已关闭：隐藏【分步执行】面板，④ 运行日志 已撑满内容区。",
+                Color.FromArgb(150, 200, 255));
+
+            SetStatus(debugOn ? "已显示【分步执行】面板" : "已隐藏【分步执行】面板",
+                Color.FromArgb(108, 117, 125));
         }
 
         /// <summary>

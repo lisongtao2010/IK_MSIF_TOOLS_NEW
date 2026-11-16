@@ -70,6 +70,29 @@ namespace CadPartSplitter
         public double PdfH_mm { get; set; }
     }
 
+    /// <summary>
+    /// 图面上被 取り消し線（划线）划掉的一个词 —— **与表格无关**。
+    ///
+    /// 为什么要单独有这份清单：图纸上没画表格、把要領図索引写成自由文字的組立図
+    /// （<c>H527U10001</c> 那种 <c>下記に示す図面を参照のこと。/ A部詳細：H325U10011 …</c>）里，
+    /// 也可能把其中一条（<c>J部詳細：H325U10017</c>）划掉 —— 这时没有 <c>tables_info.json</c> 可查，
+    /// 划线判断只发生在 <see cref="RuledTableExtractor"/> 内部，不记下来下游就不知道哪一条已作废。
+    ///
+    /// 产物：<c>struck_words.txt</c>（见 <see cref="RuledTableWriter.SaveStruckWords"/>），
+    /// 由 <see cref="AssemblyYoryoBuilder"/> 在写 <c>01_アッセンブリ図_要領図.csv</c> 前读回来。
+    /// </summary>
+    public class StruckWordMark
+    {
+        /// <summary>被划掉的词在图纸上写的原文（<c>H325U10017</c> / <c>枠 建て付け…</c>）。</summary>
+        public string Text { get; set; } = string.Empty;
+
+        // ── 页面绝对像素坐标（左上原点、Y 向下，与 RuledTableCell 同一口径）──
+        public int PixelX { get; set; }
+        public int PixelY { get; set; }
+        public int PixelW { get; set; }
+        public int PixelH { get; set; }
+    }
+
     /// <summary>有线表格的一行：同一行边界带内的所有单元格（按列号排序）。</summary>
     public class RuledTableRow
     {

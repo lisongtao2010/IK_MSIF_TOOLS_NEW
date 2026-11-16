@@ -275,7 +275,7 @@
       "row_count": 15,
       "column_count": 15,
       "cell_count": 52,
-      "text_cell_count": 12,
+      "text_cell_count": 11,
       "struck_row_count": 0,
       "visible_row_count": 15,
       "rows": [
@@ -741,8 +741,8 @@
               "column": 4,
               "row_span": 2,
               "column_span": 1,
-              "text": "1",
-              "word_count": 1,
+              "text": "",
+              "word_count": 0,
               "struck_words": 0,
               "pixel": { "x": 4085, "y": 6291, "w": 117, "h": 128 },
               "pdf_mm": { "x": 345.86, "y": 532.64, "w": 9.91, "h": 10.84 }

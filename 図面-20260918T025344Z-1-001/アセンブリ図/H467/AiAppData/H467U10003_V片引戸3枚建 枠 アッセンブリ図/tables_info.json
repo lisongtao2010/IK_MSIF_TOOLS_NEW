@@ -2760,8 +2760,8 @@
               "column": 11,
               "row_span": 1,
               "column_span": 1,
-              "text": "4 -4",
-              "word_count": 2,
+              "text": "-4",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 6386, "y": 6255, "w": 245, "h": 123 },
               "pdf_mm": { "x": 540.68, "y": 529.59, "w": 20.74, "h": 10.41 }
@@ -2943,8 +2943,8 @@
               "column": 11,
               "row_span": 2,
               "column_span": 1,
-              "text": "3 -3",
-              "word_count": 2,
+              "text": "-3",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 6386, "y": 6378, "w": 245, "h": 123 },
               "pdf_mm": { "x": 540.68, "y": 540.00, "w": 20.74, "h": 10.41 }
@@ -3045,8 +3045,8 @@
               "column": 11,
               "row_span": 2,
               "column_span": 1,
-              "text": "2 -1",
-              "word_count": 2,
+              "text": "-1",
+              "word_count": 1,
               "struck_words": 0,
               "pixel": { "x": 6386, "y": 6500, "w": 245, "h": 123 },
               "pdf_mm": { "x": 540.68, "y": 550.33, "w": 20.74, "h": 10.41 }

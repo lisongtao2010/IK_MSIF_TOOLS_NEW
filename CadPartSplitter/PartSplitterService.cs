@@ -176,11 +176,19 @@ namespace CadPartSplitter
             // 开关、容差、日志都在 RuledTableExtractor / DetectorOptions 里，这里只负责「PDF 就试一次」。
             if (string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase))
             {
+                // 顺手把「图面上被 取り消し線 划掉的词」带出来：**有没有表格都要落盘** ——
+                // 没画表格的組立図（H527U10001 那种只写自由文字的）也可能把其中一条
+                // （J部詳細：H325U10017）划掉，那时没有 tables_info.json 可查，
+                // 01_アッセンブリ図_要領図.csv 写文件前只能靠这份清单剔除作废条目。
+                var struckPageWords = new List<StruckWordMark>();
+
                 tables = RuledTableExtractor.Extract(
-                    filePath, opts.PdfPageIndex, imgWidth, imgHeight, opts);
+                    filePath, opts.PdfPageIndex, imgWidth, imgHeight, opts, struckPageWords);
 
                 if (tables.Count > 0)
                     RuledTableWriter.Save(tables, opts.OutputDirectory, filePath, opts);
+
+                RuledTableWriter.SaveStruckWords(struckPageWords, opts.OutputDirectory, filePath, opts);
 
                 // PDF 信息清单（図番号 / 文件名 / 图面分类 / 分类依据）
                 // → <输出根目录>\classify\PdfInfoList.txt（整批共用一份，同一张图就更新那一行）

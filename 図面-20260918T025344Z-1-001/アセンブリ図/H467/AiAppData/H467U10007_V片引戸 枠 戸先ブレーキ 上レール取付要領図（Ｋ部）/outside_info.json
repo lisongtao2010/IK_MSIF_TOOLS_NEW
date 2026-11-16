@@ -5,9 +5,9 @@
   "image": { "w": 2479, "h": 3508 },
   "table_start_x": 707,
   "word_count": 44,
-  "outside_word_count": 18,
-  "table_word_count": 17,
-  "other_word_count": 1,
+  "outside_word_count": 14,
+  "table_word_count": 14,
+  "other_word_count": 0,
   "tables": [
     {
       "name": "table_1",
@@ -63,39 +63,8 @@
             "pdf_mm": { "x": 180.85, "y": 7.20, "w": 13.12, "h": 3.13 } }
         ] }
       ]
-    },
-    {
-      "name": "table_2",
-      "pixel": { "x": 619, "y": 417, "w": 757, "h": 60 },
-      "pdf_mm": { "x": 52.41, "y": 35.31, "w": 64.09, "h": 5.08 },
-      "row_count": 1,
-      "cell_count": 1,
-      "rows": [
-        { "row": 1, "pixel": { "x": 619, "y": 417, "w": 757, "h": 60 }, "cells": [
-          { "col": 1, "text": "戸先ﾌﾞﾚｰｷ 上レール取付要領図）》",
-            "pixel": { "x": 619, "y": 417, "w": 757, "h": 60 },
-            "pdf_mm": { "x": 52.41, "y": 35.31, "w": 64.09, "h": 5.08 } }
-        ] }
-      ]
-    },
-    {
-      "name": "table_3",
-      "pixel": { "x": 707, "y": 2726, "w": 1308, "h": 44 },
-      "pdf_mm": { "x": 59.86, "y": 230.80, "w": 110.74, "h": 3.73 },
-      "row_count": 1,
-      "cell_count": 1,
-      "rows": [
-        { "row": 1, "pixel": { "x": 1342, "y": 2726, "w": 673, "h": 44 }, "cells": [
-          { "col": 1, "text": "注）１．部品番号は最終枝番を使用のこと。",
-            "pixel": { "x": 1342, "y": 2726, "w": 673, "h": 44 },
-            "pdf_mm": { "x": 113.62, "y": 230.80, "w": 56.98, "h": 3.73 } }
-        ] }
-      ]
     }
   ],
   "other_words": [
-    { "text": "《K部詳細（枠",
-      "pixel": { "x": 323, "y": 419, "w": 280, "h": 58 },
-      "pdf_mm": { "x": 27.35, "y": 35.48, "w": 23.71, "h": 4.91 } }
   ]
 }

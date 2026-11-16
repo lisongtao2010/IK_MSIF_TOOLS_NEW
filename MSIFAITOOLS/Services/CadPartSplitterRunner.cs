@@ -52,12 +52,14 @@ namespace MSIFAITOOLS.Services
     /// 已去掉 <c>..\CadPartSplitter\*.cs</c> 链接），日志里的输出根目录由本类的
     /// <see cref="GetDefaultBatchOutputDirectory"/> 按 exe 的同一规则复刻。
     ///
-    /// exe 位置固定为 <c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c>，不做任何兜底猜测：
-    /// 分割工程的 <c>OutputPath</c> 就是 <c>..\MSIFAITOOLS\bin\{Debug,Release}\CadPartSplitter\</c>，
-    /// 所以「生成解决方案」后本程序旁边一定有这一份（VS 里 F5 即
-    /// <c>MSIFAITOOLS\bin\Debug\CadPartSplitter\CadPartSplitter.exe</c>）。
-    /// 唯一例外：环境变量 <c>CADPARTSPLITTER_EXE</c> 显式指定的路径（调试时临时指向别的版本用，
-    /// 不设就走上面那个位置；不会去上级目录 / 分割工程自己的 bin 目录里找）。
+    /// exe 位置：首选 <c>&lt;程序目录&gt;\CadPartSplitter.exe</c> —— 与 <c>MSIFAITOOLS.exe</c>
+    /// 同一个文件夹（现在的发布布局：把分割工程输出目录里的 CadPartSplitter.exe 连同它依赖的
+    /// pdfium.dll / OpenCvSharp 原生库一起放到 MSIFAITOOLS.exe 旁边即可）。
+    /// 兼容旧布局：<c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c>
+    /// （分割工程的 <c>OutputPath</c> 仍是 <c>..\MSIFAITOOLS\bin\{Debug,Release}\CadPartSplitter\</c>，
+    /// VS 里 F5 出来的只有这一份），同目录那份不存在时才用它。
+    /// 优先级最高的是环境变量 <c>CADPARTSPLITTER_EXE</c> 显式指定的路径（调试时临时指向别的版本用；
+    /// 不会去上级目录 / 分割工程源码目录里找）。
     ///
     /// 对调用方的约定：
     ///   * 输出目录：<c>&lt;输入文件夹&gt;\AiAppData\&lt;图纸名&gt;</c>（不传第二个参数，由 exe 自己推导）；
@@ -69,10 +71,10 @@ namespace MSIFAITOOLS.Services
         /// <summary>外部执行程序的名称。</summary>
         public const string ExeFileName = "CadPartSplitter.exe";
 
-        /// <summary>可选：显式指定 CadPartSplitter.exe 路径的环境变量（不设就用 &lt;程序目录&gt;\CadPartSplitter\ 下那一份）。</summary>
+        /// <summary>可选：显式指定 CadPartSplitter.exe 路径的环境变量（优先级最高，不设就走 &lt;程序目录&gt; 下的默认位置）。</summary>
         public const string ExePathEnvironmentVariable = "CADPARTSPLITTER_EXE";
 
-        /// <summary>exe 默认所在子目录名（&lt;程序目录&gt;\CadPartSplitter\）。</summary>
+        /// <summary>旧布局的子目录名（&lt;程序目录&gt;\CadPartSplitter\），只作兼容兜底用（见 <see cref="FindExePath"/>）。</summary>
         public const string ExeFolderName = "CadPartSplitter";
 
         /// <summary>最多缓存多少行输出（只用于失败时提示，不落盘，防止内存无限增长）。</summary>
@@ -82,10 +84,13 @@ namespace MSIFAITOOLS.Services
         private const int TailLineCount = 8;
 
         /// <summary>
-        /// 取要执行的 <c>CadPartSplitter.exe</c>：默认（也是唯一）的位置是
-        /// <c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c>（见本类型注释），
-        /// 若设了环境变量 <c>CADPARTSPLITTER_EXE</c> 则用它的路径。
-        /// 找不到时返回 null，由 <see cref="RunBatch"/> 转成「已跳过第 1 步」的警告。
+        /// 取要执行的 <c>CadPartSplitter.exe</c>，优先级依次为：
+        /// <list type="number">
+        ///   <item><description>环境变量 <c>CADPARTSPLITTER_EXE</c> 指定的路径（文件确实存在才算）；</description></item>
+        ///   <item><description><c>&lt;程序目录&gt;\CadPartSplitter.exe</c> —— 与 MSIFAITOOLS.exe 同目录（现在的发布布局）；</description></item>
+        ///   <item><description><c>&lt;程序目录&gt;\CadPartSplitter\CadPartSplitter.exe</c> —— 旧布局 / VS 调试输出，兼容兜底。</description></item>
+        /// </list>
+        /// 全都找不到时返回 null，由 <see cref="RunBatch"/> 转成「已跳过第 1 步」的警告。
         /// </summary>
         public static string FindExePath()
         {
@@ -120,17 +125,57 @@ namespace MSIFAITOOLS.Services
 
             string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
 
-            // 默认（也是唯一）位置：<程序目录>\CadPartSplitter\CadPartSplitter.exe
-            // 即 VS 生成后的 MSIFAITOOLS\bin\Debug\CadPartSplitter\CadPartSplitter.exe
-            // （分割工程的 OutputPath 就是 ..\MSIFAITOOLS\bin\Debug\CadPartSplitter\）。
-            // 不做任何兜底猜测（上级目录 / Release 目录 / 同级 exe 都不找）：找不到就跳过第 1 步。
-            string expected = Path.Combine(baseDirectory, ExeFolderName, ExeFileName);
+            // 首选：<程序目录>\CadPartSplitter.exe —— 与 MSIFAITOOLS.exe 同一个文件夹。
+            // 发布时把分割工程输出里的 CadPartSplitter.exe 连同它依赖的 pdfium.dll /
+            // OpenCvSharp 原生库一起放到 MSIFAITOOLS.exe 旁边即可。
+            string sameFolder = TryResolveExistingFile(baseDirectory, null, ExeFileName);
+
+            if (sameFolder != null)
+            {
+                return sameFolder;
+            }
+
+            // 兼容旧布局：<程序目录>\CadPartSplitter\CadPartSplitter.exe
+            // （分割工程的 OutputPath 仍是 ..\MSIFAITOOLS\bin\{Debug,Release}\CadPartSplitter\，
+            //   VS 里 F5 出来的只有这一份）。两处都没有就返回 null —— 跳过第 1 步，不阻断第 2 步。
+            return TryResolveExistingFile(baseDirectory, ExeFolderName, ExeFileName);
+        }
+
+        /// <summary>
+        /// 在 <paramref name="baseDirectory"/>（可再带一层子目录 <paramref name="folderName"/>）下
+        /// 找 <paramref name="fileName"/>，找到时返回完整路径；不存在或路径非法时返回 null。
+        /// </summary>
+        /// <param name="baseDirectory">基准目录（<c>AppDomain.CurrentDomain.BaseDirectory</c>）。</param>
+        /// <param name="folderName">子目录名；null / 空表示直接在基准目录下找。</param>
+        /// <param name="fileName">文件名。</param>
+        private static string TryResolveExistingFile(string baseDirectory, string folderName, string fileName)
+        {
+            string candidate;
 
             try
             {
-                if (File.Exists(expected))
+                candidate = string.IsNullOrEmpty(folderName)
+                    ? Path.Combine(baseDirectory, fileName)
+                    : Path.Combine(baseDirectory, folderName, fileName);
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+            catch (NotSupportedException)
+            {
+                return null;
+            }
+            catch (PathTooLongException)
+            {
+                return null;
+            }
+
+            try
+            {
+                if (File.Exists(candidate))
                 {
-                    return Path.GetFullPath(expected);
+                    return Path.GetFullPath(candidate);
                 }
             }
             catch (Exception)
@@ -217,10 +262,13 @@ namespace MSIFAITOOLS.Services
                 {
                     // 找不到 exe：不阻断第 2 步，界面会显示「已跳过 CadPartSplitter 零件分割」
                     result.ExitCode = 1;
+                    // 提示按「首选位置」写：与 MSIFAITOOLS.exe 同目录
+                    // （旧布局 <程序目录>\CadPartSplitter\ 也仍然能用，见 FindExePath）
                     result.ErrorMessage =
                         "找不到 " + ExeFileName + "：请把它放到 "
-                        + Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ExeFolderName, ExeFileName)
-                        + "，或用环境变量 " + ExePathEnvironmentVariable + " 指定完整路径";
+                        + Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ExeFileName)
+                        + "（与 MSIFAITOOLS.exe 同目录），或用环境变量 "
+                        + ExePathEnvironmentVariable + " 指定完整路径";
 
                     onLine("[ERROR] " + result.ErrorMessage);
                 }

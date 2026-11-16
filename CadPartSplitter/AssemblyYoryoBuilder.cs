@@ -49,6 +49,15 @@ namespace CadPartSplitter
     /// 分列在同一行时按行配对（这一行必须**恰好** 1 个純 項目 格 + 1 个 図番，多一个都不猜）。
     /// 两条路径按 図番 去重（表格路径先跑，内联只补漏），光秃秃的 図番（表題欄等）不收。
     ///
+    /// **图纸上被 取り消し線 划掉的 図番 一律不出**（划掉 = 那一条作废）：整行划掉的行本来就不在
+    /// <c>tables\*.csv</c> 里（<see cref="RuledTableExtractor"/> 的两档语义），但「只划掉 図番 那一格」
+    /// 时 CSV 只是把那一格留空、行还在 —— 而且内联写法 / 页面自由文字两条路**只看文字层的字**，
+    /// 不知道那些字在图纸上被划掉了，同一个 図番 换个写法还会被收进来。所以写文件前按
+    /// <c>tables_info.json</c> 里 <c>struck_words &gt; 0</c> / <c>"struck": true</c> 的格子原文再筛一遍
+    /// （<see cref="CollectStruckNumbers"/> / <see cref="RemoveStruckNumbers"/>）：命中就整条剔除，
+    /// 日志打出剔除了哪几个 <c>図番</c>。结构化路径遇到「図番 那一格被划掉」时**跳过这一条接着往下读**
+    /// （<see cref="IsStruckNumberCell"/>），不会把后面还有效的要領図当成「数据区结束」一起丢掉。
+    ///
     /// 图纸上「項目」那一格**纵向合并了两行**时（文字写在两行正中间，H094U10003 那种写法），表格 CSV
     /// 只把 <c>D</c> 写在第 5 行、第 6 行是空的 —— 这儿借 <c>tables_info.json</c> 里同一个单元格的
     /// <c>row_span</c>（≥ 2）把被它盖住的行补上同一个 項目（要領図漢字 那一列同样处理）；
@@ -93,6 +102,13 @@ namespace CadPartSplitter
         /// 这张組立図用到的要領図一覧（項目 / 要領図漢字 / 図番）。
         /// </summary>
         public const string OutputFileName = "01_アッセンブリ図_要領図.csv";
+
+        /// <summary>
+        /// 图面划线清单的文件名（<see cref="RuledTableWriter.SaveStruckWords"/> 写的）：
+        /// 图面上被 取り消し線 划掉的词原文 + 坐标，**与有没有表格无关** ——
+        /// 没画表格、只写自由文字的組立図（H527U10001）的划线只在这份清单里看得到。
+        /// </summary>
+        private const string StruckWordsFileName = RuledTableWriter.StruckWordsFileName;
 
         /// <summary>「項目」列名（A、B、F … 或 <c>A,M</c> 这种合写；表头里一定有）—— 输出表头用这个名字。</summary>
         private const string ItemHeader = "項目";
@@ -391,6 +407,7 @@ namespace CadPartSplitter
 
                     int filledByMerge = 0;
                     int swapped = 0;
+                    int struckSkipped = 0;
                     string lastItem = string.Empty;
 
                     for (int r = headerRow + 1; r < table.Count; r++)
@@ -398,9 +415,20 @@ namespace CadPartSplitter
                         string[] row = table[r];
                         string number = CsvFile.Normalize(Cell(row, numberColumn));
 
-                        // 図番 空了 / 不是 10 位 → 数据区结束（再往下是表題欄、変更履歴等杂行）
+                        // 図番 那一格被 取り消し線 划掉了（图纸上这一条作废）：
+                        // CSV 里这格是空的，原文只在 tables_info.json 里 —— 不能按「データ区结束」处理，
+                        // 否则后面还有效的要領図会被一起丢掉。跳过这一条、接着读下一行。
                         if (number.Length != NumberLength)
+                        {
+                            if (IsStruckNumberCell(merge, table.Count, r, numberColumn))
+                            {
+                                struckSkipped++;
+                                continue;
+                            }
+
+                            // 図番 空了 / 不是 10 位 → 数据区结束（再往下是表題欄、変更履歴等杂行）
                             break;
+                        }
 
                         headerNumbers.Add(number);
 
@@ -457,6 +485,7 @@ namespace CadPartSplitter
                           + (output.Count - before) + " 条"
                           + (filledByMerge > 0 ? "（其中 " + filledByMerge + " 条的 項目 按合并单元格补足）" : string.Empty)
                           + (swapped > 0 ? "（其中 " + swapped + " 条的 項目 / 要領図漢字 按值判定对调）" : string.Empty)
+                          + (struckSkipped > 0 ? "（另有 " + struckSkipped + " 条 図番 被 取り消し線 划掉 → 整条不出）" : string.Empty)
                           + "。");
                 }
 
@@ -489,15 +518,42 @@ namespace CadPartSplitter
                       + freeIndex.Count + " 条，补进 " + freeAdded + " 条（要領図漢字 留空）。");
             }
 
+            // ⑤ 取り消し線 划掉的 図番 = 图纸上作废的那一条，一律不出：
+            //    整行作废的行本来就不在 tables\*.csv 里，但「只划掉 図番 那一格」时行还在，
+            //    而且内联写法 / 页面自由文字那两条路只看文字层的字、不知道它被划过 ——
+            //    写文件前按 tables_info.json 里被划掉的格子原文、以及图面划线清单
+            //    struck_words.txt（没画表格的图纸只有这一份）统一再筛一遍。
+            HashSet<string> struckNumbers = CollectStruckNumbers(merges);
+            int pageStruck = CollectPageStruckNumbers(outputDirectory, struckNumbers);
+            int struckRemoved = struckNumbers.Count > 0 ? RemoveStruckNumbers(output, struckNumbers) : 0;
+
+            if (struckNumbers.Count > 0)
+            {
+                o.Log("[INFO] 01_アッセンブリ図_要領図：图面上 " + struckNumbers.Count
+                      + " 个 図番 被 取り消し線 划掉（作废：" + JoinStruckNumbers(struckNumbers) + "）→ 一律不出"
+                      + (pageStruck > 0
+                            ? "（其中 " + pageStruck + " 个来自图面划线清单 " + StruckWordsFileName + "）"
+                            : string.Empty)
+                      + (struckRemoved > 0
+                            ? "（其中 " + struckRemoved + " 条是从内联写法 / 页面自由文字收进来的，已剔除）"
+                            : string.Empty)
+                      + "。");
+            }
+
             if (output.Count == 0)
             {
-                if (headerTables == 0)
+                if (headerTables == 0 && struckRemoved == 0)
                 {
                     o.Log("[INFO] 01_アッセンブリ図_要領図：tables\\*.csv 里既没有表头含「"
                           + string.Join(" / ", ItemHeaders) + "」+「"
                           + string.Join(" / ", NumberHeaders) + "」的表，也没有「A部詳細：H…」/「A部・・・」这类写法，"
                           + "也没有「" + ItemHeader + "」与「" + NumberHeader + "」分列在同一行的写法，"
                           + "页面上也没有「A部詳細：H…」这种自由文字，不生成 "
+                          + OutputFileName + "。");
+                }
+                else if (struckRemoved > 0)
+                {
+                    o.Log("[INFO] 01_アッセンブリ図_要領図：取到的 図番 全部被 取り消し線 划掉（图纸上作废），不生成 "
                           + OutputFileName + "。");
                 }
                 else
@@ -546,6 +602,13 @@ namespace CadPartSplitter
 
             /// <summary>跨行数 ≥ 2 且有文字的单元格。</summary>
             public readonly List<MergedCell> MergedCells = new List<MergedCell>();
+
+            /// <summary>
+            /// 被 取り消し線 划掉的单元格（整行作废的行里 ≥ 2 格被划 / 只划掉 部品コード・図番 那一格）。
+            /// 原文在 <see cref="StruckCell.Text"/> —— <c>tables\*.csv</c> 里这一格是空的，
+            /// 所以「図番 被划掉」这件事只能从这里看出来。
+            /// </summary>
+            public readonly List<StruckCell> StruckCells = new List<StruckCell>();
         }
 
         /// <summary>一个纵向合并的单元格：起始行 / 列 / 跨几行 / 文字。</summary>
@@ -554,6 +617,17 @@ namespace CadPartSplitter
             public int Row;
             public int Column;
             public int RowSpan;
+            public string Text;
+        }
+
+        /// <summary>
+        /// 一个被划线划掉的单元格：原始行号 / 列号（均从 1 起，与 <c>tables_info.json</c> 同一口径）/ 图纸上的原文。
+        /// 整行作废的行里每一格都记一条，只划掉一格的记那一格。
+        /// </summary>
+        private sealed class StruckCell
+        {
+            public int Row;
+            public int Column;
             public string Text;
         }
 
@@ -601,6 +675,281 @@ namespace CadPartSplitter
             return string.Empty;
         }
 
+        /// <summary>日志里最多列几个「被划线划掉的 図番」（再多就写「等」）。</summary>
+        private const int MaxStruckSamples = 5;
+
+        /// <summary>
+        /// 收集图面上被 取り消し線 划掉的 10 位 図番（从 <see cref="TableMergeInfo.StruckCells"/> 的原文里抠）。
+        ///
+        /// 为什么要单独收集：整行作废的行 <see cref="RuledTableExtractor"/> 已经不写进 <c>tables\*.csv</c> 了，
+        /// 但「只划掉 図番 那一格」时 CSV 只是把那一格留空、行还在；而内联写法 / 页面自由文字两条路
+        /// **只看文字层的字**，不知道那些字在图纸上被划过 —— 同一个 図番 换个写法还会被收进来。
+        /// 写文件前用这个集合再筛一遍：图纸上划掉了 = 那一条作废，不管从哪条路来都不出。
+        ///
+        /// 只认 <see cref="InlineNumberPattern"/> 那种 10 位写法（<c>H467U10009</c>）：部品表里被划掉的
+        /// <c>部品コード</c>（<c>MDU762</c> 这种 5~7 位）不会被误当成 図番。
+        /// </summary>
+        private static HashSet<string> CollectStruckNumbers(Dictionary<string, TableMergeInfo> merges)
+        {
+            var numbers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (merges == null)
+                return numbers;
+
+            foreach (TableMergeInfo info in merges.Values)
+            {
+                foreach (StruckCell cell in info.StruckCells)
+                {
+                    if (string.IsNullOrEmpty(cell.Text))
+                        continue;
+
+                    foreach (Match m in InlineNumberPattern.Matches(cell.Text))
+                        numbers.Add(m.Value);
+                }
+            }
+
+            return numbers;
+        }
+
+        /// <summary>
+        /// CSV 第 <paramref name="csvRow"/> 行（从 0 起）的 <paramref name="column"/> 格（**CSV 列号，从 0 起**）
+        /// 是不是被 取り消し線 划掉了 —— 是的话这一条 図番 作废、整条不出，**后面还有效的行照收**
+        /// （<c>tables\*.csv</c> 里这一格是空的，不能按「データ区结束」处理，否则后面的要領図会被一起丢掉）。
+        ///
+        /// 行对应不上（<see cref="MergeRowOf"/> 返回 -1）时返回 false，调用方仍按老规则
+        /// 「図番 不是 10 位 → 数据区结束」处理。
+        /// </summary>
+        private static bool IsStruckNumberCell(
+            TableMergeInfo merge, int csvRowCount, int csvRow, int column)
+        {
+            int jsonRow = MergeRowOf(merge, csvRowCount, csvRow);
+
+            if (jsonRow < 0 || column < 0)
+                return false;
+
+            int jsonColumn = column + 1;
+
+            foreach (StruckCell cell in merge.StruckCells)
+            {
+                if (cell.Row == jsonRow && cell.Column == jsonColumn)
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 把 図番（第 3 列）在图面上被划线划掉的条目从结果里剔掉，返回剔掉几条。
+        /// 大小写不敏感（<c>h467u10009</c> 也认）。
+        /// </summary>
+        private static int RemoveStruckNumbers(List<string[]> rows, HashSet<string> numbers)
+        {
+            int removed = 0;
+
+            for (int i = rows.Count - 1; i >= 0; i--)
+            {
+                string[] row = rows[i];
+
+                if (row == null || row.Length < 3 || string.IsNullOrEmpty(row[2]))
+                    continue;
+
+                if (!numbers.Contains(row[2]))
+                    continue;
+
+                rows.RemoveAt(i);
+                removed++;
+            }
+
+            return removed;
+        }
+
+        /// <summary>日志用：把被划掉的 図番 排序列出来（最多 <see cref="MaxStruckSamples"/> 个）。</summary>
+        private static string JoinStruckNumbers(HashSet<string> numbers)
+        {
+            var list = new List<string>(numbers);
+            list.Sort(StringComparer.Ordinal);
+
+            var text = new StringBuilder();
+
+            for (int i = 0; i < list.Count && i < MaxStruckSamples; i++)
+            {
+                if (i > 0)
+                    text.Append(" / ");
+
+                text.Append(list[i]);
+            }
+
+            if (list.Count > MaxStruckSamples)
+                text.Append(" 等");
+
+            return text.ToString();
+        }
+
+        /// <summary>
+        /// 读图面划线清单 <c>struck_words.txt</c>，把被划掉的 10 位 図番 加进 <paramref name="numbers"/>，
+        /// 返回新增了几个。
+        ///
+        /// 为什么要有这一层：图纸上**没画表格**、把要領図索引写成自由文字的組立図（H527U10001）里
+        /// 把某一条（<c>J部詳細：H325U10017</c>）划掉时，一个表格产物都没有
+        /// （<c>tables_info.json</c> 不存在），<see cref="CollectStruckNumbers"/> 查不到 ——
+        /// 只能靠提取阶段（<see cref="RuledTableExtractor"/>）留下的这份清单。
+        ///
+        /// 文字层可能把一个 図番 拆成几个词（<c>H325U10</c> + <c>017</c>）：
+        /// 每个词先单独抠一次，再把同一行（y 中心相近）的词按 x 拼起来抠一次。
+        /// </summary>
+        private static int CollectPageStruckNumbers(string outputDirectory, HashSet<string> numbers)
+        {
+            if (numbers == null || string.IsNullOrWhiteSpace(outputDirectory))
+                return 0;
+
+            string path = Path.Combine(outputDirectory, StruckWordsFileName);
+
+            if (!File.Exists(path))
+                return 0;
+
+            string[] lines;
+
+            try
+            {
+                lines = File.ReadAllLines(path);
+            }
+            catch (IOException)
+            {
+                return 0;
+            }
+
+            int before = numbers.Count;
+
+            var marks = new List<StruckWordMark>();
+
+            foreach (string raw in lines)
+            {
+                string line = raw == null ? string.Empty : raw.Trim();
+
+                if (line.Length == 0 || line[0] == '#')
+                    continue;
+
+                int x, y, h;
+                string text;
+
+                if (!ParseStruckWordLine(line, out x, out y, out h, out text))
+                    continue;
+
+                marks.Add(new StruckWordMark { Text = text, PixelX = x, PixelY = y, PixelH = h });
+
+                AddStruckNumbers(text, numbers);
+            }
+
+            if (marks.Count < 2)
+                return numbers.Count - before;
+
+            // 同一行（y 中心相近）的词按 x 拼起来再抠一次
+            marks.Sort((a, b) => a.PixelY != b.PixelY
+                                     ? a.PixelY.CompareTo(b.PixelY)
+                                     : a.PixelX.CompareTo(b.PixelX));
+
+            int start = 0;
+
+            while (start < marks.Count)
+            {
+                int end = start + 1;
+                int height = Math.Max(1, marks[start].PixelH);
+
+                while (end < marks.Count)
+                {
+                    int gap = Math.Abs(marks[end].PixelY - marks[start].PixelY);
+                    int shorter = Math.Min(height, Math.Max(1, marks[end].PixelH));
+
+                    if (gap > shorter / 2) break;
+
+                    end++;
+                }
+
+                if (end - start > 1)
+                {
+                    var joined = new StringBuilder();
+
+                    for (int i = start; i < end; i++)
+                        joined.Append(marks[i].Text);
+
+                    AddStruckNumbers(joined.ToString(), numbers);
+                }
+
+                start = end;
+            }
+
+            return numbers.Count - before;
+        }
+
+        /// <summary>
+        /// 解析划线清单的一行：<c>x=12 y=34 w=56 h=78  原文</c>
+        /// （格式见 <see cref="RuledTableWriter.SaveStruckWords"/>，坐标与原文之间是两个空格）。
+        /// </summary>
+        private static bool ParseStruckWordLine(
+            string line, out int x, out int y, out int h, out string text)
+        {
+            x = 0;
+            y = 0;
+            h = 0;
+            text = string.Empty;
+
+            int gap = line.IndexOf("  ", StringComparison.Ordinal);
+
+            if (gap <= 0)
+                return false;
+
+            text = line.Substring(gap).Trim();
+
+            if (text.Length == 0)
+                return false;
+
+            string head = line.Substring(0, gap);
+
+            x = ReadStruckTagValue(head, "x=");
+            y = ReadStruckTagValue(head, "y=");
+            h = ReadStruckTagValue(head, "h=");
+
+            return true;
+        }
+
+        /// <summary>从 <c>x=12 y=34 …</c> 这一截里读一个整数标记（读不到返回 0）。</summary>
+        private static int ReadStruckTagValue(string head, string tag)
+        {
+            int at = head.IndexOf(tag, StringComparison.Ordinal);
+
+            if (at < 0)
+                return 0;
+
+            int i = at + tag.Length;
+            int value = 0;
+            bool any = false;
+
+            while (i < head.Length && head[i] >= '0' && head[i] <= '9')
+            {
+                value = value * 10 + (head[i] - '0');
+                any = true;
+                i++;
+            }
+
+            return any ? value : 0;
+        }
+
+        /// <summary>
+        /// 把一段文字里的 10 位 図番 加进集合（只认 <see cref="InlineNumberPattern"/>，返回新增几个）。
+        /// 只认 10 位写法，所以被划掉的 <c>部品コード</c>（<c>MDU762</c> 这种 5~7 位）不会被误当成 図番。
+        /// </summary>
+        private static int AddStruckNumbers(string text, HashSet<string> numbers)
+        {
+            if (string.IsNullOrEmpty(text) || numbers == null) return 0;
+
+            int before = numbers.Count;
+
+            foreach (Match m in InlineNumberPattern.Matches(text))
+                numbers.Add(m.Value);
+
+            return numbers.Count - before;
+        }
+
         /// <summary>
         /// 读 <c>tables_info.json</c> 里的合并单元格信息（逐行读本项目自己写出的固定格式，不引 JSON 库）：
         /// 每张表记下「可见行的原始行号」（CSV 的行序 == 可见行序，划线作废的行两边都不输出）
@@ -637,6 +986,8 @@ namespace CadPartSplitter
             int column = -1;
             int rowSpan = 1;
             int rowIndex = -1;
+            bool rowStruck = false;
+            string cellText = string.Empty;
             string value;
             int number;
             bool flag;
@@ -654,6 +1005,8 @@ namespace CadPartSplitter
                     column = -1;
                     rowSpan = 1;
                     rowIndex = -1;
+                    rowStruck = false;
+                    cellText = string.Empty;
                     continue;
                 }
 
@@ -664,11 +1017,15 @@ namespace CadPartSplitter
                 if (TryReadInt(line, "\"index\"", out number))
                 {
                     rowIndex = number;
+                    rowStruck = false;
+                    cellText = string.Empty;
                     continue;
                 }
 
                 if (TryReadBool(line, "\"struck\"", out flag))
                 {
+                    rowStruck = flag;
+
                     if (!flag && rowIndex >= 0)
                         current.VisibleRowIndexes.Add(rowIndex);
 
@@ -679,6 +1036,7 @@ namespace CadPartSplitter
                 if (TryReadInt(line, "\"row\"", out number))
                 {
                     row = number;
+                    cellText = string.Empty;
                     continue;
                 }
 
@@ -697,6 +1055,7 @@ namespace CadPartSplitter
                 if (TryReadString(line, "\"text\"", out value))
                 {
                     string text = CsvFile.SingleLine(value).Trim();
+                    cellText = text;
 
                     if (rowSpan >= 2 && row >= 0 && column >= 0 && text.Length > 0)
                     {
@@ -711,6 +1070,42 @@ namespace CadPartSplitter
 
                     continue;
                 }
+
+                // 被划线划掉的格子（struck_words > 0）与整行作废的行（struck = true）：
+                // CSV 里这一格是空的，图纸上的原文只在这里 —— 收集起来，「図番 被划掉 = 那条作废」靠它判。
+                if (TryReadInt(line, "\"struck_words\"", out number))
+                {
+                    if ((number > 0 || rowStruck) && row >= 0 && column >= 0 && cellText.Length > 0)
+                    {
+                        current.StruckCells.Add(new StruckCell
+                        {
+                            Row = row,
+                            Column = column,
+                            Text = cellText
+                        });
+                    }
+
+                    continue;
+                }
+            }
+
+            int struckTotal = 0;
+            int tablesWithStruck = 0;
+
+            foreach (TableMergeInfo info in result.Values)
+            {
+                if (info.StruckCells.Count == 0)
+                    continue;
+
+                struckTotal += info.StruckCells.Count;
+                tablesWithStruck++;
+            }
+
+            if (struckTotal > 0)
+            {
+                o.Log("[INFO] 01_アッセンブリ図_要領図：tables_info.json 里 " + struckTotal
+                      + " 个格子被 取り消し線 划掉（" + tablesWithStruck + " 张表）——"
+                      + "被划掉的 図番 一律不出（图纸上作废的那一条）。");
             }
 
             int tablesWithMerge = 0;

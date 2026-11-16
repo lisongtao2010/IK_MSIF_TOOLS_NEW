@@ -17,8 +17,34 @@ namespace MSIFAITOOLS
             Application.SetCompatibleTextRenderingDefault(false);
 
             PrepareMemberPartDatabase();
+            PreparePdfRenderer();
 
             Application.Run(new Form1());
+        }
+
+        /// <summary>
+        /// 定位并自检 PDF 预览用的原生库（pdfium.dll）。
+        /// <para>
+        /// 必须在任何 PdfiumViewer 调用之前执行：PdfiumViewer 2.13.0 的 <c>PdfLibrary</c> 初始化 /
+        /// 终结时要调原生 <c>FPDF_AddRef</c> / <c>FPDF_Release</c>，它自己只按「exe 目录\x64\Pdfium.dll」
+        /// 找，找不到就按名字让 Windows 去别处搜（PATH / System32 里别的 pdfium.dll），
+        /// 版本不匹配时预览直接报「找不到入口点 FPDF_Release」。
+        /// </para>
+        /// <para>
+        /// 失败不影响启动：只是 PDF 预览不可用，原因由 <see cref="PdfiumRuntime.Diagnostic"/>
+        /// 写进主画面运行日志（见 <c>Form1.ShowPdfiumInfo</c>）。
+        /// </para>
+        /// </summary>
+        private static void PreparePdfRenderer()
+        {
+            try
+            {
+                PdfiumRuntime.EnsureReady();
+            }
+            catch (Exception)
+            {
+                // 自检本身出问题也不影响启动（预览时会再检查一次并给出提示）
+            }
         }
 
         /// <summary>

@@ -5,15 +5,12 @@
   "image": { "w": 2479, "h": 3508 },
   "table_start_x": 1106,
   "word_count": 31,
-  "outside_word_count": 4,
+  "outside_word_count": 3,
   "table_word_count": 0,
-  "other_word_count": 4,
+  "other_word_count": 3,
   "tables": [
   ],
   "other_words": [
-    { "text": "注）１．スタンプは、不滅インキ又は水性インキにて押し印のこと。",
-      "pixel": { "x": 435, "y": 2153, "w": 1181, "h": 61 },
-      "pdf_mm": { "x": 36.83, "y": 182.29, "w": 99.99, "h": 5.16 } },
     { "text": "２．縦枠上部，下部の判断は、加工図を参照のこと。",
       "pixel": { "x": 490, "y": 2247, "w": 949, "h": 58 },
       "pdf_mm": { "x": 41.49, "y": 190.25, "w": 80.35, "h": 4.91 } },

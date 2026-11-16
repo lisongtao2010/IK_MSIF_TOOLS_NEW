@@ -74,6 +74,20 @@ namespace CadPartSplitter
         public static List<RuledTable> Extract(
             string pdfPath, int pageIndex, int imgWidth, int imgHeight, DetectorOptions opts)
         {
+            return Extract(pdfPath, pageIndex, imgWidth, imgHeight, opts, null);
+        }
+
+        /// <summary>
+        /// 同上，并把图面上**被 取り消し線 划掉的词**一并返回（<paramref name="struckPageWords"/>，可为 null）。
+        ///
+        /// 与「有没有表格」无关：图纸上没画表格、把要領図索引写成自由文字的組立図（<c>H527U10001</c>）
+        /// 里也可能把其中一条（<c>J部詳細：H325U10017</c>）划掉 —— 那时没有 <c>tables_info.json</c> 可查，
+        /// 划线判断只发生在这里，不交出去下游就不知道哪一条已作废（见 <see cref="StruckWordMark"/>）。
+        /// </summary>
+        public static List<RuledTable> Extract(
+            string pdfPath, int pageIndex, int imgWidth, int imgHeight, DetectorOptions opts,
+            List<StruckWordMark> struckPageWords)
+        {
             var tables = new List<RuledTable>();
             DetectorOptions o = opts ?? new DetectorOptions();
             Action<string> write = o.Log;
@@ -128,12 +142,6 @@ namespace CadPartSplitter
                           + " 条（共线段已合并，容差 "
                           + o.RuledTableLineToleranceMm.ToString("0.##") + "mm）");
 
-                    if (horizontals.Count < 2 || verticals.Count < 2)
-                    {
-                        write("[INFO] 表格内容：该页没有可围成矩形的框线（位图 / 文字已轮廓化的图纸属正常）。");
-                        return tables;
-                    }
-
                     // 文字层先读出来：识别「取り消し線（划掉整行的横线）」要靠它 ——
                     // 横线从字身中间穿过、又把字整个盖住，那是 CAD 图里「这一行作废」的画法，不是格子边
                     List<WordBox> words = ReadWords(page);
@@ -167,9 +175,27 @@ namespace CadPartSplitter
                     int struckWordsCount = 0;
                     foreach (bool b in struckWords) if (b) struckWordsCount++;
 
+                    // 页面级「被划掉的词」先交出去（与有没有表格无关）：
+                    // 图纸上没画表格、把要領図索引写成自由文字的組立図（H527U10001）也可能
+                    // 把其中一条划掉 —— 那时没有 tables_info.json 可查，只能靠这份清单传给下游。
+                    int pageStruck = CollectStruckPageWords(
+                        struckPageWords, words, struckWords, pageH, scaleX, scaleY);
+
                     if (struckWordsCount > 0)
                         write("[INFO] 表格文字：" + struckWordsCount + " 个词被 取り消し線 划掉"
-                              + "（整行划掉 → 该行作废、不写进 tables\\*.csv；只划掉品番那一格 → 只清空该格，明细照收）");
+                              + "（整行划掉 → 该行作废、不写进 tables\\*.csv；只划掉品番那一格 → 只清空该格，明细照收）"
+                              + (pageStruck > 0
+                                    ? "；已记进图面划线清单 " + pageStruck
+                                      + " 个词（下游 01_アッセンブリ図_要領図 据此剔除作废条目）"
+                                    : string.Empty));
+
+                    // 划线检测放在「有没有框线」之前：没有可围成矩形的框线时也要先把划线词交出去，
+                    // 之后才判定「这页没有表格」直接返回。
+                    if (horizontals.Count < 2 || verticals.Count < 2)
+                    {
+                        write("[INFO] 表格内容：该页没有可围成矩形的框线（位图 / 文字已轮廓化的图纸属正常）。");
+                        return tables;
+                    }
 
                     // 三角形注記符号（△1 / △2 这种提醒记号）里的数字：图形在矢量层、数字在文字层，
                     // 不认出来就会被当成格子内容（H986U10002 的 切断寸法 读成「100 1」）
@@ -520,6 +546,19 @@ namespace CadPartSplitter
         private const double StrikeMiddleMargin = 0.25;
 
         /// <summary>
+        /// 短双线（判据 ③）的间距上限：最小单元格的这几倍。划线常画在字身的上 / 下三分之一处，
+        /// 字高 2.5~4mm 时两条线的间距就到了 2~4mm，比 ② 的 2mm 上限宽
+        /// （<c>H527U10001</c> 的 <c>J部詳細：H325U10017</c> 就是这种画法）。
+        /// </summary>
+        private const double StrikeShortPairGapRatio = 3.0;
+
+        /// <summary>
+        /// 短双线（判据 ③）里「这条线只划这一个词」的长度上限：词宽的这几倍。
+        /// 表格的行边界线横跨整行，远超这个比例，所以不会被 ③ 当成划线删掉。
+        /// </summary>
+        private const double StrikeShortLineRatio = 1.5;
+
+        /// <summary>
         /// 剔除 取り消し線（划掉整行的横线），并把被划掉的词标出来。
         ///
         /// 为什么必须剔除：CAD 图把某一行作废时，是在那一行的文字上直接画一条（有时两条）横线。
@@ -528,11 +567,14 @@ namespace CadPartSplitter
         /// 把那一格切成 34px / 17px / 30px 三段，表格凭空多出两行，
         /// 文字掉进「比字还矮」的假行里，与同行的「D」、「H310U10025」错开。
         ///
-        /// 判据（两道，满足任一即成划线）：
+        /// 判据（三道，满足任一即成划线）：
         ///   ① 单线：线的 y 落在某个词字身的中间一半、且横向盖住该词 ≥ <see cref="StrikeCoverRatio"/>
         ///      —— 真框线不会这样：文字写在格子内部，框线最多擦到字身的边；
         ///   ② 双线：两条相距 &lt; <paramref name="minCell"/> 的线夹住同一个词
-        ///      —— 这么窄的带子装不下字，不可能是行，两条一起丢。
+        ///      —— 这么窄的带子装不下字，不可能是行，两条一起丢；
+        ///   ③ 短双线：间距放宽到 <see cref="StrikeShortPairGapRatio"/> 倍最小单元格，
+        ///      但两条线都只盖住一个词（长度 ≤ 词宽 × <see cref="StrikeShortLineRatio"/>）
+        ///      且都落在词高之内 —— 表格的行边界线横跨整行，不会被当成划线。
         ///
         /// 被划到的词通过 <paramref name="struck"/>（与 <paramref name="words"/> 下标对齐）返回，
         /// 上层据此把「整行作废」的行从 <c>tables\*.csv</c> 里剔掉。
@@ -570,6 +612,35 @@ namespace CadPartSplitter
                     if (height >= minCell) break;                // 按 y 升序，再往后只会更远
 
                     if (!PairCrossesWord(top, bottom, words, tol, struck)) continue;
+
+                    drop[i] = true;
+                    drop[j] = true;
+                }
+            }
+
+            // ③ 短双线：间距比「双线」宽（画得松的两条划线，H527U10001 就是这种），
+            //    但两条线都只盖住一个词 —— 表格的行边界线横跨整行、远超一个词的宽度，
+            //    所以「两条短线只夹住同一个词」只可能是专门划掉这个词的线。
+            double shortGap = minCell * StrikeShortPairGapRatio;
+
+            for (int i = 0; i < horizontals.Count; i++)
+            {
+                if (drop[i]) continue;
+
+                Seg top = horizontals[i];
+
+                for (int j = i + 1; j < horizontals.Count; j++)
+                {
+                    if (drop[j]) continue;
+
+                    Seg bottom = horizontals[j];
+
+                    double height = bottom.P - top.P;
+
+                    if (height <= tol) continue;
+                    if (height > shortGap) break;                // 按 y 升序，再往后只会更远
+
+                    if (!ShortPairCrossesWord(top, bottom, words, tol, struck)) continue;
 
                     drop[i] = true;
                     drop[j] = true;
@@ -644,6 +715,49 @@ namespace CadPartSplitter
 
                 double cx = (w.X1 + w.X2) / 2.0;
                 if (cx < a - tol || cx > b + tol) continue;
+
+                struck[i] = true;
+                hit = true;
+            }
+
+            return hit;
+        }
+
+        /// <summary>
+        /// ③ 短双线：两条横线间距可以放宽（≤ <see cref="StrikeShortPairGapRatio"/> 倍最小单元格），
+        /// 但两条线都**只盖住一个词**（长度 ≤ 词宽 × <see cref="StrikeShortLineRatio"/>），
+        /// 且两条线都落在词高之内、词中心在公共区间内 —— 那是「用两条线把一个词划掉」的画法。
+        ///
+        /// 为什么加这道：CAD 里把某一条划掉时两条线的间距常常等于字高（2~4mm），
+        /// 超过 ② 的 2mm 上限（<c>H527U10001</c> 的 <c>J部詳細：H325U10017</c> 就是这样）。
+        /// 表格的行边界线一定横跨整行（远超一个词的宽度），所以不会被这条判据误判。
+        /// </summary>
+        private static bool ShortPairCrossesWord(
+            Seg top, Seg bottom, List<WordBox> words, double tol, bool[] struck)
+        {
+            double a = Math.Max(top.A, bottom.A);   // 两条线的公共水平区间
+            double b = Math.Min(top.B, bottom.B);
+            if (b - a <= 0) return false;
+
+            bool hit = false;
+
+            for (int i = 0; i < words.Count; i++)
+            {
+                WordBox w = words[i];
+
+                double height = w.Y2 - w.Y1;
+                if (height <= 0) continue;
+
+                // 两条线都落在词高之内（与 ② 一样各留 tol 余量）
+                if (top.P <= w.Y1 + tol || bottom.P >= w.Y2 - tol) continue;
+
+                double cx = (w.X1 + w.X2) / 2.0;
+                if (cx < a - tol || cx > b + tol) continue;
+
+                // 两条线都只够盖住这一个词 → 是专门划它的线，不是表格边界
+                double width = w.X2 - w.X1;
+                if (top.B - top.A > width * StrikeShortLineRatio) continue;
+                if (bottom.B - bottom.A > width * StrikeShortLineRatio) continue;
 
                 struck[i] = true;
                 hit = true;
@@ -1515,6 +1629,45 @@ namespace CadPartSplitter
             }
 
             return list;
+        }
+
+        /// <summary>
+        /// 把「被 取り消し線 划掉的词」按页面像素坐标记进 <paramref name="into"/>，返回记了几个。
+        ///
+        /// 与表格无关：图纸上没画表格、把要領図索引写成自由文字的組立図（H527U10001）也可能把其中一条
+        /// （<c>J部詳細：H325U10017</c>）划掉 —— 那时没有 <c>tables_info.json</c> 可查，
+        /// 下游 <c>01_アッセンブリ図_要領図.csv</c> 只能靠这份清单知道哪一条已作废（见 <see cref="StruckWordMark"/>）。
+        ///
+        /// <paramref name="into"/> 为 null（调用方不关心）时什么都不做。
+        /// </summary>
+        private static int CollectStruckPageWords(
+            List<StruckWordMark> into, List<WordBox> words, bool[] struck,
+            double pageH, double scaleX, double scaleY)
+        {
+            if (into == null || words == null || struck == null)
+                return 0;
+
+            int added = 0;
+
+            for (int i = 0; i < words.Count && i < struck.Length; i++)
+            {
+                if (!struck[i]) continue;
+
+                WordBox w = words[i];
+
+                into.Add(new StruckWordMark
+                {
+                    Text = w.Text,
+                    PixelX = (int)Math.Round(w.X1 * scaleX),
+                    PixelY = (int)Math.Round((pageH - w.Y2) * scaleY),
+                    PixelW = Math.Max(1, (int)Math.Round((w.X2 - w.X1) * scaleX)),
+                    PixelH = Math.Max(1, (int)Math.Round((w.Y2 - w.Y1) * scaleY))
+                });
+
+                added++;
+            }
+
+            return added;
         }
 
         /// <summary>

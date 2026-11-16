@@ -5,8 +5,8 @@
   "image": { "w": 2479, "h": 3508 },
   "table_start_x": 707,
   "word_count": 61,
-  "outside_word_count": 29,
-  "table_word_count": 29,
+  "outside_word_count": 28,
+  "table_word_count": 28,
   "other_word_count": 0,
   "tables": [
     {
@@ -107,20 +107,6 @@
           { "col": 7, "text": "BI304",
             "pixel": { "x": 2149, "y": 208, "w": 128, "h": 37 },
             "pdf_mm": { "x": 181.95, "y": 17.61, "w": 10.84, "h": 3.13 } }
-        ] }
-      ]
-    },
-    {
-      "name": "table_2",
-      "pixel": { "x": 707, "y": 2779, "w": 1566, "h": 51 },
-      "pdf_mm": { "x": 59.86, "y": 235.29, "w": 132.59, "h": 4.32 },
-      "row_count": 1,
-      "cell_count": 1,
-      "rows": [
-        { "row": 1, "pixel": { "x": 1174, "y": 2779, "w": 1099, "h": 51 }, "cells": [
-          { "col": 1, "text": "注)1、部品番号は最終枝番を使用のこと。",
-            "pixel": { "x": 1174, "y": 2779, "w": 1099, "h": 51 },
-            "pdf_mm": { "x": 99.40, "y": 235.29, "w": 93.05, "h": 4.32 } }
         ] }
       ]
     }

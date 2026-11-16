@@ -166,11 +166,18 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            LoadDocument(pdfFilePath);
+            LoadDocument(pdfFilePath, activate);
         }
 
-        /// <summary>加载 PDF（失败时关闭旧文档并给出提示）。</summary>
-        private void LoadDocument(string pdfFilePath)
+        /// <summary>
+        /// 加载 PDF（失败时关闭旧文档并给出提示）。
+        /// </summary>
+        /// <param name="pdfFilePath">PDF 完整路径。</param>
+        /// <param name="showErrorDialog">
+        /// 失败时是否弹出对话框：用户主动预览（双击 /【预览 PDF】/ 右键菜单）传 true；
+        /// 「选中即预览」传 false —— 每换一行就弹一个框太吵，错误只写在窗口状态栏里。
+        /// </param>
+        private void LoadDocument(string pdfFilePath, bool showErrorDialog)
         {
             Cursor previousCursor = Cursor;
 
@@ -179,6 +186,17 @@ namespace MSIFAITOOLS
             try
             {
                 CloseDocument();
+
+                string pdfiumMessage;
+
+                if (!PdfiumRuntime.EnsureAvailable(out pdfiumMessage))
+                {
+                    // 原生库不可用时不能碰 PdfiumViewer：PdfLibrary 初始化 / 终结时要调
+                    // FPDF_AddRef / FPDF_Release，缺这两个导出时会在终结器里再抛一次
+                    // EntryPointNotFoundException（调试器里看起来像整个程序崩了）。
+                    throw new InvalidOperationException("PDF 渲染引擎不可用（pdfium.dll）。" + pdfiumMessage +
+                        Environment.NewLine + "可先用工具栏的【打开外部】让系统默认程序打开。");
+                }
 
                 _document = PdfDocument.Load(pdfFilePath);
                 _currentPath = pdfFilePath;
@@ -195,13 +213,18 @@ namespace MSIFAITOOLS
             catch (Exception ex)
             {
                 CloseDocument();
-                _currentPath = null;
+
+                // 保留路径：【打开外部】按钮还要用它（引擎不可用时仍能让系统默认程序打开 PDF）
+                _currentPath = pdfFilePath;
                 Text = "PDF 预览 - 读取失败";
                 ShowError("无法显示该 PDF：" + ex.Message);
 
-                MessageBox.Show(this,
-                    "无法显示该 PDF：\n" + pdfFilePath + "\n\n" + ex.Message,
-                    "PDF 预览", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                if (showErrorDialog)
+                {
+                    MessageBox.Show(this,
+                        "无法显示该 PDF：\n" + pdfFilePath + "\n\n" + ex.Message,
+                        "PDF 预览", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
             finally
             {
