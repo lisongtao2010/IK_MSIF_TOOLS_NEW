@@ -50,10 +50,12 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 程序启动时把「部材名置换表」（SQL Server 的表 <c>genpin.dbo.T_M_MergeName</c>）整表读进内存
-        /// （<see cref="MemberNameReplacementCatalog.Preload"/>）：之后分析 / 保存时的部材名置换不再连数据库。
+        /// （<see cref="MemberNameReplacementCatalog.Preload"/>）：之后分析 / 保存时的部材名置换、
+        /// 「选择部材名」窗口的推荐项都只查内存，不再连数据库。
         /// <para>
         /// 连不上也不影响启动：置换表为空 → 部材名原样保留，原因记在
-        /// <see cref="MemberNameReplacementCatalog.LastError"/>；【部材名面板】点【重新载入】可再试。
+        /// <see cref="MemberNameReplacementCatalog.LastError"/>；主画面打开时会再补读一次
+        /// （<see cref="MemberNameReplacementCatalog.EnsurePreloaded"/>），【部材名面板】点【重新载入】也可再试。
         /// </para>
         /// </summary>
         private static void PrepareMemberNameMapping()
@@ -64,7 +66,7 @@ namespace MSIFAITOOLS
             }
             catch (Exception)
             {
-                // 预读本身出问题也不影响启动（第一次置换时会用正常超时再试一次）
+                // 预读本身出问题也不影响启动（主画面打开时会再补读一次）
             }
         }
 

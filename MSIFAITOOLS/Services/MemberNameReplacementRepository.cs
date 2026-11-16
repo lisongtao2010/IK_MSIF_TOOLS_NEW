@@ -102,11 +102,11 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 用指定的连接信息连数据库；<paramref name="settings"/> 为 <c>null</c> 时按
-        /// <see cref="MemberMappingDbSettingsStore.Resolve"/> 解析。
+        /// <see cref="MemberMappingDbSettingsStore.ResolveJp1"/> 解析（<c>connJP1</c> / genpin）。
         /// </summary>
         public MemberNameReplacementRepository(MemberMappingDbSettings settings)
         {
-            _settings = settings ?? MemberMappingDbSettingsStore.Resolve();
+            _settings = settings ?? MemberMappingDbSettingsStore.ResolveJp1();
             _targetDescription = _settings.DescribeTarget() + " / 表 " + TableName;
 
             _connection = new SqlConnection(_settings.BuildConnectionString());

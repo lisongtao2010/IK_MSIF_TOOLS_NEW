@@ -18,7 +18,10 @@ namespace MSIFAITOOLS.Services
     ///
     /// <para>
     /// <b>读取时机</b>：程序启动时（<c>Program.Main</c> → <see cref="Preload"/>）把整表读进内存，
-    /// 之后置换不再连数据库；【部材名面板】的【重新载入】/【连接设置】保存后调 <see cref="Reload"/> 刷新。
+    /// 之后置换不再连数据库；主画面（<see cref="PartBasicInfoForm"/>）打开时再调一次
+    /// <see cref="EnsurePreloaded"/>（启动时没读成功的话用短超时补读一次）；
+    /// 【部材名面板】的【重新载入】/【连接设置】保存后调 <see cref="Reload"/> 刷新。
+    /// <b>画面里查推荐项只走内存</b>（<see cref="GetTargets"/>），不会因为连不上库把界面卡住。
     /// </para>
     ///
     /// <para>
@@ -47,9 +50,21 @@ namespace MSIFAITOOLS.Services
         private static Dictionary<string, string> _map = new Dictionary<string, string>(StringComparer.Ordinal);
 
         /// <summary>
-        /// 是否已经读过数据库（程序启动时 <see cref="Preload"/>；没预读成功的话第一次 <see cref="Replace"/> 会再试一次）。
+        /// 置换前 → 全部「置换后」（1:N，去重、按 <c>GenpinName</c> 排序；不可变，整表替换）。
+        /// 「选择部材名」窗口的推荐项就查这张表（<see cref="GetTargets"/>）—— 只在内存里找，不连数据库。
         /// </summary>
+        private static Dictionary<string, List<string>> _targets =
+            new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        /// <summary>是否已经<b>成功</b>读过数据库（读进内存的是最新内容）。</summary>
         private static bool _loaded;
+
+        /// <summary>
+        /// 这一次运行里是否已经<b>尝试</b>过读数据库（成功与否都算）。
+        /// 失败后不再自动重试（画面里点「部材名」不再因为连不上库而卡住），
+        /// 需要重试时由 <see cref="EnsurePreloaded"/> / <see cref="Reload"/> / 【重新载入】触发。
+        /// </summary>
+        private static bool _loadAttempted;
 
         /// <summary>
         /// 当前使用的连接目标
@@ -89,20 +104,27 @@ namespace MSIFAITOOLS.Services
             get { return TargetDescription; }
         }
 
-        /// <summary>上一次读取数据库失败的原因（成功时为空串）。</summary>
-        public static string LastError
+        /// <summary>
+        /// 置换表是否已经读进内存（启动时 <see cref="Preload"/> 或主画面打开时 <see cref="EnsurePreloaded"/> 成功）。
+        /// <b>不会触发读库</b>：为 false 时只是没有推荐项，界面照常可用。
+        /// </summary>
+        public static bool IsLoaded
         {
-            get
-            {
-                EnsureLoaded();
-
-                return _lastError;
-            }
+            get { return _loaded; }
         }
 
         /// <summary>
-        /// 程序启动时预读用的连接超时（秒）：数据库连不上时不要把启动卡太久。
-        /// 预读失败的话，第一次置换时还会按默认超时（<see cref="MemberMappingDbSettings.ConnectTimeoutSeconds"/>）再试一次。
+        /// 上一次读取数据库失败的原因（成功时为空串）；<b>不会触发读库</b>（库里连不上时画面不会被卡住）。
+        /// </summary>
+        public static string LastError
+        {
+            get { return _lastError; }
+        }
+
+        /// <summary>
+        /// 预读用的连接超时（秒）：数据库连不上时不要把启动 / 主画面打开卡太久。
+        /// 预读失败也不会在置换 / 打开「选择部材名」窗口时自动重试（避免界面卡住），
+        /// 需要再试时用【部材名面板】的【重新载入】。
         /// </summary>
         public const int PreloadTimeoutSeconds = 3;
 
@@ -111,28 +133,40 @@ namespace MSIFAITOOLS.Services
         /// </summary>
         public static void Reload()
         {
-            _loaded = true;
+            _loadAttempted = true;
             Load(null);
         }
 
         /// <summary>
         /// 程序启动时把整张置换表读进内存（<c>Program.Main</c> 调用）。
         /// 失败只记 <see cref="LastError"/>（置换表为空 → 原样返回），不影响启动；
-        /// 启动时连不上的话保持「未加载」，第一次置换时用正常超时再试一次。
+        /// 启动时连不上就不再自动重试（避免画面操作时卡住），
+        /// 需要再试时由主画面打开时的 <see cref="EnsurePreloaded"/> 或【重新载入】触发。
         /// </summary>
         public static void Preload()
         {
-            _loaded = true;
-
             MemberMappingDbSettings resolved = MemberMappingDbSettingsStore.ResolveJp1();
             MemberMappingDbSettings quick = new MemberMappingDbSettings(resolved.Server, resolved.Port,
                 resolved.Database, resolved.UserId, resolved.Password, resolved.ConfigurationSource,
                 PreloadTimeoutSeconds, resolved.ConnectionName);
 
-            if (!Load(quick))
+            _loadAttempted = true;
+            Load(quick);
+        }
+
+        /// <summary>
+        /// 还没读过库时读一次（主画面 <see cref="PartBasicInfoForm"/> 打开时调用）：启动时预读失败的话，
+        /// 在这里用<b>短超时</b>再试一次，之后「选择部材名」窗口只查内存。
+        /// 已经读过（成功或失败）时什么都不做。
+        /// </summary>
+        public static void EnsurePreloaded()
+        {
+            if (_loadAttempted)
             {
-                _loaded = false;
+                return;
             }
+
+            Preload();
         }
 
         /// <summary>
@@ -222,6 +256,8 @@ namespace MSIFAITOOLS.Services
             // 没配具名连接时退回老的单连接配置（Environment / 连接设置画面 / MappingDb* / 默认值）。
             MemberMappingDbSettings effective = settings ?? MemberMappingDbSettingsStore.ResolveJp1();
             Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.Ordinal);
+            Dictionary<string, List<string>> targets =
+                new Dictionary<string, List<string>>(StringComparer.Ordinal);
             string target = MemberNameReplacementRepository.ResolveTargetDescription(effective);
             string error = string.Empty;
 
@@ -238,12 +274,25 @@ namespace MSIFAITOOLS.Services
                             continue;
                         }
 
-                        if (map.ContainsKey(row.Source))
+                        if (!map.ContainsKey(row.Source))
                         {
-                            continue;
+                            map[row.Source] = row.Target;
                         }
 
-                        map[row.Source] = row.Target;
+                        // 同一个置换前可能对应多个置换后：全部留在内存里（不连库也能列出来），
+                        // 顺序与原来按 SQL「ORDER BY GenpinName」查出来的一致 → 统一按 GenpinName 排序。
+                        List<string> found;
+
+                        if (!targets.TryGetValue(row.Source, out found))
+                        {
+                            found = new List<string>();
+                            targets.Add(row.Source, found);
+                        }
+
+                        if (!found.Contains(row.Target))
+                        {
+                            found.Add(row.Target);
+                        }
                     }
                 }
             }
@@ -252,23 +301,57 @@ namespace MSIFAITOOLS.Services
                 error = ex.Message;
             }
 
+            foreach (List<string> found in targets.Values)
+            {
+                found.Sort(StringComparer.Ordinal);
+            }
+
             _targetDescription = target;
             _lastError = error;
             _map = map;
+            _targets = targets;
+            _loaded = error.Length == 0;
 
-            return error.Length == 0;
+            return _loaded;
         }
 
         /// <summary>第一次使用时加载（之后用缓存，直到 <see cref="Reload"/>）。</summary>
         private static void EnsureLoaded()
         {
-            if (_loaded)
+            // 这一次已经试过（含失败）→ 直接用内存里的内容，画面操作不会再连数据库。
+            // 需要重试时由 <see cref="EnsurePreloaded"/> / <see cref="Reload"/> 触发。
+            if (_loadAttempted)
             {
                 return;
             }
 
-            _loaded = true;
+            _loadAttempted = true;
             Load(null);
+        }
+
+        /// <summary>
+        /// 置换前（<c>MsifDevName</c>）对应的全部「置换后」（<c>GenpinName</c>；去重、已排序）——
+        /// 「选择部材名」窗口的推荐项。<b>只查内存，不连数据库</b>（没预读成功时返回空列表）。
+        /// </summary>
+        /// <param name="source">置换前（精确匹配；前后空白会被去掉）。</param>
+        /// <returns>找到的置换后（复制出来的新列表，调用方可以随便改）；没有时为空列表。</returns>
+        public static IList<string> GetTargets(string source)
+        {
+            string value = (source ?? string.Empty).Trim();
+
+            if (value.Length == 0)
+            {
+                return new List<string>();
+            }
+
+            List<string> found;
+
+            if (_targets.TryGetValue(value, out found))
+            {
+                return new List<string>(found);
+            }
+
+            return new List<string>();
         }
 
         /// <summary>

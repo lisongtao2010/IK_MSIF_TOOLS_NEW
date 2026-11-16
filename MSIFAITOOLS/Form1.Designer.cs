@@ -81,6 +81,10 @@ namespace MSIFAITOOLS
             this.lblFolder = new System.Windows.Forms.Label();
             this.chkCadSplit = new System.Windows.Forms.CheckBox();
             this.btnMemberNameMap = new System.Windows.Forms.Button();
+            this.btnDbJp1 = new System.Windows.Forms.Button();
+            this.btnDbJp2 = new System.Windows.Forms.Button();
+            this.lblDbHint = new System.Windows.Forms.Label();
+            this.tipHeader = new System.Windows.Forms.ToolTip(this.components);
             this.statusStrip = new System.Windows.Forms.StatusStrip();
             this.lblStatus = new System.Windows.Forms.ToolStripStatusLabel();
             this.lblSpring = new System.Windows.Forms.ToolStripStatusLabel();
@@ -111,13 +115,17 @@ namespace MSIFAITOOLS
             // 标题栏右上角：AI 设置 / 部材名置换表 两个全局入口（随窗体宽度一同右移）
             this.pnlHeader.Controls.Add(this.btnMemberNameMap);
             this.pnlHeader.Controls.Add(this.btnAiSettings);
+            // 标题栏第二行：SQL Server 两个连接（① genpin / ② MSIF）各自维护
+            this.pnlHeader.Controls.Add(this.btnDbJp1);
+            this.pnlHeader.Controls.Add(this.btnDbJp2);
+            this.pnlHeader.Controls.Add(this.lblDbHint);
             // 标题栏「Debug」开关：默认不勾选，勾选后才显示 ③ 分步执行 面板
             this.pnlHeader.Controls.Add(this.chkDebug);
             this.pnlHeader.Controls.Add(this.pnlHeaderAccent);
             this.pnlHeader.Dock = System.Windows.Forms.DockStyle.Top;
             this.pnlHeader.Location = new System.Drawing.Point(0, 0);
             this.pnlHeader.Name = "pnlHeader";
-            this.pnlHeader.Size = new System.Drawing.Size(900, 76);
+            this.pnlHeader.Size = new System.Drawing.Size(900, 96);
             this.pnlHeader.TabIndex = 0;
             // 
             // lblVersion
@@ -161,7 +169,7 @@ namespace MSIFAITOOLS
             // 
             this.pnlHeaderAccent.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(230)))), ((int)(((byte)(126)))), ((int)(((byte)(34)))));
             this.pnlHeaderAccent.Dock = System.Windows.Forms.DockStyle.Bottom;
-            this.pnlHeaderAccent.Location = new System.Drawing.Point(0, 73);
+            this.pnlHeaderAccent.Location = new System.Drawing.Point(0, 93);
             this.pnlHeaderAccent.Name = "pnlHeaderAccent";
             this.pnlHeaderAccent.Size = new System.Drawing.Size(900, 3);
             this.pnlHeaderAccent.TabIndex = 3;
@@ -189,9 +197,9 @@ namespace MSIFAITOOLS
             this.pnlContent.Controls.Add(this.grpAction);
             this.pnlContent.Controls.Add(this.grpInput);
             this.pnlContent.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.pnlContent.Location = new System.Drawing.Point(0, 76);
+            this.pnlContent.Location = new System.Drawing.Point(0, 96);
             this.pnlContent.Name = "pnlContent";
-            this.pnlContent.Size = new System.Drawing.Size(900, 602);
+            this.pnlContent.Size = new System.Drawing.Size(900, 582);
             this.pnlContent.TabIndex = 1;
             // 
             // grpLog
@@ -870,6 +878,61 @@ namespace MSIFAITOOLS
             this.btnMemberNameMap.Text = "部材名置換表（例：鴨居 → 上枠）…";
             this.btnMemberNameMap.UseVisualStyleBackColor = false;
             this.btnMemberNameMap.Click += new System.EventHandler(this.BtnMemberNameMap_Click);
+            //
+            // lblDbHint
+            //
+            this.lblDbHint.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblDbHint.AutoSize = true;
+            this.lblDbHint.BackColor = System.Drawing.Color.Transparent;
+            this.lblDbHint.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.lblDbHint.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(169)))), ((int)(((byte)(196)))), ((int)(((byte)(224)))));
+            this.lblDbHint.Location = new System.Drawing.Point(524, 64);
+            this.lblDbHint.Name = "lblDbHint";
+            this.lblDbHint.Size = new System.Drawing.Size(106, 17);
+            this.lblDbHint.TabIndex = 8;
+            this.lblDbHint.Text = "SQL Server 接続：";
+            //
+            // btnDbJp1
+            //
+            // ① genpin（部材名置换表 T_M_MergeName / CMD 分析第 6 步 T_M_PartsMaster）的连接设置
+            this.btnDbJp1.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnDbJp1.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(37)))), ((int)(((byte)(74)))), ((int)(((byte)(118)))));
+            this.btnDbJp1.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnDbJp1.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(74)))), ((int)(((byte)(116)))), ((int)(((byte)(163)))));
+            this.btnDbJp1.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(24)))), ((int)(((byte)(50)))), ((int)(((byte)(84)))));
+            this.btnDbJp1.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(92)))), ((int)(((byte)(140)))));
+            this.btnDbJp1.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnDbJp1.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnDbJp1.ForeColor = System.Drawing.Color.White;
+            this.btnDbJp1.Location = new System.Drawing.Point(638, 58);
+            this.btnDbJp1.Name = "btnDbJp1";
+            this.btnDbJp1.Size = new System.Drawing.Size(114, 28);
+            this.btnDbJp1.TabIndex = 6;
+            this.btnDbJp1.Text = "接続① genpin";
+            this.tipHeader.SetToolTip(this.btnDbJp1, "维护 ① genpin 库的连接（部材名置换表 T_M_MergeName / CMD 分析 T_M_PartsMaster）");
+            this.btnDbJp1.UseVisualStyleBackColor = false;
+            this.btnDbJp1.Click += new System.EventHandler(this.BtnDbJp1Settings_Click);
+            //
+            // btnDbJp2
+            //
+            // ② MSIF（部材不材 mapping DL_BuhinBuzaiMapping）的连接设置
+            this.btnDbJp2.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnDbJp2.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(37)))), ((int)(((byte)(74)))), ((int)(((byte)(118)))));
+            this.btnDbJp2.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnDbJp2.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(74)))), ((int)(((byte)(116)))), ((int)(((byte)(163)))));
+            this.btnDbJp2.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(24)))), ((int)(((byte)(50)))), ((int)(((byte)(84)))));
+            this.btnDbJp2.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(92)))), ((int)(((byte)(140)))));
+            this.btnDbJp2.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnDbJp2.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnDbJp2.ForeColor = System.Drawing.Color.White;
+            this.btnDbJp2.Location = new System.Drawing.Point(760, 58);
+            this.btnDbJp2.Name = "btnDbJp2";
+            this.btnDbJp2.Size = new System.Drawing.Size(114, 28);
+            this.btnDbJp2.TabIndex = 7;
+            this.btnDbJp2.Text = "接続② MSIF";
+            this.tipHeader.SetToolTip(this.btnDbJp2, "维护 ② MSIF 库的连接（部材不材 mapping DL_BuhinBuzaiMapping）");
+            this.btnDbJp2.UseVisualStyleBackColor = false;
+            this.btnDbJp2.Click += new System.EventHandler(this.BtnDbJp2Settings_Click);
             // 
             // statusStrip
             // 
@@ -985,6 +1048,10 @@ namespace MSIFAITOOLS
         private System.Windows.Forms.CheckBox chkCmdStep0;
         private System.Windows.Forms.Button btnAiSettings;
         private System.Windows.Forms.Button btnMemberNameMap;
+        private System.Windows.Forms.Label lblDbHint;
+        private System.Windows.Forms.Button btnDbJp1;
+        private System.Windows.Forms.Button btnDbJp2;
+        private System.Windows.Forms.ToolTip tipHeader;
         private System.Windows.Forms.Button btnOpenOutput;
         private System.Windows.Forms.Label lblProgress;
         private System.Windows.Forms.ProgressBar progressBar;

@@ -302,50 +302,123 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 读取用户配置。文件不存在时返回 <c>null</c> 且 <paramref name="error"/> 为空；解析失败时给出原因。
+        /// 读取用户配置（= <c>connJP1</c>；旧版本的扁平键同样认）。
+        /// 文件不存在 / 没有这个连接时返回 <c>null</c> 且 <paramref name="error"/> 为空；解析失败时给出原因。
         /// </summary>
         public static MemberMappingDbSettings Load(out string error)
         {
-            error = string.Empty;
-            string path = SettingsFilePath;
+            return Load(MemberMappingDbSettings.JP1ConnectionName, out error);
+        }
 
-            if (!File.Exists(path))
+        /// <summary>
+        /// 读取指定具名连接（<c>connJP1</c> / <c>connJP2</c>）的用户配置。
+        /// <para>
+        /// 配置文件里每个连接一节（见 <see cref="Save(MemberMappingDbSettings, string, out string)"/>）；
+        /// 只有旧版本留下的扁平键（<c>Server</c> / <c>Port</c> / <c>Database</c> / …）时，把它当作 <c>connJP1</c>。
+        /// </para>
+        /// </summary>
+        public static MemberMappingDbSettings Load(string connectionName, out string error)
+        {
+            error = string.Empty;
+            string name = NormalizeConnectionName(connectionName);
+            Dictionary<string, object> data = ReadSettingsFile(out error);
+
+            if (data == null)
+            {
+                return null;
+            }
+
+            Dictionary<string, object> section = GetSection(data, name);
+
+            if (section == null)
+            {
+                // 旧格式（整份文件没有具名分节）：就是 connJP1 那一套。
+                // 已经有别的连接的分节时不再按扁平键猜，免得把别人的配置当成 connJP1。
+                if (!IsJp1(name) || HasNamedSection(data))
+                {
+                    return null;
+                }
+
+                section = data;
+            }
+
+            MemberMappingDbSettings loaded = new MemberMappingDbSettings(
+                GetText(section, "Server"),
+                GetInt(section, "Port"),
+                GetText(section, "Database"),
+                GetText(section, "UserId"),
+                Unprotect(GetText(section, "Password")),
+                MemberMappingDbSettings.SourceUserSettings,
+                MemberMappingDbSettings.ConnectTimeoutSeconds,
+                name);
+
+            // 旧版本点【保存】时留下的「整组都等于旧默认值」的配置（10.103.126.209 / MSIF / dairen1112##）
+            // 会让程序一直连旧库（那里没有 T_M_MergeName）→ 当作未配置，改用新的内置默认值（genpin）。
+            if (IsJp1(name) && IsLegacyDefault(loaded))
+            {
+                return null;
+            }
+
+            return loaded;
+        }
+
+        /// <summary>读配置文件内容；文件不存在时返回 <c>null</c>（<paramref name="error"/> 为空）。</summary>
+        private static Dictionary<string, object> ReadSettingsFile(out string error)
+        {
+            error = string.Empty;
+
+            if (!File.Exists(SettingsFilePath))
             {
                 return null;
             }
 
             try
             {
-                Dictionary<string, object> data = Serializer.Deserialize<Dictionary<string, object>>(
-                    File.ReadAllText(path, Encoding.UTF8));
-
-                if (data == null)
-                {
-                    return null;
-                }
-
-                MemberMappingDbSettings loaded = new MemberMappingDbSettings(
-                    GetText(data, "Server"),
-                    GetInt(data, "Port"),
-                    GetText(data, "Database"),
-                    GetText(data, "UserId"),
-                    Unprotect(GetText(data, "Password")),
-                    MemberMappingDbSettings.SourceUserSettings);
-
-                // 旧版本点【保存】时留下的「整组都等于旧默认值」的配置（10.103.126.209 / MSIF / dairen1112##）
-                // 会让程序一直连旧库（那里没有 T_M_MergeName）→ 当作未配置，改用新的内置默认值（genpin）。
-                if (IsLegacyDefault(loaded))
-                {
-                    return null;
-                }
-
-                return loaded;
+                return Serializer.Deserialize<Dictionary<string, object>>(
+                    File.ReadAllText(SettingsFilePath, Encoding.UTF8));
             }
             catch (Exception ex)
             {
                 error = ex.Message;
                 return null;
             }
+        }
+
+        /// <summary>取配置文件里某个具名连接的那一节；没有 / 是空节时返回 <c>null</c>。</summary>
+        private static Dictionary<string, object> GetSection(Dictionary<string, object> data, string name)
+        {
+            object raw;
+
+            if (data == null || !data.TryGetValue(name, out raw) || raw == null)
+            {
+                return null;
+            }
+
+            Dictionary<string, object> section = raw as Dictionary<string, object>;
+
+            return section == null || section.Count == 0 ? null : section;
+        }
+
+        /// <summary>配置文件里是否已经有具名连接的分节（旧格式升级后用来区分「扁平键」和「分节」）。</summary>
+        private static bool HasNamedSection(Dictionary<string, object> data)
+        {
+            return GetSection(data, MemberMappingDbSettings.JP1ConnectionName) != null ||
+                GetSection(data, MemberMappingDbSettings.JP2ConnectionName) != null;
+        }
+
+        /// <summary>连接名规范化：空 / 空白时当作 <c>connJP1</c>。</summary>
+        private static string NormalizeConnectionName(string connectionName)
+        {
+            return string.IsNullOrWhiteSpace(connectionName)
+                ? MemberMappingDbSettings.JP1ConnectionName
+                : connectionName.Trim();
+        }
+
+        /// <summary>是否 <c>connJP1</c>（不区分大小写）。</summary>
+        private static bool IsJp1(string connectionName)
+        {
+            return string.Equals(NormalizeConnectionName(connectionName),
+                MemberMappingDbSettings.JP1ConnectionName, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -367,8 +440,21 @@ namespace MSIFAITOOLS.Services
                 string.Equals(settings.Password, LegacyDefaultPassword, StringComparison.Ordinal);
         }
 
-        /// <summary>保存用户配置（文件夹不存在时自动创建）。失败时返回 false 并给出原因。</summary>
+        /// <summary>保存用户配置（= <c>connJP1</c> 那一套）。失败时返回 false 并给出原因。</summary>
         public static bool Save(MemberMappingDbSettings settings, out string error)
+        {
+            return Save(settings, MemberMappingDbSettings.JP1ConnectionName, out error);
+        }
+
+        /// <summary>
+        /// 保存指定具名连接（<c>connJP1</c> / <c>connJP2</c>）的用户配置（文件夹不存在时自动创建）。
+        /// <para>
+        /// 写入 <c>"connJP1"</c> / <c>"connJP2"</c> 分节；<c>connJP1</c> 同时写一份旧版本的扁平键，
+        /// 这样只认扁平键的旧版本程序也能读到同样的接続先。另一个连接的分节原样保留。
+        /// </para>
+        /// 失败时返回 false 并给出原因。
+        /// </summary>
+        public static bool Save(MemberMappingDbSettings settings, string connectionName, out string error)
         {
             error = string.Empty;
 
@@ -378,16 +464,34 @@ namespace MSIFAITOOLS.Services
                 return false;
             }
 
+            string name = NormalizeConnectionName(connectionName);
+
             try
             {
                 Directory.CreateDirectory(SettingsFolderPath);
 
-                Dictionary<string, object> data = new Dictionary<string, object>();
-                data["Server"] = settings.Server ?? string.Empty;
-                data["Port"] = settings.Port;
-                data["Database"] = settings.Database ?? string.Empty;
-                data["UserId"] = settings.UserId ?? string.Empty;
-                data["Password"] = Protect(settings.Password ?? string.Empty);
+                string readError;
+                Dictionary<string, object> data = ReadSettingsFile(out readError) ??
+                    new Dictionary<string, object>();
+
+                Dictionary<string, object> section = new Dictionary<string, object>();
+                section["Server"] = settings.Server ?? string.Empty;
+                section["Port"] = settings.Port;
+                section["Database"] = settings.Database ?? string.Empty;
+                section["UserId"] = settings.UserId ?? string.Empty;
+                section["Password"] = Protect(settings.Password ?? string.Empty);
+
+                data[name] = section;
+
+                if (IsJp1(name))
+                {
+                    // 兼容旧版本：扁平键 = connJP1
+                    data["Server"] = section["Server"];
+                    data["Port"] = section["Port"];
+                    data["Database"] = section["Database"];
+                    data["UserId"] = section["UserId"];
+                    data["Password"] = section["Password"];
+                }
 
                 File.WriteAllText(SettingsFilePath, Serializer.Serialize(data), new UTF8Encoding(false));
                 return true;
@@ -452,41 +556,40 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 按具名连接（<c>connJP1</c> / <c>connJP2</c>，App.config 的 <c>&lt;connectionStrings&gt;</c>）解析连接信息。
-        /// <para>优先级：环境变量（<c>MSIF_MAPPING_DB_*</c>）→ 连接设置画面保存的用户配置
-        /// → 具名连接（<paramref name="connectionName"/>）→ appSettings（<c>MappingDb*</c>）→ 内置默认值。</para>
+        /// 按具名连接（<c>connJP1</c> / <c>connJP2</c>）解析连接信息。
+        /// <para>优先级：环境变量（<c>MSIF_MAPPING_DB_*</c>）→ 本画面保存的该连接的用户配置
+        /// → App.config 的具名连接（<paramref name="connectionName"/>）→ appSettings（<c>MappingDb*</c>）→ 内置默认值。</para>
         /// <para>
-        /// 具名连接只是替掉「appSettings」这一级：画面里改过连接（或设了环境变量）时照样以那些为准，
-        /// 这样现场换服务器 / 改密码不用改 App.config；
-        /// 什么都没配时就用 <c>connJP1</c> 里写的那台（10.103.126.208 / genpin）。
-        /// App.config 里没有这个名字时原样返回 <see cref="Resolve"/>，所以老配置（只有 MappingDb*）照样能用。
+        /// 每个连接各自保存一份（配置文件里的 <c>connJP1</c> / <c>connJP2</c> 分节），互不影响：
+        /// 改 ② MSIF 的接続先 / 密码不会把 ① genpin 置换表那套也改掉。
+        /// 画面里改过连接（或设了环境变量）时以那些为准，这样现场换服务器 / 改密码不用改 App.config；
+        /// 什么都没配时才用 App.config 里写的那一份。
+        /// App.config 里没有这个名字（且画面也没保存过）时退回 <see cref="Resolve"/>，所以老配置照样能用。
         /// </para>
         /// </summary>
         /// <param name="connectionName">具名连接的名字（例：<see cref="MemberMappingDbSettings.JP1ConnectionName"/>）。</param>
         public static MemberMappingDbSettings ResolveByName(string connectionName)
         {
-            MemberMappingDbSettings appLevel = string.IsNullOrWhiteSpace(connectionName)
-                ? null
-                : LoadNamedConnection(connectionName);
-
-            if (appLevel == null)
-            {
-                return Resolve();
-            }
+            string name = NormalizeConnectionName(connectionName);
+            MemberMappingDbSettings appLevel = LoadNamedConnection(name);
 
             string settingsError;
-            MemberMappingDbSettings userSettings = Load(out settingsError);
+            MemberMappingDbSettings userSettings = Load(name, out settingsError);
             LastSettingsError = settingsError;
 
-            // 画面里保存过连接信息：以画面为准（和 Resolve 的行为一致），只在日志里带上具名连接名
+            // 画面里保存过这个连接：以画面为准（环境变量可以逐项覆盖）
             if (userSettings != null)
             {
-                return ApplyEnvironmentOverrides(userSettings,
-                    MatchConnectionName(userSettings.Server, userSettings.Database));
+                return ApplyEnvironmentOverrides(userSettings, name);
             }
 
             // 没有画面设置 → 用具名连接，再让环境变量逐项覆盖
-            return ApplyEnvironmentOverrides(appLevel, appLevel.ConnectionName);
+            if (appLevel != null)
+            {
+                return ApplyEnvironmentOverrides(appLevel, appLevel.ConnectionName);
+            }
+
+            return Resolve();
         }
 
         /// <summary>
@@ -505,39 +608,20 @@ namespace MSIFAITOOLS.Services
         /// 由 <see cref="BuhinBuzaiMappingRepository.Register"/> 在部品基本信息画面【保存】时调用。
         /// </para>
         /// <para>
-        /// <b>和 <see cref="ResolveByName"/> 的区别</b>：连接设置画面（<see cref="MemberMappingDbSettingsForm"/>）
-        /// 维护的是「部材名置换表」那一套连接（= <c>connJP1</c> / genpin），不能拿来写 MSIF 库。
-        /// 所以这里只有在<b>画面保存的连接正好也是这台 MSIF 库</b>时才采用它，否则一律用 <c>connJP2</c>
-        /// （环境变量 <c>MSIF_MAPPING_DB_*</c> 仍然可以逐项覆盖）。
-        /// App.config 里没有 <c>connJP2</c> 时退回 <see cref="Resolve"/>；
+        /// 它有自己的一份用户配置（主画面【接続② MSIF】维护，配置文件的 <c>connJP2</c> 分节），
+        /// 和部材名置换表那套（<c>connJP1</c> / genpin）互不影响；
+        /// 取值顺序同 <see cref="ResolveByName"/>：环境变量 <c>MSIF_MAPPING_DB_*</c> → 画面保存的 <c>connJP2</c>
+        /// → App.config 的 <c>connJP2</c> → <see cref="Resolve"/>。
+        /// </para>
+        /// <para>
+        /// App.config 里没有 <c>connJP2</c>、画面也没保存过时退回 <see cref="Resolve"/>；
         /// 那样会去 genpin 库找这张表 → 保存画面上出现「部材不材 mapping 登录失败」，
         /// 部品基本信息本身照样保存成功。
         /// </para>
         /// </summary>
         public static MemberMappingDbSettings ResolveJp2()
         {
-            MemberMappingDbSettings named = LoadNamedConnection(MemberMappingDbSettings.JP2ConnectionName);
-
-            if (named == null)
-            {
-                // App.config 里没有 connJP2：退回原来的解析（connJP1 / genpin 那一套）
-                return Resolve();
-            }
-
-            string settingsError;
-            MemberMappingDbSettings userSettings = Load(out settingsError);
-            LastSettingsError = settingsError;
-
-            // 画面保存的连接正好指向这台 MSIF 库（接続先 + DB 名一致）时，以画面为准（改密码等）
-            if (userSettings != null &&
-                string.Equals(userSettings.Server, named.Server, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(userSettings.Database, named.Database, StringComparison.OrdinalIgnoreCase))
-            {
-                return ApplyEnvironmentOverrides(userSettings,
-                    MatchConnectionName(userSettings.Server, userSettings.Database));
-            }
-
-            return ApplyEnvironmentOverrides(named, named.ConnectionName);
+            return ResolveByName(MemberMappingDbSettings.JP2ConnectionName);
         }
 
         /// <summary>

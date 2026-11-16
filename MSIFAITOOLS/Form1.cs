@@ -288,6 +288,59 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
+        /// 【接続① genpin】：维护 SQL Server ① 的连接（部材名置换表 <c>T_M_MergeName</c> /
+        /// 【CMD 分析】第 6 步 <c>T_M_PartsMaster</c>）。保存后置换表缓存立即按新连接重读。
+        /// </summary>
+        private void BtnDbJp1Settings_Click(object sender, EventArgs e)
+        {
+            ShowDbConnectionSettings(MemberMappingDbSettings.JP1ConnectionName,
+                "① genpin（部材名置换表 / CMD 分析）");
+        }
+
+        /// <summary>
+        /// 【接続② MSIF】：维护 SQL Server ② 的连接（部材不材 mapping <c>DL_BuhinBuzaiMapping</c>）。
+        /// 保存后，下一次在部品基本信息画面点【保存】时按新连接写入。
+        /// </summary>
+        private void BtnDbJp2Settings_Click(object sender, EventArgs e)
+        {
+            ShowDbConnectionSettings(MemberMappingDbSettings.JP2ConnectionName,
+                "② MSIF（部材不材 mapping）");
+        }
+
+        /// <summary>
+        /// 打开指定具名连接的连接信息维护画面，保存成功后把新的目标写进日志 / 状态栏。
+        /// 两个连接各自保存（<c>connJP1</c> / <c>connJP2</c> 分节），改一个不会影响另一个。
+        /// </summary>
+        /// <param name="connectionName"><c>connJP1</c> / <c>connJP2</c>。</param>
+        /// <param name="description">日志里给人看的说明（例：<c>① genpin（部材名置换表 / CMD 分析）</c>）。</param>
+        private void ShowDbConnectionSettings(string connectionName, string description)
+        {
+            using (MemberMappingDbSettingsForm form = new MemberMappingDbSettingsForm(connectionName))
+            {
+                if (form.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
+            }
+
+            MemberMappingDbSettings settings = MemberMappingDbSettingsStore.ResolveByName(connectionName);
+
+            AppendLog("SQL Server 接続 " + description + " 已更新：" + settings.Describe(),
+                Color.FromArgb(180, 220, 255));
+
+            if (!string.IsNullOrEmpty(MemberMappingDbSettingsStore.LastSettingsError))
+            {
+                AppendLog("连接信息文件读取失败：" + MemberMappingDbSettingsStore.LastSettingsError,
+                    Color.FromArgb(255, 200, 120));
+                SetStatus("SQL Server 接続 " + connectionName + " 已更新（读取异常）",
+                    Color.FromArgb(239, 108, 0));
+                return;
+            }
+
+            SetStatus("SQL Server 接続 " + connectionName + " 已更新", Color.FromArgb(46, 125, 50));
+        }
+
+        /// <summary>
         /// 统计指定目录下（不递归）的 PDF 文件数量。
         /// </summary>
         private static int CountPdfFiles(string folder)
@@ -544,6 +597,9 @@ namespace MSIFAITOOLS
             btnCmdStep5.Enabled = !busy;
             btnCmdStep6.Enabled = !busy;
             btnAiSettings.Enabled = !busy;
+            // 执行期间不让改 SQL Server 连接（模态画面会挡住进度 / 日志），跑完再改
+            btnDbJp1.Enabled = !busy;
+            btnDbJp2.Enabled = !busy;
             btnBrowse.Enabled = !busy;
             txtFolder.Enabled = !busy;
             chkCadSplit.Enabled = !busy;
@@ -2067,6 +2123,13 @@ namespace MSIFAITOOLS
                 _previewForm.BringToFront();
                 _previewForm.Activate();
             }
+            else
+            {
+                // 预览窗口是「不抢焦点」显示的，主画面一直是激活窗口：再点主画面不会触发激活，
+                // 预览就会一直压在主画面前边。和主画面有重叠（单屏并排）时把预览放到主画面后面；
+                // 不重叠（多屏，预览在另一块屏）时不动 —— 见 WindowLayoutHelper。
+                WindowLayoutHelper.PlaceBehindMainWindowIfOverlapping(_previewForm, this);
+            }
         }
 
         /// <summary>
@@ -2147,7 +2210,10 @@ namespace MSIFAITOOLS
             if (created)
             {
                 _partInfoForm = new PartBasicInfoForm(databasePath);
-                _partInfoForm.Owner = this;
+                // 不设 Owner：Owned 窗口永远浮在 Owner（主画面）之上，主画面就再也盖不住它了。
+                // 主画面只通过 MainWindow 传给本画面做「窗口摆放 / z 顺序」判断；
+                // 关闭主窗口时由 OnFormClosed 显式关闭本画面。
+                _partInfoForm.MainWindow = this;
                 _partInfoForm.FormClosed += PartInfoForm_FormClosed;
 
                 // 主画面已打开的预览窗口移交给部品基本信息画面（两个画面成对显示）

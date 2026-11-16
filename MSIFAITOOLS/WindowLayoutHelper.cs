@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace MSIFAITOOLS
@@ -13,6 +14,10 @@ namespace MSIFAITOOLS
     /// 部品基本信息放到主画面所在的屏幕（和预览窗口一屏一个，成对使用）。
     /// </para>
     /// <para>只有 1 块屏幕时：PDF 预览占左侧、部品基本信息占右侧，尽量互不遮挡。</para>
+    /// <para>
+    /// 另外负责 <b>z 顺序</b>（<see cref="PlaceBehindMainWindowIfOverlapping"/>）：
+    /// 两个辅助窗口都不能「一直保持在主画面前边」—— 主画面被点到 / 激活时必须能盖住它们。
+    /// </para>
     /// </summary>
     internal static class WindowLayoutHelper
     {
@@ -272,5 +277,75 @@ namespace MSIFAITOOLS
             form.StartPosition = FormStartPosition.Manual;
             form.Bounds = bounds;
         }
+
+        /// <summary>
+        /// 辅助窗口（PDF 预览）和主画面显示区域<b>有重叠</b>时，把它放到主画面<b>后面</b>
+        /// （只改 z 顺序，不移动 / 不激活）。
+        /// <para>
+        /// 为什么需要：预览窗口是用 <see cref="Form.ShowWithoutActivation"/>（不抢焦点）显示的，
+        /// 这时<b>主画面一直是激活窗口</b>，用户再点主画面不会触发激活、不会自动盖住预览窗口 ——
+        /// 预览就会「一直保持在主画面前边」，主画面被挡着却拿不回来。
+        /// 有重叠时把预览插到主画面下面：主画面随时可见 / 可操作，点一下预览窗口仍可把它提到前面。
+        /// </para>
+        /// <para>
+        /// 不重叠时（多屏：预览在主画面以外的屏幕）什么都不做 —— z 顺序不影响各自屏幕上的显示。
+        /// </para>
+        /// </summary>
+        /// <param name="window">辅助窗口（PDF 预览）。</param>
+        /// <param name="mainForm">主画面（Form1）。</param>
+        internal static void PlaceBehindMainWindowIfOverlapping(Form window, Form mainForm)
+        {
+            if (window == null || window.IsDisposed || !window.Visible ||
+                mainForm == null || mainForm.IsDisposed || !mainForm.Visible)
+            {
+                return;
+            }
+
+            if (mainForm.WindowState == FormWindowState.Minimized)
+            {
+                return;
+            }
+
+            if (!window.Bounds.IntersectsWith(mainForm.Bounds))
+            {
+                return;
+            }
+
+            PlaceBehind(window, mainForm);
+        }
+
+        /// <summary>把 <paramref name="window"/> 插到 <paramref name="reference"/> 的<b>紧后面</b>（z 顺序）。</summary>
+        /// <param name="window">要下沉的窗口。</param>
+        /// <param name="reference">保持在它前面的窗口。</param>
+        private static void PlaceBehind(Form window, Form reference)
+        {
+            if (window == null || window.IsDisposed || !window.IsHandleCreated ||
+                reference == null || reference.IsDisposed || !reference.IsHandleCreated)
+            {
+                return;
+            }
+
+            // hWndInsertAfter = reference：窗口排在 reference 后面（reference 保持在最前）
+            SetWindowPos(window.Handle, reference.Handle, 0, 0, 0, 0,
+                SwpNoMove | SwpNoSize | SwpNoActivate | SwpNoOwnerZOrder);
+        }
+
+        /// <summary>SetWindowPos：不改变位置。</summary>
+        private const uint SwpNoMove = 0x0002;
+
+        /// <summary>SetWindowPos：不改变大小。</summary>
+        private const uint SwpNoSize = 0x0001;
+
+        /// <summary>SetWindowPos：不激活窗口（主画面保持激活 / 焦点不变）。</summary>
+        private const uint SwpNoActivate = 0x0010;
+
+        /// <summary>SetWindowPos：不改变 Owner 的 z 顺序。</summary>
+        private const uint SwpNoOwnerZOrder = 0x0200;
+
+        /// <summary>调整窗口的 z 顺序（不移动、不改变大小、不激活）。</summary>
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+            int x, int y, int cx, int cy, uint uFlags);
     }
 }

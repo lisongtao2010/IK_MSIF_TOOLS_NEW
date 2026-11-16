@@ -2,7 +2,8 @@
 
 > 所属项目：`MSIFAITOOLS`（.NET Framework 4.8 / WinForms / AnyCPU）
 > 源文件：`PartBasicInfoForm.cs`、`PartBasicInfoForm.Designer.cs`、
-> `PartBasicInfoForm.PartNameCandidates.cs`、`PartNameCandidatePopup.cs`、`MemberNamePickerForm.cs`
+> `PartBasicInfoForm.PartNameCandidates.cs`、`PartNameCandidatePopup.cs`、
+> `MemberNamePickerForm.cs`、`MemberNamePickerForm.Style.cs`、`MemberNamePickerForm.Designer.cs`
 > 相关：`WindowLayoutHelper.cs`（窗口摆放）、`PdfPreviewForm.cs`（PDF 预览）
 > 更新日期：2026-11-16
 
@@ -64,10 +65,42 @@
 ## 3. 部材名：选择部材名窗口（`MemberNamePickerForm`）
 
 - 单击「部材名」单元格即打开（非模态：开着也能改别的格子 / 换行 / 看图纸），**不进入普通编辑**。
-- 候补顺序：① 这一行「部品名」在置换表（SQL Server `genpin.dbo.T_M_MergeName`）里对应的置换后 →
+- **数据只在内存里查**：主画面打开时（`PartBasicInfoForm.OnLoad` → `PreloadMemberNamePickerData`）一次性读好
+  ① 置换表（SQL Server `genpin.dbo.T_M_MergeName`，`MemberNameReplacementCatalog`；程序启动时已预读，没读成功时这里补读一次）和
+  ② 部材部品マスタ（SQLite「部材部品」表，`MemberPartCatalog`）。之后点「部材名」只是内存查找，**不再连数据库 / 读盘**，窗口瞬间打开。
+- 候补顺序：① 这一行「部品名」在置换表里对应的置换后（`MemberNameReplacementCatalog.GetTargets`）→
   ② 这一格现在的值（拆开 `|`，方便改回原值）→ ③ 部材部品マスタ 的部材名 一览。
+- 置换表没读进内存时（服务器连不上）只是没有第 ① 项，状态行提示「置换表连不上，没有推荐项」，其余候补照常可用。
 - 顶部输入框打字过滤（`↑` / `↓` 换项），列表里没有的名字打在输入框里按 `Enter` 直接写入；
   输入框为空时按 `Enter` 会先确认是否清空这一格。想打数字当关键字时按住 `Ctrl`。
+- **每页 10 项 + 分页**：数字键只有 `1`～`9` 和 `0`，所以一览一次只显示 10 项，编号每页都从 `1` 重新开始
+  （第 10 项是 `0`），第 11 项以后翻页。翻页方式：`PageUp` / `PageDown`、`↑` 在页首再按一次（= 上一页最后一项）、
+  `↓` 在页尾再按一次（= 下一页第 1 项）、鼠标滚轮、底部 `‹ 1/3 ›` 按钮（到第一页 / 最后一页时按钮变灰）。
+  过滤条件一变就回到第 1 页，所以按 `1` 永远是当前页第 1 项（打开窗口时就是置换表的推荐项）。
+- **写完自动跳到下一行**：单击候选项 / 按编号键 / `Enter` 写入之后，表格的选择自动移到**下一行的「部材名」**，
+  窗口的写入目标和「1 号推荐项」也跟着换成那一行（按那一行的「部品名」从置换表取），
+  所以可以一路按 `1` 往下填（`MoveToNextRowMemberNameCell`）。到最后一行为止：不循环、也不自动追加行。
+  值没变（点了和这一格一样的内容）时不会产生「有未保存的修改」，但选择照样往下走。
+- 保存成功后新登录的「部材名 + 部品名」规则会立刻重新读进内存（`RefreshMemberNameCatalog`），不用重开画面。
+
+### 3.1 外观（贴近 Google 日语输入法的候补面板，`MemberNamePickerForm.Style.cs`）
+
+| 部位 | 样式 |
+|------|------|
+| 窗口 | 无标题栏的白色浮窗：`FormBorderStyle.None` + 1px `Padding` 画出浅灰细边框（`OnPaint`），`CS_DROPSHADOW` 给一点系统投影 |
+| 顶部检索框 | 灰色圆角块（`#F1F3F4`，圆角 6px）里坐一个无边框 `TextBox`，左边画放大镜；有焦点时圆角块描一圈浅蓝（`#AECBFA`）；空的时候用 `EM_SETCUEBANNER` 显示灰色提示「检索部材名（直接打字过滤）」 |
+| 候补一览 | `ListBox`（`DrawMode = OwnerDrawFixed`、`ItemHeight = 30`、白底无边框）：左边灰色编号（1～9，第 10 项 `0`；每页 10 项，编号每页重新开始），右边部材名（有「Yu Gothic UI」就用它，没有退回微软雅黑）；**选中行浅蓝圆角**（`#D2E3FC`，编号变蓝），**悬停行浅灰**（`#F5F7F9`） |
+| 底部状态行 | 一条浅灰分隔线 + 左边「已写入：xxx」（清空这一格时红字）+ 翻页小按钮 `‹` `›` 和页码 `1/3`（到头了变灰）+ 右边灰色按键提示 `1-9 · ↑↓ · Enter` + 关闭按钮 `✕`（扁平、悬停浅灰） |
+| 右下角 | 14×14 的改大小手柄（三个小斜点，光标 ↖↘） |
+
+**窗口操作**：没有标题栏，所以
+
+- **拖动**：按住顶部检索区的空白处（左边放大镜那一带）或底部状态行（`✕` 以外的地方）拖 —— 走 `WM_NCLBUTTONDOWN` + `HTCAPTION`，
+  和拖标题栏一样（双击不会最大化）。
+- **改大小**：拖右下角手柄（最小 `320×400`）；宽度变化时检索框、一览、状态行都跟着变。
+- **键盘焦点**：一直留在检索框里（点候补行 / 翻页按钮后自动还给检索框并全选），所以可以直接接着打字过滤；
+  鼠标停在候补一览上滚滚轮时由消息过滤器把滚轮转给「翻页」（列表本身不拿焦点、也没有滚动条：一页 10 项正好放下）。
+- **`Esc`**：关闭窗口（= 右上角 `✕`；已经写入的值留在主画面单元格里）。
 
 ---
 
@@ -80,7 +113,9 @@
 | **≥ 2 块** | **主画面（Form1）以外的屏幕** —— 不和主画面挤在同一块屏上 | 主画面所在的屏幕 |
 | 1 块 | 工作区**左侧**（约 55%） | 工作区**右侧**（约 45%，不小于 860px） |
 
-- 「主画面」= 本画面的 `Owner`（由 `Form1.ShowPartInfo` 设为 `Form1`）；取不到时退回本画面自己。
+- 「主画面」= `MainWindow`（由 `Form1.ShowPartInfo` 传入 `Form1`，**不设 `Owner`**）；取不到时退回本画面自己。
+- **不设 `Owner`**：Owned 窗口永远浮在 Owner（主画面）之上，会导致本画面「一直保持在主画面前边」。现在点一下主画面即可把它压到后面；关闭主画面时由 `Form1.OnFormClosed` 显式关闭本画面。
+- 本画面自动打开的 PDF 预览窗口不抢焦点；和主画面有重叠时（单屏并排）由 `WindowLayoutHelper.PlaceBehindMainWindowIfOverlapping` 把它插到主画面后面。
 - 详细规则见 `PdfPreviewForm_功能说明.md` 第 3 节。
 
 ---

@@ -104,7 +104,7 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 部材部品マスタ（部材名 → 部品名）索引：给「选择部材名」窗口当候选列表用。
-        /// 第一次点「部材名」单元格时读一次（数据库优先，其次 <c>部材部品\部材部品.csv</c>），之后整画面复用。
+        /// 画面打开时读一次（数据库优先，其次 <c>部材部品\部材部品.csv</c>），之后整画面复用。
         /// </summary>
         private MemberPartCatalog _memberNameCatalog;
 
@@ -257,6 +257,16 @@ namespace MSIFAITOOLS
         {
             get { return _databasePath; }
         }
+
+        /// <summary>
+        /// 主画面（<see cref="Form1"/>）的引用：只用于<b>窗口摆放 / z 顺序</b>判断
+        /// （PDF 预览窗口要避开主画面所在的屏幕），<b>不建立 Owner 关系</b>。
+        /// <para>
+        /// 不能设 <see cref="Form.Owner"/>：Owned 窗口永远浮在 Owner 之上，
+        /// 本画面就会「一直保持在主画面前边」，点主画面也压不下去。
+        /// </para>
+        /// </summary>
+        internal Form MainWindow { get; set; }
 
         /// <summary>
         /// 切换到指定 PDF 对应的部品基本信息（重新从数据库读取），
@@ -1089,6 +1099,9 @@ namespace MSIFAITOOLS
             // 失败只提示，不影响上面的保存结果。
             string ruleMessage = MemberPartCatalogLoader.RegisterRules(parts);
 
+            // 新登录的规则要立刻能出现在「选择部材名」窗口里 → 重新读一次内存里的 部材部品マスタ
+            RefreshMemberNameCatalog();
+
             // 同一个时机，把画面上的「部品名 + 部材名 + 部品コード」登录 / 更新到 MSIF 库的
             // 部材不材 mapping 表（SQL Server 10.103.126.209 / MSIF 的 dbo.DL_BuhinBuzaiMapping，
             // 连接名 connJP2）。表的主键是 BuhinName + BuzaiName，部品CD = 画面上的「部品コード」
@@ -1366,20 +1379,33 @@ namespace MSIFAITOOLS
                 _previewForm.BringToFront();
                 _previewForm.Activate();
             }
+            else
+            {
+                // 自动打开的预览窗口不抢焦点，但也不能一直压在主画面前面：
+                // 和主画面有重叠时把它放到主画面后面（不重叠 = 另一块屏，不动 z 顺序）。
+                WindowLayoutHelper.PlaceBehindMainWindowIfOverlapping(_previewForm, ResolveMainWindowForm());
+            }
         }
 
         /// <summary>
         /// 摆放窗口时用的「主画面」：PDF 预览窗口要避开它所在的屏幕
-        /// （多屏时不要把预览窗口开在主画面所在的那块屏上）。
+        /// （多屏时不要把预览窗口开在主画面所在的那块屏上），并作为 z 顺序的比较对象。
         /// <para>
-        /// 本画面由主画面（<see cref="Form1"/>）打开时 <see cref="Form.Owner"/> 就是它；
-        /// Owner 为空（单独打开 / Owner 已释放）时退回本画面自己 ——
-        /// 预览窗口至少不会和编辑画面挤在同一块屏上。
+        /// 本画面由主画面（<see cref="Form1"/>）打开时用 <see cref="MainWindow"/>；
+        /// 没有设置（单独打开 / 已释放）时退回 <see cref="Form.Owner"/>，
+        /// 两者都没有时退回本画面自己 —— 预览窗口至少不会和编辑画面挤在同一块屏上。
         /// </para>
         /// </summary>
         /// <returns>主画面窗口（一定不为 <c>null</c>）。</returns>
         private Form ResolveMainWindowForm()
         {
+            Form mainWindow = MainWindow;
+
+            if (mainWindow != null && !mainWindow.IsDisposed)
+            {
+                return mainWindow;
+            }
+
             Form owner = Owner;
 
             return owner != null && !owner.IsDisposed ? owner : this;
@@ -2092,6 +2118,11 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 「选择部材名」窗口单击了某一项 / 点了【写入】：立刻把值写进目标单元格
         /// （值没变时不产生「有未保存的修改」；空串 = 清空这一格）。
+        /// <para>
+        /// 写完（值没变也一样）把表格的选择移到<b>下一行的「部材名」</b>，
+        /// 窗口的写入目标跟着换过去（见 <see cref="MoveToNextRowMemberNameCell"/>）——
+        /// 这样按 <c>1</c> / 点候选项就能一行一行往下填。
+        /// </para>
         /// </summary>
         /// <param name="memberName">选中的部材名（或手工输入的内容）。</param>
         private void MemberNamePicker_MemberNamePicked(string memberName)
@@ -2108,34 +2139,118 @@ namespace MSIFAITOOLS
             string selectedValue = memberName == null ? string.Empty : memberName.Trim();
             string currentValue = GetCellText(cell.OwningRow, cell.OwningColumn.Name);
 
-            if (string.Equals(selectedValue, currentValue, StringComparison.Ordinal))
+            if (!string.Equals(selectedValue, currentValue, StringComparison.Ordinal))
             {
-                // 值没变 → 不产生「有未保存的修改」
+                if (dgvParts.IsCurrentCellInEditMode)
+                {
+                    if (ReferenceEquals(dgvParts.CurrentCell, cell))
+                    {
+                        // 正在编辑的就是这一格：先退出编辑，免得编辑框把旧值写回去
+                        dgvParts.CancelEdit();
+                    }
+                    else
+                    {
+                        // 正在编辑别的格子（窗口开着也能改表格）：先把那一格提交，别丢掉用户打的字
+                        try
+                        {
+                            dgvParts.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                        }
+                        catch (Exception)
+                        {
+                            // 提交失败（没有默认处理）时保持原样，继续写「部材名」
+                        }
+                    }
+                }
+
+                cell.Value = selectedValue;
+            }
+            // 值没变时不赋值 → 不产生「有未保存的修改」；但选择照样往下走
+
+            MoveToNextRowMemberNameCell(cell);
+        }
+
+        /// <summary>
+        /// 把表格的选择移到<b>下一行</b>的「部材名」单元格，并把「选择部材名」窗口的写入目标
+        /// 换成这一格（列表里预先选中的值 / 顶部推荐项 = 这一行的部品名 对应的部材名）。
+        /// <para>
+        /// 已经到最后一行（下方没有可见行）时停在原地，不循环、也不自动追加行。
+        /// 只移动选择、不进入编辑：改「部材名」一律走选择窗口。
+        /// </para>
+        /// </summary>
+        /// <param name="cell">刚写完的「部材名」单元格。</param>
+        private void MoveToNextRowMemberNameCell(DataGridViewCell cell)
+        {
+            DataGridViewRow row = cell == null ? null : cell.OwningRow;
+
+            if (row == null || !ReferenceEquals(row.DataGridView, dgvParts))
+            {
                 return;
             }
 
-            if (dgvParts.IsCurrentCellInEditMode)
+            // 往下找第一个「看得见」的行（隐藏的行不能当选中目标）
+            DataGridViewRow nextRow = null;
+
+            for (int index = row.Index + 1; index < dgvParts.Rows.Count; index++)
             {
-                if (ReferenceEquals(dgvParts.CurrentCell, cell))
+                DataGridViewRow candidate = dgvParts.Rows[index];
+
+                if (candidate != null && candidate.Visible)
                 {
-                    // 正在编辑的就是这一格：先退出编辑，免得编辑框把旧值写回去
-                    dgvParts.CancelEdit();
-                }
-                else
-                {
-                    // 正在编辑别的格子（窗口开着也能改表格）：先把那一格提交，别丢掉用户打的字
-                    try
-                    {
-                        dgvParts.CommitEdit(DataGridViewDataErrorContexts.Commit);
-                    }
-                    catch (Exception)
-                    {
-                        // 提交失败（没有默认处理）时保持原样，继续写「部材名」
-                    }
+                    nextRow = candidate;
+                    break;
                 }
             }
 
-            cell.Value = selectedValue;
+            if (nextRow == null)
+            {
+                return;
+            }
+
+            DataGridViewCell nextCell = nextRow.Cells[cell.ColumnIndex];
+
+            if (nextCell == null || nextCell.ReadOnly)
+            {
+                return;
+            }
+
+            SetMemberNamePickerTarget(nextCell, nextRow);
+
+            try
+            {
+                dgvParts.CurrentCell = nextCell;
+            }
+            catch (Exception)
+            {
+                // 该格暂时不能成为当前单元格（例如正在校验）→ 保持原选择，不报错
+            }
+        }
+
+        /// <summary>
+        /// 换「选择部材名」窗口的写入目标：单元格引用记到 <see cref="_memberNamePickerCell"/>，
+        /// 窗口开着时把这一格现在的值和同一行的部品名 一起交给它
+        /// （推荐项 / 预先选中项跟着换；窗口没开就不用管，下次点「部材名」会新建）。
+        /// </summary>
+        /// <param name="cell">新的目标单元格（「部材名」列）。</param>
+        /// <param name="row">该单元格所在行（<c>null</c> 时从单元格取）。</param>
+        private void SetMemberNamePickerTarget(DataGridViewCell cell, DataGridViewRow row)
+        {
+            if (cell == null)
+            {
+                return;
+            }
+
+            _memberNamePickerCell = cell;
+
+            if (_memberNamePicker == null || _memberNamePicker.IsDisposed)
+            {
+                return;
+            }
+
+            DataGridViewRow targetRow = row ?? cell.OwningRow;
+            string currentValue = targetRow == null ? string.Empty : GetCellText(targetRow, cell.OwningColumn.Name);
+            string partName = targetRow == null ? string.Empty : GetCellText(targetRow, PartNameColumnName);
+
+            _memberNamePicker.SetTarget(currentValue, partName);
         }
 
         /// <summary>「选择部材名」窗口关闭后清掉引用（下次点「部材名」会重新创建）。</summary>
@@ -2172,7 +2287,8 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 部材部品マスタ 的索引（部材名 一览 + 每个部材名 下的部品名）：给「部材名」辅助窗口当候选列表用。
-        /// 第一次用到时读一次（数据库优先，其次 <c>部材部品\部材部品.csv</c>），之后整画面复用。
+        /// 画面打开时（<see cref="OnLoad"/>）读一次（数据库优先，其次 <c>部材部品\部材部品.csv</c>），
+        /// 之后整画面复用 —— 打开「选择部材名」窗口时不再读盘。
         /// 读不到时返回 <c>null</c> —— 只是候选列表为空（窗口里仍可手工输入），不弹提示。
         /// </summary>
         private MemberPartCatalog GetMemberNameCatalog()
@@ -2204,6 +2320,18 @@ namespace MSIFAITOOLS
             }
 
             return _memberNameCatalog;
+        }
+
+        /// <summary>
+        /// 部材部品 表更新后（保存时登录了新规则）重新读一次内存里的索引，
+        /// 让「选择部材名」窗口立刻能选到新登录的部材名（读不到时只是候补变少，不弹提示）。
+        /// </summary>
+        private void RefreshMemberNameCatalog()
+        {
+            _memberNameCatalogLoaded = false;
+            _memberNameCatalog = null;
+
+            GetMemberNameCatalog();
         }
 
         /// <summary>单元格内容变化时：刷新行颜色、统计与未保存标记。</summary>
@@ -2314,6 +2442,38 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
+        /// 画面打开时把「选择部材名」窗口要用的数据<b>一次性</b>读进内存：
+        /// ① 部材名置换表（SQL Server 的 <c>genpin.dbo.T_M_MergeName</c>；程序启动时已经预读过，
+        ///    这里只在启动时没读成功的情况下用短超时补读一次）；
+        /// ② 部材部品マスタ（SQLite「部材部品」表里的部材名 一览）。
+        /// 之后点「部材名」单元格只是内存查找，不会再连数据库 / 读盘。
+        /// </summary>
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+
+            PreloadMemberNamePickerData();
+        }
+
+        /// <summary>
+        /// 预读「选择部材名」窗口的数据（置换表 + 部材部品マスタ）。失败只影响候选项，不弹提示。
+        /// </summary>
+        private void PreloadMemberNamePickerData()
+        {
+            try
+            {
+                MemberNameReplacementCatalog.EnsurePreloaded();
+            }
+            catch (Exception)
+            {
+                // 置换表读不到只影响推荐项（原因记在 MemberNameReplacementCatalog.LastError）
+            }
+
+            // 部材部品マスタ：读不到时 GetMemberNameCatalog 返回 null（窗口里只是候补为空，可以手工输入）
+            GetMemberNameCatalog();
+        }
+
+        /// <summary>
         /// 窗口显示后与部品基本信息画面同时打开 PDF 预览窗口：
         /// PDF 预览 → 主画面以外的屏幕（不占用主画面所在的那块屏），
         /// 部品基本信息 → 主画面所在的屏幕（只有 1 块屏幕时左右并排）。
@@ -2322,16 +2482,22 @@ namespace MSIFAITOOLS
         {
             base.OnShown(e);
 
-            if (!_openPreviewOnShown)
+            if (_openPreviewOnShown)
             {
-                return;
+                _openPreviewOnShown = false;
+                ShowPreviewWindow(false);
+
+                // 自动打开的预览窗口不抢焦点，焦点留在编辑画面
+                Activate();
             }
 
-            _openPreviewOnShown = false;
-            ShowPreviewWindow(false);
-
-            // 自动打开的预览窗口不抢焦点，焦点留在编辑画面
-            Activate();
+            // 兜底：没有打开预览窗口（例如 PDF 不存在，ShowPreviewWindow 提前返回）时也按屏幕摆一次。
+            // 本画面已不再设 Owner，设计器的 CenterParent 失去参照，不摆的话窗口会跑到左上角。
+            if (!_editorPlaced)
+            {
+                _editorPlaced = true;
+                WindowLayoutHelper.ArrangeEditor(this, ResolveMainWindowForm());
+            }
         }
 
         /// <summary>关闭本画面时一并关闭 PDF 预览窗口，释放文件句柄。</summary>

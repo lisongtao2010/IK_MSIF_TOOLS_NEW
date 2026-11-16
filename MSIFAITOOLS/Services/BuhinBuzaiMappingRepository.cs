@@ -229,6 +229,78 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
+        /// 【测试连接】：真的连一次库，并检查表 <see cref="TableName"/> 是否存在
+        /// （表不存在也算连上了，只是结果文字里提示确认 DB 名）。
+        /// <para>
+        /// 主画面【接続② MSIF】的连接设置画面用它；<see cref="MemberNameReplacementRepository.TestConnection"/>
+        /// 是 <c>connJP1</c>（置换表）那一侧的同样功能。
+        /// </para>
+        /// </summary>
+        /// <param name="settings">要测试的连接信息。</param>
+        /// <param name="message">结果文字（成功 / 失败原因）。</param>
+        public static bool TestConnection(MemberMappingDbSettings settings, out string message)
+        {
+            message = string.Empty;
+
+            if (settings == null)
+            {
+                message = "连接信息不能为空。";
+                return false;
+            }
+
+            string validationError;
+
+            if (!settings.Validate(out validationError))
+            {
+                message = validationError;
+                return false;
+            }
+
+            try
+            {
+                using (SqlConnection connection = new SqlConnection(settings.BuildConnectionString()))
+                {
+                    connection.Open();
+
+                    bool tableExists;
+                    int rowCount = 0;
+
+                    using (SqlCommand command = new SqlCommand(
+                        "SELECT CASE WHEN OBJECT_ID(@name, N'U') IS NULL THEN 0 ELSE 1 END;", connection))
+                    {
+                        command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value =
+                            SchemaName + "." + TableName;
+                        object value = command.ExecuteScalar();
+                        tableExists = value != null && value != DBNull.Value && Convert.ToInt32(value) != 0;
+                    }
+
+                    if (tableExists)
+                    {
+                        using (SqlCommand command = new SqlCommand(
+                            "SELECT COUNT(*) FROM " + QualifiedTableName + ";", connection))
+                        {
+                            object value = command.ExecuteScalar();
+                            rowCount = value == null || value == DBNull.Value ? -1 : Convert.ToInt32(value);
+                        }
+                    }
+
+                    message = tableExists
+                        ? "连接成功：" + settings.DescribeTarget() + " / 表 " + SchemaName + "." + TableName +
+                          "（现有 " + rowCount + " 行）"
+                        : "连接成功，但库 " + settings.Database + " 里没有表 " + SchemaName + "." + TableName +
+                          "。请确认 DB 名（部材不材 mapping 在 MSIF 库）以及该表是否存在。";
+
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                message = "连接失败：" + ex.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 部品基本信息画面【保存】时调用：把画面上这一批行的「部品名 / 部材名 / 部品コード」
         /// 登录 / 更新到部材不材 mapping 表（<see cref="TableName"/>）。
         /// <para>

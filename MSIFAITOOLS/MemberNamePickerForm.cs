@@ -17,23 +17,40 @@ namespace MSIFAITOOLS
     /// 点「部材名」单元格时打开，做成输入法候选面板那样——只有一列部材名，前面带编号。
     ///
     /// <para>
+    /// <b>外观</b>（<c>MemberNamePickerForm.Style.cs</c>）：贴近 Google 日语输入法的候补面板——
+    /// 无标题栏的白色浮窗（1px 细边框 + 系统投影）、顶部灰色圆角检索框（放大镜 + 灰色提示文字）、
+    /// 中间是带编号的部材名一览（选中行浅蓝、悬停行浅灰）、底部一行状态和关闭。
+    /// 拖动窗口 = 按住检索框 / 底部空白处拖；改大小 = 拖右下角的手柄。
+    /// </para>
+    ///
+    /// <para>
     /// <b>非模态</b>：窗口打开期间主画面照常操作（改别的格子、换行、看图纸），不会被挡住；
     /// 窗口跟着主画面一起关闭。
     /// </para>
     ///
     /// <para>
-    /// <b>按编号写入</b>：候选项前面都带编号（1～9，第 10 项是 0），
+    /// <b>按编号写入 / 分页</b>：候选项前面都带编号（1～9，第 10 项是 0），
     /// 直接按数字键就把对应编号的部材名写进主画面当前的「部材名」单元格
     /// （触发 <see cref="MemberNamePicked"/>；单元格原来的 <c>|</c> 多值会被整体替换）。
-    /// 鼠标单击哪一项也一样；第 11 项以后没有编号，只能单击。
+    /// 鼠标单击哪一项也一样。
+    /// </para>
+    ///
+    /// <para>
+    /// <b>每页 10 项</b>：数字键只有 1～9 和 0，所以一页固定显示 10 项，编号每页都从 1 重新开始，
+    /// 第 11 项以后翻到下一页（<c>PageUp</c> / <c>PageDown</c>、<c>↑</c> 到页首再按一次 / <c>↓</c> 到页尾再按一次、
+    /// 鼠标滚轮、底部「‹ 1/3 ›」按钮）。过滤条件一变就回到第 1 页，
+    /// 所以按 <c>1</c> 永远是当前页的第 1 项（打开窗口时就是置换表的推荐项）。
     /// </para>
     ///
     /// <para>
     /// <b>候选顺序</b>：
     /// ① 这一行的「部品名」在置换表（SQL Server 表 <c>genpin.dbo.T_M_MergeName</c>，
     ///    <c>MsifDevName</c> = 取得的词）里对应的「置换后」（<c>GenpinName</c>）——排最前，按 1 就是它；
+    ///    置换表在程序启动 / 主画面打开时已经整表读进内存（<see cref="MemberNameReplacementCatalog"/>），
+    ///    点「部材名」时<b>只查内存，不连数据库</b>；
     /// ② 「部材名」单元格现在的值（拆开 <c>|</c>，方便改回原值）；
-    /// ③ 部材部品マスタ（<see cref="MemberPartCatalog.MemberNames"/>）里的部材名 一览。
+    /// ③ 部材部品マスタ（<see cref="MemberPartCatalog.MemberNames"/>）里的部材名 一览
+    ///    （同样在主画面打开时读好，窗口打开时不再读盘）。
     /// </para>
     ///
     /// <para>
@@ -51,23 +68,35 @@ namespace MSIFAITOOLS
         /// <summary>拆分原值时认可的竖线：半角 <c>|</c> 与全角 <c>｜</c>（老数据 / 手打时两种都有）。</summary>
         private static readonly char[] ValueSeparators = new char[] { Separator, '｜' };
 
-        /// <summary>能用数字键选的最多项数（1～9）。</summary>
+        /// <summary>能用数字键选的最多项数（1～9；第 10 项用 <c>0</c>）。</summary>
         private const int MaxShortcutNumber = 9;
 
-        /// <summary>没有数字快捷键的行用的对齐空白（约等于「编号 + 2 个半角空格」的宽度）。</summary>
-        private const string NumberPadding = "    ";
+        /// <summary>
+        /// 一页最多显示几项：数字键只有 <c>1</c>～<c>9</c> 和 <c>0</c>（10 个），
+        /// 所以一页固定 10 项，编号每页都从 <c>1</c> 重新开始。
+        /// </summary>
+        private const int PageSize = MaxShortcutNumber + 1;
 
-        /// <summary>「已写入」那行文字的正常颜色。</summary>
-        private static readonly Color PreviewNormalColor = Color.FromArgb(52, 73, 94);
+        /// <summary>「已写入」那行文字的正常颜色（Google 输入法面板的灰字）。</summary>
+        private static readonly Color PreviewNormalColor = Color.FromArgb(95, 99, 104);
 
         /// <summary>「已写入」那行文字在值为空（清空了单元格）时的颜色。</summary>
-        private static readonly Color PreviewEmptyColor = Color.FromArgb(198, 40, 40);
+        private static readonly Color PreviewEmptyColor = Color.FromArgb(217, 48, 37);
 
         /// <summary>
         /// 全部候选项（置换表的推荐项在前，其次是这一格现在的值，最后是部材部品マスタ 的部材名；
         /// 去重后保持这个顺序）。
         /// </summary>
         private readonly List<string> _items = new List<string>();
+
+        /// <summary>
+        /// 按过滤关键字筛出来的候选项（<see cref="_items"/> 的子集，顺序不变）——
+        /// 分页就是按这一份切成每页 <see cref="PageSize"/> 项。
+        /// </summary>
+        private readonly List<string> _filtered = new List<string>();
+
+        /// <summary>现在显示的是第几页（从 0 开始；0 = 前 10 项）。</summary>
+        private int _pageIndex;
 
         /// <summary>部材部品マスタ（可能为 <c>null</c>：候选列表只剩推荐项和原值）。</summary>
         private readonly MemberPartCatalog _catalog;
@@ -87,29 +116,16 @@ namespace MSIFAITOOLS
         private string _partName = string.Empty;
 
         /// <summary>
-        /// 部品名 → 部材名 的查询结果缓存（键 = 部品名，Ordinal）：
-        /// 主画面在同一个部品名 上反复点「部材名」时不再重复连 SQL Server。
-        /// 查询失败的结果<b>不</b>缓存（下次点还会再试一次）。
+        /// 部品名 → 部材名 的推荐项（由 <see cref="MemberNameReplacementCatalog.GetTargets"/> 从内存里查；
+        /// 主画面打开时置换表已经整表读进内存，点「部材名」时<b>不连数据库</b>）。
         /// </summary>
-        private readonly Dictionary<string, string[]> _mappingCache =
-            new Dictionary<string, string[]>(StringComparer.Ordinal);
-
-        /// <summary>置换表查到的推荐项（<c>GenpinName</c>；按部品名 查不到时为空数组）。</summary>
         private string[] _mappingTargets = new string[0];
 
-        /// <summary>置换表查询失败的原因（成功时为空串；只写在状态行，不弹窗）。</summary>
+        /// <summary>置换表没读进内存的原因（成功时为空串；只写在状态行，不弹窗）。</summary>
         private string _mappingError = string.Empty;
 
         /// <summary>输入框上的操作提示（编号键 / Enter 的用法）。</summary>
         private readonly ToolTip _hintToolTip = new ToolTip();
-
-        /// <summary>
-        /// 「选择部材名」窗口查置换表用的连接超时（秒）：交互画面里连不上时不要像维护画面那样等满 15 秒。
-        /// </summary>
-        private const int MappingConnectTimeoutSeconds = 3;
-
-        /// <summary>连接信息（第一次查置换表时解析一次，之后复用；还没解析时为 <c>null</c>）。</summary>
-        private MemberMappingDbSettings _mappingSettings;
 
         public MemberNamePickerForm()
             : this(null, string.Empty)
@@ -142,7 +158,10 @@ namespace MSIFAITOOLS
             _partName = partName == null ? string.Empty : partName.Trim();
 
             _hintToolTip.SetToolTip(txtFilter,
-                "输入关键字过滤部材名；按 1～9（0 = 第 10 项）直接写入；↑↓ 换候选项，Enter 写入。");
+                "输入关键字过滤部材名；按 1～9（0 = 第 10 项）直接写入；↑↓ 换候选项，Enter 写入。\n" +
+                "一页 10 项：PageUp / PageDown（或 ↑↓ 走到页首 / 页尾、鼠标滚轮、底部 ‹ ›）翻页。");
+            _hintToolTip.SetToolTip(btnPrevPage, "上一页（PageUp / 滚轮往上 / 在页首再按 ↑）");
+            _hintToolTip.SetToolTip(btnNextPage, "下一页（PageDown / 滚轮往下 / 在页尾再按 ↓）");
 
             LoadMappingTargets();
             LoadItems();
@@ -162,7 +181,7 @@ namespace MSIFAITOOLS
         /// <param name="currentValue">目标单元格当前的值（可为 <c>null</c>）。</param>
         public void SetCurrentValue(string currentValue)
         {
-            // 只换写入目标、部品名不变（推荐项按同一个部品名 重新查一次，命中缓存时是零开销）
+            // 只换写入目标、部品名不变（推荐项按同一个部品名 从内存里的置换表再取一次，零开销）
             SetTarget(currentValue, _partName);
         }
 
@@ -185,10 +204,11 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 按 <see cref="_partName"/> 去置换表（SQL Server 表 <c>genpin.dbo.T_M_MergeName</c> 的
-        /// <c>MsifDevName</c>）查 <c>GenpinName</c>，结果放进 <see cref="_mappingTargets"/>，
-        /// 由 <see cref="LoadItems"/> 排成第 1 号候选；查不到 / 连不上只记在 <see cref="_mappingError"/>，
-        /// 不弹窗、不影响下面的候选列表。
+        /// 按 <see cref="_partName"/> 从<b>内存里</b>的置换表（<see cref="MemberNameReplacementCatalog"/>，
+        /// 程序启动 / 主画面打开时整表读好的 <c>genpin.dbo.T_M_MergeName</c>）取推荐项放进
+        /// <see cref="_mappingTargets"/>，由 <see cref="LoadItems"/> 排成第 1 号候选。
+        /// <b>不连数据库</b>：打开窗口、换行都只是内存查找，所以是瞬间的；
+        /// 置换表没读进内存时只记在 <see cref="_mappingError"/>（状态行提示），不弹窗。
         /// </summary>
         private void LoadMappingTargets()
         {
@@ -200,105 +220,38 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            string[] targets;
-            string error;
-
-            if (!TryQueryMapping(_partName, out targets, out error))
+            if (!MemberNameReplacementCatalog.IsLoaded)
             {
-                _mappingError = error == null ? string.Empty : error;
+                // 启动时没连上置换表（主画面打开时补读也失败）→ 没有推荐项，但仍然可以用下面的候选
+                _mappingError = MemberNameReplacementCatalog.LastError;
 
                 return;
             }
 
-            _mappingTargets = targets;
+            IList<string> targets = MemberNameReplacementCatalog.GetTargets(_partName);
+
+            _mappingTargets = new List<string>(targets).ToArray();
         }
 
         /// <summary>
-        /// 按部品名 查置换表里的部材名（带缓存；<b>失败不缓存</b> → 下次点还会再试）。
-        /// </summary>
-        /// <param name="partName">部品名（非空）。</param>
-        /// <param name="targets">命中的部材名（已排序；没有时为空数组）。</param>
-        /// <param name="error">查询失败的原因（成功时为 <c>null</c>）。</param>
-        /// <returns>true = 查询成功（可能有 0 条）；false = 连接 / SQL 出错。</returns>
-        private bool TryQueryMapping(string partName, out string[] targets, out string error)
-        {
-            targets = new string[0];
-            error = null;
-
-            string[] cached;
-
-            if (_mappingCache.TryGetValue(partName, out cached))
-            {
-                targets = cached;
-
-                return true;
-            }
-
-            try
-            {
-                using (MemberNameReplacementRepository repository =
-                    new MemberNameReplacementRepository(ResolveMappingSettings()))
-                {
-                    IList<string> found = repository.QueryTargets(partName);
-                    targets = new List<string>(found).ToArray();
-                }
-            }
-            catch (Exception ex)
-            {
-                error = ex.Message;
-
-                return false;
-            }
-
-            _mappingCache[partName] = targets;
-
-            return true;
-        }
-
-        /// <summary>
-        /// 查置换表用的连接信息（窗口生命周期内只解析一次）：超时改成
-        /// <see cref="MappingConnectTimeoutSeconds"/>，服务器不可达时画面只卡几秒。
-        /// </summary>
-        private MemberMappingDbSettings ResolveMappingSettings()
-        {
-            MemberMappingDbSettings settings = _mappingSettings;
-
-            if (settings != null)
-            {
-                return settings;
-            }
-
-            MemberMappingDbSettings resolved = MemberMappingDbSettingsStore.ResolveJp1();
-
-            settings = new MemberMappingDbSettings(resolved.Server, resolved.Port, resolved.Database,
-                resolved.UserId, resolved.Password, resolved.ConfigurationSource, MappingConnectTimeoutSeconds,
-                resolved.ConnectionName);
-            _mappingSettings = settings;
-
-            return settings;
-        }
-
-        /// <summary>
-        /// 按编号写入（<c>1</c>～<c>9</c> → 第 1～9 项，<c>0</c> → 第 10 项）：
-        /// 编号对得上当前列表时就写入并返回 true；没有这一项时返回 false（这次按键当普通输入处理）。
+        /// 按编号写入（<c>1</c>～<c>9</c> → 这一页的第 1～9 项，<c>0</c> → 这一页的第 10 项）：
+        /// 编号对得上当前页时就写入并返回 true；这一页没有这一项时返回 false（这次按键当普通输入处理）。
         /// </summary>
         /// <param name="number">数字键的数值（0～9）。</param>
-        /// <returns>true = 已写入；false = 列表里没有这个编号的项。</returns>
+        /// <returns>true = 已写入；false = 这一页没有这个编号的项。</returns>
         private bool PickByNumber(int number)
         {
             int index = number == 0 ? MaxShortcutNumber : number - 1;
 
-            if (index < 0 || index >= lvNames.Items.Count)
+            if (index < 0 || index >= lstNames.Items.Count)
             {
                 return false;
             }
 
-            ListViewItem row = lvNames.Items[index];
-            row.Selected = true;
-            row.Focused = true;
-            row.EnsureVisible();
+            lstNames.SelectedIndex = index;
+            EnsureRowVisible(index);
 
-            Pick(GetItemValue(row));
+            Pick(GetItemValue(lstNames.Items[index]));
 
             return true;
         }
@@ -309,9 +262,9 @@ namespace MSIFAITOOLS
         /// </summary>
         private void Commit()
         {
-            if (lvNames.SelectedItems.Count > 0)
+            if (lstNames.SelectedIndex >= 0 && lstNames.SelectedIndex < lstNames.Items.Count)
             {
-                Pick(GetItemValue(lvNames.SelectedItems[0]));
+                Pick(GetItemValue(lstNames.Items[lstNames.SelectedIndex]));
 
                 return;
             }
@@ -431,113 +384,195 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 按过滤关键字重建列表（关键字为空时显示全部候选项），每一行前面加上编号；
-        /// 重建后选中目标单元格现在的值，并让列宽跟着窗口走。
+        /// 按过滤关键字重新筛候选项（关键字为空时就是全部），然后从第 1 页开始显示；
+        /// 编号只是画出来的（页内第几项 = 数字键几），列表里存的始终是部材名本身。
         /// </summary>
         private void ApplyFilter(string keyword)
         {
             string filter = keyword == null ? string.Empty : keyword.Trim();
             string filterKey = MemberPartCatalogLoader.NormalizeKey(filter);
 
-            lvNames.BeginUpdate();
+            _filtered.Clear();
+
+            foreach (string item in _items)
+            {
+                if (filterKey.Length > 0 &&
+                    MemberPartCatalogLoader.NormalizeKey(item).IndexOf(filterKey, StringComparison.Ordinal) < 0)
+                {
+                    continue;
+                }
+
+                _filtered.Add(item);
+            }
+
+            // 过滤条件一变就回到第 1 页：按 1 永远是这一页的第 1 号候选，不会因为停留在别的页而错位
+            _pageIndex = 0;
+
+            ShowPage();
+        }
+
+        /// <summary>一共几页（至少 1 页：没有候选项时显示「1/1」）。</summary>
+        private int PageCount
+        {
+            get
+            {
+                int pages = (_filtered.Count + PageSize - 1) / PageSize;
+
+                return pages < 1 ? 1 : pages;
+            }
+        }
+
+        /// <summary>
+        /// 把当前页的候选项放进列表（最多 <see cref="PageSize"/> 项），并刷新底部的页码和翻页按钮。
+        /// 编号是<b>页内编号</b>：每页都从 1 开始（第 10 项是 0），所以数字键永远对应看得见的这 10 项。
+        /// </summary>
+        private void ShowPage()
+        {
+            int pages = PageCount;
+
+            if (_pageIndex >= pages)
+            {
+                _pageIndex = pages - 1;
+            }
+
+            if (_pageIndex < 0)
+            {
+                _pageIndex = 0;
+            }
+
+            int start = _pageIndex * PageSize;
+
+            lstNames.BeginUpdate();
 
             try
             {
-                lvNames.Items.Clear();
+                lstNames.Items.Clear();
 
-                foreach (string item in _items)
+                // 换页时把上一页的选中项清掉（否则 SelectedIndex 会留在同一个行号上，看着像选中了别的项）
+                lstNames.SelectedIndex = -1;
+                _hoverIndex = -1;
+
+                for (int index = start; index < _filtered.Count && index < start + PageSize; index++)
                 {
-                    if (filterKey.Length > 0 &&
-                        MemberPartCatalogLoader.NormalizeKey(item).IndexOf(filterKey, StringComparison.Ordinal) < 0)
-                    {
-                        continue;
-                    }
-
-                    ListViewItem row = new ListViewItem(NumberPrefix(lvNames.Items.Count) + item);
-                    row.Tag = item;
-                    lvNames.Items.Add(row);
+                    lstNames.Items.Add(_filtered[index]);
                 }
             }
             finally
             {
-                lvNames.EndUpdate();
-                AdjustColumnWidth();
+                lstNames.EndUpdate();
             }
+
+            // 每页不超过 10 项，列表高度够放（最小窗口也放得下）→ 不需要滚动
+            lstNames.TopIndex = 0;
+
+            lblPage.Text = (_pageIndex + 1).ToString() + "/" + pages.ToString();
+            btnPrevPage.Enabled = _pageIndex > 0;
+            btnNextPage.Enabled = _pageIndex < pages - 1;
 
             SelectCurrentValue();
         }
 
         /// <summary>
-        /// 第 <paramref name="index"/> 项（从 0 开始）前面的编号文字：
-        /// 前 9 项是 <c>1</c>～<c>9</c>，第 10 项是 <c>0</c>，再往后没有快捷键、只留对齐的空白。
+        /// 翻页（<c>PageUp</c> / <c>PageDown</c>、<c>↑</c> 到页首 / <c>↓</c> 到页尾时，鼠标滚轮、底部 ‹ ›）。
+        /// 翻过去之后选中项落在新页的第 1 项（往下翻）/ 最后一项（往上翻），
+        /// 这样接着按 <c>↑</c> <c>↓</c> 的方向感不会断。
         /// </summary>
-        /// <param name="index">这一项在列表里的位置（从 0 开始）。</param>
-        /// <returns>宽度一致的前缀（编号 + 2 个半角空格，或等宽的对齐空白）。</returns>
-        private static string NumberPrefix(int index)
+        /// <param name="delta">-1 = 上一页，+1 = 下一页。</param>
+        /// <returns>true = 真的翻页了（已经到第一页 / 最后一页时返回 false，什么都不做）。</returns>
+        private bool ChangePage(int delta)
+        {
+            if (delta == 0)
+            {
+                return false;
+            }
+
+            int target = _pageIndex + delta;
+
+            if (target < 0 || target >= PageCount)
+            {
+                return false;
+            }
+
+            _pageIndex = target;
+            ShowPage();
+
+            if (lstNames.Items.Count == 0)
+            {
+                return true;
+            }
+
+            // 往下翻选这一页的第 1 项、往上翻选最后一项（不沿用「目标格现在的值」的选中，
+            // 那个只在打开窗口 / 改过滤条件时用，翻页时按方向走更顺）
+            lstNames.SelectedIndex = delta > 0 ? 0 : lstNames.Items.Count - 1;
+            EnsureRowVisible(lstNames.SelectedIndex);
+
+            return true;
+        }
+
+        /// <summary>底部【‹】：上一页（和 PageUp / 滚轮往上一样）。</summary>
+        private void BtnPrevPage_Click(object sender, EventArgs e)
+        {
+            ChangePage(-1);
+            txtFilter.Focus();
+            txtFilter.SelectAll();
+        }
+
+        /// <summary>底部【›】：下一页（和 PageDown / 滚轮往下一样）。</summary>
+        private void BtnNextPage_Click(object sender, EventArgs e)
+        {
+            ChangePage(1);
+            txtFilter.Focus();
+            txtFilter.SelectAll();
+        }
+
+        /// <summary>
+        /// 这一页里第 <paramref name="index"/> 项（从 0 开始）前面的编号：
+        /// 前 9 项是 <c>1</c>～<c>9</c>，第 10 项是 <c>0</c>（一页正好 10 项，所以每项都有编号）。
+        /// </summary>
+        /// <param name="index">这一项在<b>当前页</b>里的位置（从 0 开始）。</param>
+        /// <returns>编号文字。</returns>
+        private static string ShortcutNumber(int index)
         {
             if (index < MaxShortcutNumber)
             {
-                return (index + 1).ToString() + "  ";
+                return (index + 1).ToString();
             }
 
             if (index == MaxShortcutNumber)
             {
-                return "0  ";
+                return "0";
             }
 
-            return NumberPadding;
+            return string.Empty;
         }
 
-        /// <summary>让唯一的那一列铺满列表宽度（窗口拉宽 / 缩窄、出现滚动条时都跟着变）。</summary>
-        private void AdjustColumnWidth()
+        /// <summary>取一项对应的部材名（列表里存的就是部材名本身）。</summary>
+        /// <param name="item">列表项。</param>
+        private static string GetItemValue(object item)
         {
-            int width = lvNames.ClientSize.Width - 4;
+            string value = item as string;
 
-            if (width > 80 && colMemberName.Width != width)
-            {
-                colMemberName.Width = width;
-            }
-        }
-
-        /// <summary>列表宽度变了 → 列宽跟着变。</summary>
-        private void LvNames_Resize(object sender, EventArgs e)
-        {
-            AdjustColumnWidth();
-        }
-
-        /// <summary>取一行对应的部材名（真实值放在 <c>Tag</c> 里，行文字前面带编号）。</summary>
-        private static string GetItemValue(ListViewItem row)
-        {
-            if (row == null)
-            {
-                return string.Empty;
-            }
-
-            string value = row.Tag as string;
-
-            return value == null ? row.Text : value;
+            return value ?? string.Empty;
         }
 
         /// <summary>
-        /// 把列表里等于目标单元格当前值的那一项选中（没有相同项时清空选择）。
-        /// <b>不滚动</b>列表：列表顶部始终是第 1 号候选，数字键和编号才对得上。
+        /// 把<b>这一页</b>里等于目标单元格当前值的那一项选中（这一页没有它就清空选择）。
+        /// 不滚动列表：列表顶部始终是这一页的第 1 号候选，数字键和编号才对得上。
         /// </summary>
         private void SelectCurrentValue()
         {
-            lvNames.SelectedItems.Clear();
+            lstNames.ClearSelected();
 
             if (_currentValue.Length == 0)
             {
                 return;
             }
 
-            foreach (ListViewItem row in lvNames.Items)
+            for (int index = 0; index < lstNames.Items.Count; index++)
             {
-                string item = row.Tag as string;
-
-                if (item != null && string.Equals(item, _currentValue, StringComparison.Ordinal))
+                if (string.Equals(GetItemValue(lstNames.Items[index]), _currentValue, StringComparison.Ordinal))
                 {
-                    row.Selected = true;
+                    lstNames.SelectedIndex = index;
 
                     return;
                 }
@@ -585,27 +620,27 @@ namespace MSIFAITOOLS
         /// 单击列表里的一项 = 直接把这个部材名 写进主画面（不用复选框、也不用再点确定）。
         /// 同一项再点一次也会重新写入（改回原来的值很方便）；写完把焦点还给输入框，可以接着打字过滤。
         /// </summary>
-        private void LvNames_MouseClick(object sender, MouseEventArgs e)
+        private void LstNames_MouseClick(object sender, MouseEventArgs e)
         {
-            ListViewItem row = lvNames.GetItemAt(e.X, e.Y);
+            int index = lstNames.IndexFromPoint(e.Location);
 
-            if (row == null)
+            if (index < 0 || index >= lstNames.Items.Count)
             {
                 return;
             }
 
             // 让这一行处于选中状态，用户能看清刚写进去的是哪一项
-            row.Selected = true;
-            row.Focused = true;
+            lstNames.SelectedIndex = index;
 
-            Pick(GetItemValue(row));
+            Pick(GetItemValue(lstNames.Items[index]));
 
             txtFilter.Focus();
             txtFilter.SelectAll();
         }
 
         /// <summary>
-        /// 键盘：<c>1</c>～<c>9</c> / <c>0</c> 按编号写入，<c>↑</c> / <c>↓</c> 换候选项，<c>Enter</c> 写入。
+        /// 键盘：<c>1</c>～<c>9</c> / <c>0</c> 按编号写入（当前页），<c>↑</c> / <c>↓</c> 换候选项（到页首 / 页尾再按就翻页），
+        /// <c>PageUp</c> / <c>PageDown</c> 翻页，<c>Enter</c> 写入。
         /// 按住 <c>Ctrl</c> 的数字不拦截（想把它当关键字打进输入框时用）。
         /// </summary>
         /// <param name="msg">要处理的 Windows 消息。</param>
@@ -613,7 +648,7 @@ namespace MSIFAITOOLS
         /// <returns>true = 已经处理掉（不要再交给控件）。</returns>
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            bool inPicker = txtFilter.Focused || lvNames.Focused;
+            bool inPicker = txtFilter.Focused || lstNames.Focused;
 
             if (!inPicker || (keyData & (Keys.Control | Keys.Alt)) != 0)
             {
@@ -625,6 +660,13 @@ namespace MSIFAITOOLS
             if (keyCode == Keys.Enter)
             {
                 Commit();
+
+                return true;
+            }
+
+            if (keyCode == Keys.PageUp || keyCode == Keys.PageDown)
+            {
+                ChangePage(keyCode == Keys.PageDown ? 1 : -1);
 
                 return true;
             }
@@ -664,31 +706,42 @@ namespace MSIFAITOOLS
             return -1;
         }
 
-        /// <summary>在列表里上下移动选中项（在输入框里按 <c>↑</c> / <c>↓</c> 时用）。</summary>
+        /// <summary>
+        /// 在列表里上下移动选中项（在输入框里按 <c>↑</c> / <c>↓</c> 时用）；
+        /// 已经在页首再按 <c>↑</c> → 翻到上一页的最后一项，页尾再按 <c>↓</c> → 翻到下一页的第 1 项。
+        /// </summary>
         /// <param name="delta">+1 = 下一项，-1 = 上一项。</param>
         private void MoveSelection(int delta)
         {
-            if (lvNames.Items.Count == 0)
+            if (lstNames.Items.Count == 0)
             {
+                // 这一页没有候选项（过滤后为空）→ 按方向翻页（到头了什么都不做）
+                ChangePage(delta);
+
                 return;
             }
 
-            int current = lvNames.FocusedItem == null ? -1 : lvNames.FocusedItem.Index;
+            int current = lstNames.SelectedIndex;
             int next = current < 0
-                ? (delta > 0 ? 0 : lvNames.Items.Count - 1)
+                ? (delta > 0 ? 0 : lstNames.Items.Count - 1)
                 : current + delta;
 
-            if (next < 0 || next >= lvNames.Items.Count)
+            if (next < 0)
             {
+                ChangePage(-1);
+
                 return;
             }
 
-            lvNames.SelectedItems.Clear();
+            if (next >= lstNames.Items.Count)
+            {
+                ChangePage(1);
 
-            ListViewItem row = lvNames.Items[next];
-            row.Selected = true;
-            row.Focused = true;
-            row.EnsureVisible();
+                return;
+            }
+
+            lstNames.SelectedIndex = next;
+            EnsureRowVisible(next);
         }
 
         /// <summary>【关闭】：关掉本窗口（已经写入的值留在主画面的单元格里）。</summary>
