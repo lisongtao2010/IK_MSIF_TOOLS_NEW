@@ -49,7 +49,12 @@ namespace MSIFAITOOLS.Services
         {
             get
             {
-                return _label.Length > 0 ? _label : string.Format("第 {0} 步 · {1}", Number, Name);
+                string chinese = _label.Length > 0
+                    ? _label
+                    : string.Format("第 {0} 步 · {1}", Number, Name);
+
+                // 中日双语：步骤名也跟主画面的语言一起切换（对照表见 UiText.Japanese.cs）
+                return UiText.Translate(chinese);
             }
         }
 

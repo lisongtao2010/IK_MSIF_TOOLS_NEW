@@ -1,19 +1,29 @@
-# AI 分析（部材名 AI 推荐）功能说明
+# AI 分析 功能说明（2026-11 改版：只剩特注品数量设定）
+
+> **⚠ 2026-11 变更：部材名 AI 推荐机能已删除。**
+> 主界面【AI 分析】按钮现在**只做特注品记录的数量设定**（见第 18 章，代码 `Services\SpecialProductQuantityAdvisor.cs`）：
+> 不再调用 AI 判断部材名，不再写「部材名AI推荐」列，部品基本信息画面也不再表示这一列
+> （`Services\MemberNameAiAdvisor.cs` / `Services\MemberNamePromptStore.cs` / `Prompts\MemberNameAdvisor.Prompt.txt` 已删除）。
+> **第 1 ~ 17 章是删除前的历史存档**（描述的是「部材名 AI 推荐」），仅作追溯用，不要按它理解现在的行为。
 
 > 所属项目：`MSIFAITOOLS`（.NET Framework 4.8 / WinForms / x64）
-> 源文件：`Form1.cs`（`BtnAiAnalyze_Click`）、`Services\MemberNameAiAdvisor.cs`、
-> `Services\MemberPartCatalog.cs`、`Services\MemberPartRepository.cs`、
-> `Services\MemberNamePromptStore.cs`、`Services\ChatCompletionClient.cs`、
-> `Services\AiApiOptions.cs`、`Services\PartBasicInfoRepository.cs`、`Services\PartsInfoIndex.cs`
-> 追加机能（特注品数量设定）：`Services\SpecialProductQuantityAdvisor.cs`、
-> `Services\SpecialProductQuantityPromptStore.cs`
-> 提示词：`Prompts\MemberNameAdvisor.Prompt.txt`、`Prompts\SpecialProductQuantityAdvisor.Prompt.txt`
+> 源文件（现行）：`Form1.cs`（`BtnAiAnalyze_Click`）、`Services\SpecialProductQuantityAdvisor.cs`、
+> `Services\SpecialProductQuantityPromptStore.cs`、`Services\ChatCompletionClient.cs`、
+> `Services\AiApiOptions.cs`、`Services\PartBasicInfoRepository.cs`
+> 提示词（现行）：`Prompts\SpecialProductQuantityAdvisor.Prompt.txt`
 > 主程序：`MSIFAITOOLS\bin\Debug\MSIFAITOOLS.exe`
-> 更新日期：2026-11-15
+> 更新日期：2026-11-16
 
 ---
 
-## 1. 一句话概要
+## 0. 现行行为（一句话）
+
+点【AI 分析】→ 只看 PDF 文件夹下文件名第 5 位是 `Z` 的特注品 Excel → 读整表原文交给 AI 判「数量」→
+写进部品基本信息表的「数量」列与 `classify\特注品.json` 的「員数」。详见 **第 18 章**。
+
+---
+
+## 1. 一句话概要（历史：部材名 AI 推荐）
 
 主界面上的绿色按钮 **【AI 分析】** 就是「**部材名 AI 推荐**」：
 
@@ -81,15 +91,25 @@ Form1（主窗口）
 ## 3. 界面位置与点击后的界面变化
 
 按钮：`btnAiAnalyze`，文本 **`AI 分析`**，绿色（`#2E7D32`，白字，11pt 粗体），
-位于「**②  执行**」分组（`grpAction`）按钮区**第 3 个**：
+位于「**③  分步执行**」分组（`grpSteps`）**主按钮行的第 3 个**
+（整块 ③ 只在标题栏勾选 Debug 时显示，见下方「2026-11 调整」）：
 
-| 位置 | 控件 | 文本 | 坐标（组内） | 尺寸 |
+| 位置 | 控件 | 文本 | 坐标（③ 分步执行 组内） | 尺寸 |
 |------|------|------|--------------|------|
-| 第 1 | `btnStart` | 开始分解 | (18, 34) | 190×46 |
-| 第 2 | `btnCmdAnalyze` | CMD 分析 | (214, 34) | 112×46 |
-| **第 3** | **`btnAiAnalyze`** | **AI 分析** | **(332, 34)** | **118×46** |
-| 第 4 | `btnRunAll` | 一括执行 | (456, 34) | 108×46 |
-| 第 5 | `btnOpenOutput` | 打开输出目录 | (572, 34) | 116×46 |
+| 第 1 | `btnStart` | 开始分解 | (18, 24) | 190×46 |
+| 第 2 | `btnCmdAnalyze` | CMD 分析 | (214, 24) | 112×46 |
+| **第 3** | **`btnAiAnalyze`** | **AI 分析** | **(332, 24)** | **118×46** |
+
+> **2026-11 调整**：`btnStart` / `btnCmdAnalyze` / `btnAiAnalyze` 三个主按钮已从
+> 「②  执行」**移到「③  分步执行」的第一行**。
+> **当前行为**：**③ 分步执行 整块由标题栏「Debug（显示分步执行面板）」（`chkDebug`）控制** ——
+> 不勾选（默认）时 ③ 连主按钮一起不显示，④ 运行日志 直接接在 ② 执行 下面并撑满；
+> 勾选后才出现（主按钮 + 第 0 ~ 6 步）。
+> 「②  执行」只留【一括执行】【打开输出目录】与进度显示：
+> `btnRunAll` (18, 34) 200×46、`btnOpenOutput` (230, 34) 130×46、
+> `lblProgress` (376, 34)、`progressBar` (376, 56) 460×18。
+> 布局由 `Form1.ApplyStepsPanelLayout` 统一摆放（③ 显示时 ④ 贴在 ③ 下面，③ 收起时 ④ 贴 ② 下面，
+> 两种情况都撑到内容区底部，不留空白）。
 
 > `btnRunAll`（**一括执行**，深紫 `#6A1B9A` 白字 11pt 粗体）＝顺序自动执行
 > 【开始分解】→【CMD 分析】→【AI 分析】：复用 `RunSplitAsync` / `RunCmdAnalysisAsync` /
@@ -97,9 +117,11 @@ Form1（主窗口）
 > 任何一步返回 `false`（前置检查不通过 / 异常）就停下，不再跑后面的步骤。
 > 分解时「是否重新分解」的询问框照常弹（那是决定，不是提示）。
 
-> 第 0 ~ 6 步的分步按钮**已从「②  执行」拆到单独的分组「③  分步执行」（`grpSteps`）**，
-> 且**默认隐藏**：标题栏勾选「**Debug（显示分步执行）**」（`chkDebug`）后才出现，
-> 取消勾选时 ④ 运行日志 自动上移并撑满（不留空白）。与【AI 分析】无关：**点分步按钮不会触发 AI 分析**。
+> 第 0 ~ 6 步的分步按钮**在同一个分组「③  分步执行」（`grpSteps`）里**，
+> 与主按钮一起受标题栏「**Debug（显示分步执行面板）**」（`chkDebug`）控制：
+> **不勾选（默认）时整块 ③ 都不显示**（平时用 ② 的【一括执行】），勾选后才出现；
+> 切换时 ④ 运行日志 自动上移 / 下移并撑满（不留空白）。
+> 与【AI 分析】无关：**点分步按钮不会触发 AI 分析**。
 
 点击之后界面上的变化：
 
@@ -490,6 +512,7 @@ H310-三方枠：需要判定 23 行（部材名 空 0 行 / その他 5 行 / �
 
 | 日期 | 内容 |
 |------|------|
+| 2026-11-16 | **删除部材名 AI 推荐**：【AI 分析】只保留特注品记录的数量设定；删除 `MemberNameAiAdvisor` / `MemberNamePromptStore` / `Prompts\MemberNameAdvisor.Prompt.txt`，部品基本信息画面去掉「部材名AI推荐」列（数据库列保留作历史残留，保存时原值透传）。本文第 1 ~ 17 章转为历史存档。 |
 | 2026-11-15 | 初版：按当前代码整理「AI 分析 = 部材名 AI 推荐」的完整行为（前置条件、逐図番/逐页流程、提示词 7 张表、6 级兜底链、写库规则、日志文案、配置项、手工测试清单）。 |
 | （历史） | 判定范围从「只判部材名含 `\|` 的行」扩大到「数据来源 = `CMD分析・アッセンブリ図` 的全部行」；提示词新增「部材マスタ」表、「距离表」与「程序建议分配」，并加入 AI 与坐标距离冲突时的覆盖规则。 |
 | （历史） | 旧的「用 AI 从 `plu_table.txt` 提取整张部品表」功能停用，按钮改为只做部材名判定（`MemberNameAiAdvisor`）。 |
@@ -506,8 +529,9 @@ H310-三方枠：需要判定 23 行（部材名 空 0 行 / その他 5 行 / �
 
 ## 18. 追加机能：特注品记录的数量设定（2026-11-15）
 
-> 与部材名判定同一批次执行：**先**部材名判定（`MemberNameAiAdvisor`），**再**跑本节的数量设定；
-> 数量设定失败只写日志，不影响已经完成的部材名结果。
+> 这是现在【AI 分析】**唯一**的处理内容。
+> （2026-11-16 前另一个批次是「部材名判定」，该机能已删除，本文件第 1 ~ 17 章仅作历史存档。）
+> 数量设定失败只写日志，不影响其它步骤。
 
 ### 18.1 做什么
 

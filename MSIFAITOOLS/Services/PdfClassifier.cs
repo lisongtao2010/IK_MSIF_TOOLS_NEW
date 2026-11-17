@@ -601,7 +601,7 @@ namespace MSIFAITOOLS.Services
                 PdfCategoryNames.Machining, Count(items, PdfCategory.Machining),
                 PdfCategoryNames.Assembly, Count(items, PdfCategory.Assembly),
                 PdfCategoryNames.Instruction, Count(items, PdfCategory.Instruction),
-                PdfCategoryNames.Unknown, Count(items, PdfCategory.Unknown));
+                UiText.Translate(PdfCategoryNames.Unknown), Count(items, PdfCategory.Unknown));
         }
     }
 }

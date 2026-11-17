@@ -106,26 +106,14 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 「部材名AI推荐」：点【AI 分析】时为「数据来源 = CMD分析・アッセンブリ図」的行算出的推荐值。
+        /// 「部材名AI推荐」：<b>历史残留</b>。
         /// <para>
-        /// 需要 AI 的原因：第 1 步按「番号」找圈号（<c>callouts</c>），再取圈号所在零件图的
-        /// <b>全部</b> <c>texts</c> 拼起来（<see cref="PartsInfoIndex.ResolveCalloutMemberName(int)"/>）。
-        /// 当两个番号（如 1 和 3）在图面上离得很近、还落进同一张零件图时，代码分不清
-        /// 「鴨居」对应番号 1 还是 3，只能把两个名字都挂上去 → <c>鴨居|上レール</c>；
-        /// 而且图上的文字可能是<b>部品名</b>（<c>部品ｾｯﾄ</c> / <c>取説</c>）、或者根本没写部材名。
+        /// 以前【AI 分析】会把为「数据来源 = CMD分析・アッセンブリ図」的行推荐的部材名写进这一列
+        /// （只推荐、不覆盖「部材名」）。该机能已删除：部品基本信息画面不再表示这一列，
+        /// 也不再调用 AI 判部材名。属性 / 数据库列保留只为兼容老数据库与老数据，
+        /// 保存时原值透传（见 <c>PartBasicInfoForm</c> 的读取 / 保存逻辑），不参与任何判定。
         /// </para>
-        /// <para>
-        /// 【AI 分析】把「该番号的圈号坐标」「候选部材名文字的坐标」以及部材マスタ
-        /// （<c>部材部品\部材部品.csv</c>：部材名 一览 + 部品名 → 部材名，见 <see cref="MemberPartCatalog"/>）
-        /// 一起送给 AI（<see cref="MemberNameAiAdvisor"/>），由 AI 判断每个番号属于哪个部材：
-        /// 该行<b>部品名 在マスタ里只属于 1 个部材</b> → 推荐那个部材名；
-        /// <b>属于多个部材</b>（<c>鬼目ﾅｯﾄ(ﾌﾞﾚｰｷ取付用)</c> → <c>上ﾚｰﾙ</c> / <c>上枠</c>）→
-        /// AI 按图上文字 / 位置 / 「区分」选 1 个；<b>哪个部材都不属于</b>（<c>部品ｾｯﾄ</c> / <c>取説</c> /
-        /// ラベル）→「その他」。
-        /// 结果写进这一列（<b>只推荐、不覆盖「部材名」</b>）；AI 判断不了时留空。
-        /// </para>
-        /// <para>数据库列名 = <see cref="PartBasicInfoRepository.MemberNameAiColumnName"/>（「部材名AI推荐」），
-        /// 画面列 <c>colMemberNameAi</c>。</para>
+        /// <para>数据库列名 = <see cref="PartBasicInfoRepository.MemberNameAiColumnName"/>（「部材名AI推荐」）。</para>
         /// </summary>
         public string MemberNameAiSuggestion { get; set; }
 

@@ -39,11 +39,13 @@ namespace MSIFAITOOLS.Services
     }
 
     /// <summary>
-    /// 【AI 分析】判定「番号 → 部材名」用的一条候选：某张零件图上可作为部材名的文字及其页面坐标。
+    /// 判定「番号 → 部材名」用的一条候选：某张零件图上可作为部材名的文字及其页面坐标。
     /// 由 <see cref="PartsInfoIndex.GetMemberNameCandidates(string)"/> /
-    /// <see cref="PartsInfoIndex.GetPartTexts(int)"/> 产出，
-    /// <see cref="MemberNameAiAdvisor"/> 把这些「文字 + 坐标」拼成提示词交给 AI
-    /// （只给文字层数据，不给图片）。
+    /// <see cref="PartsInfoIndex.GetPartTexts(int)"/> 产出。
+    /// <para>
+    /// <b>已停用</b>：部材名 AI 判定机能已删除（现只保留特注品数量设定的 AI 分析），
+    /// 本类保留仅为兼容。
+    /// </para>
     /// </summary>
     internal sealed class MemberNameCandidate
     {
@@ -852,7 +854,6 @@ namespace MSIFAITOOLS.Services
         /// <summary>
         /// 是否是「部材名」的文字：非空、<b>不含数字</b>（圈号 / 尺寸 / 図番都不算部材名）、
         /// 且<b>不以「部」结尾</b>（<c>A部</c> / <c>M部</c> 是位置标记，不是部材）。
-        /// 【AI 分析】（<see cref="MemberNameAiAdvisor"/>）也用它区分「部材名候选」与「位置标记」。
         /// </summary>
         internal static bool IsMemberNameWord(string word)
         {

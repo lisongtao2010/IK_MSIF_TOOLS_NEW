@@ -35,6 +35,8 @@ namespace MSIFAITOOLS
             this.lblAppTitle = new System.Windows.Forms.Label();
             this.pnlHeaderAccent = new System.Windows.Forms.Panel();
             this.chkDebug = new System.Windows.Forms.CheckBox();
+            this.btnLangZh = new System.Windows.Forms.Button();
+            this.btnLangJa = new System.Windows.Forms.Button();
             this.pnlContent = new System.Windows.Forms.Panel();
             this.grpLog = new System.Windows.Forms.GroupBox();
             this.tabMain = new System.Windows.Forms.TabControl();
@@ -121,6 +123,9 @@ namespace MSIFAITOOLS
             this.pnlHeader.Controls.Add(this.lblDbHint);
             // 标题栏「Debug」开关：默认不勾选，勾选后才显示 ③ 分步执行 面板
             this.pnlHeader.Controls.Add(this.chkDebug);
+            // 标题栏「中文 / 日本語」语言切换（切换后立即生效，并记住选择）
+            this.pnlHeader.Controls.Add(this.btnLangZh);
+            this.pnlHeader.Controls.Add(this.btnLangJa);
             this.pnlHeader.Controls.Add(this.pnlHeaderAccent);
             this.pnlHeader.Dock = System.Windows.Forms.DockStyle.Top;
             this.pnlHeader.Location = new System.Drawing.Point(0, 0);
@@ -177,6 +182,7 @@ namespace MSIFAITOOLS
             // chkDebug
             // 
             // 标题栏「Debug」开关：默认不勾选；勾选后才显示 ③ 分步执行 面板
+            // （不勾选时整块 ③ 收起 —— 含【开始分解】/【CMD 分析】/【AI 分析】，平时用 ② 的【一括执行】）
             this.chkDebug.AutoSize = true;
             this.chkDebug.BackColor = System.Drawing.Color.Transparent;
             this.chkDebug.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
@@ -185,9 +191,48 @@ namespace MSIFAITOOLS
             this.chkDebug.Name = "chkDebug";
             this.chkDebug.Size = new System.Drawing.Size(160, 21);
             this.chkDebug.TabIndex = 5;
-            this.chkDebug.Text = "Debug（显示分步执行）";
+            this.chkDebug.Text = "Debug（显示分步执行面板）";
             this.chkDebug.UseVisualStyleBackColor = false;
             this.chkDebug.CheckedChanged += new System.EventHandler(this.ChkDebug_CheckedChanged);
+            // 
+            // btnLangZh
+            // 
+            // 标题栏「中文」：切回中文界面（与【日本語】成对，选中的那个高亮）
+            this.btnLangZh.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(92)))), ((int)(((byte)(140)))));
+            this.btnLangZh.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnLangZh.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(74)))), ((int)(((byte)(116)))), ((int)(((byte)(163)))));
+            this.btnLangZh.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(24)))), ((int)(((byte)(50)))), ((int)(((byte)(84)))));
+            this.btnLangZh.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(66)))), ((int)(((byte)(110)))), ((int)(((byte)(160)))));
+            this.btnLangZh.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnLangZh.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnLangZh.ForeColor = System.Drawing.Color.White;
+            this.btnLangZh.Location = new System.Drawing.Point(346, 58);
+            this.btnLangZh.Name = "btnLangZh";
+            this.btnLangZh.Size = new System.Drawing.Size(72, 28);
+            this.btnLangZh.TabIndex = 8;
+            this.btnLangZh.Text = "中文";
+            this.btnLangZh.UseVisualStyleBackColor = false;
+            this.btnLangZh.Click += new System.EventHandler(this.BtnLanguageZh_Click);
+            // 
+            // btnLangJa
+            // 
+            // 标题栏「日本語」：切换成日语界面（全部按钮 / 标签 / 日志 / 弹窗都按日语显示）
+            this.btnLangJa.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)));
+            this.btnLangJa.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(27)))), ((int)(((byte)(58)))), ((int)(((byte)(95)))));
+            this.btnLangJa.Cursor = System.Windows.Forms.Cursors.Hand;
+            this.btnLangJa.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(74)))), ((int)(((byte)(116)))), ((int)(((byte)(163)))));
+            this.btnLangJa.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(24)))), ((int)(((byte)(50)))), ((int)(((byte)(84)))));
+            this.btnLangJa.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(66)))), ((int)(((byte)(110)))), ((int)(((byte)(160)))));
+            this.btnLangJa.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnLangJa.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnLangJa.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(169)))), ((int)(((byte)(196)))), ((int)(((byte)(224)))));
+            this.btnLangJa.Location = new System.Drawing.Point(426, 58);
+            this.btnLangJa.Name = "btnLangJa";
+            this.btnLangJa.Size = new System.Drawing.Size(84, 28);
+            this.btnLangJa.TabIndex = 9;
+            this.btnLangJa.Text = "日本語";
+            this.btnLangJa.UseVisualStyleBackColor = false;
+            this.btnLangJa.Click += new System.EventHandler(this.BtnLanguageJa_Click);
             // 
             // pnlContent
             // 
@@ -211,9 +256,9 @@ namespace MSIFAITOOLS
             this.grpLog.Controls.Add(this.tabMain);
             this.grpLog.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.grpLog.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.grpLog.Location = new System.Drawing.Point(20, 228);
+            this.grpLog.Location = new System.Drawing.Point(20, 404);
             this.grpLog.Name = "grpLog";
-            this.grpLog.Size = new System.Drawing.Size(860, 354);
+            this.grpLog.Size = new System.Drawing.Size(860, 178);
             this.grpLog.TabIndex = 3;
             this.grpLog.TabStop = false;
             this.grpLog.Text = "④  运行日志 / 分类结果";
@@ -455,12 +500,9 @@ namespace MSIFAITOOLS
             this.grpAction.Controls.Add(this.progressBar);
             this.grpAction.Controls.Add(this.lblProgress);
             this.grpAction.Controls.Add(this.btnOpenOutput);
-            this.grpAction.Controls.Add(this.btnStart);
-            this.grpAction.Controls.Add(this.btnCmdAnalyze);
-            this.grpAction.Controls.Add(this.btnAiAnalyze);
             this.grpAction.Controls.Add(this.btnRunAll);
-            // 分步执行（第 0 步 + 第 1~6 步）已移到独立的 grpSteps（③ 分步执行），
-            // 这里只留「开始分解 / CMD 分析 / AI 分析 / 一括执行 / 打开输出目录」与进度显示
+            // 分步执行（第 0 步 + 第 1~6 步）与【开始分解】/【CMD 分析】/【AI 分析】都放在
+            // grpSteps（③ 分步执行）里；这里只留「一括执行 / 打开输出目录」与进度显示
             this.grpAction.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.grpAction.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
             this.grpAction.Location = new System.Drawing.Point(20, 126);
@@ -468,15 +510,19 @@ namespace MSIFAITOOLS
             this.grpAction.Size = new System.Drawing.Size(860, 96);
             this.grpAction.TabIndex = 1;
             this.grpAction.TabStop = false;
-            this.grpAction.Text = "②  执行";
+            this.grpAction.Text = "②  执行（一括执行：开始分解 → CMD 分析 → AI 分析 一次跑完）";
             // 
             // grpSteps
             // 
             // 分步执行独立成一块：第 0 步 + 第 1~6 步各自单独跑，
-            // 与 ② 执行 的主按钮（开始分解 / CMD 分析 / AI 分析）分开，避免误点
+            // 上面第一行是主按钮【开始分解】/【CMD 分析】/【AI 分析】；
+            // 整块（含主按钮）由标题栏 Debug 控制：不勾选时不显示，勾选后才出现（见 Form1.ApplyStepsPanelLayout）
             this.grpSteps.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
             this.grpSteps.BackColor = System.Drawing.Color.White;
+            this.grpSteps.Controls.Add(this.btnStart);
+            this.grpSteps.Controls.Add(this.btnCmdAnalyze);
+            this.grpSteps.Controls.Add(this.btnAiAnalyze);
             this.grpSteps.Controls.Add(this.lblCmdStepHint);
             this.grpSteps.Controls.Add(this.btnCmdStep0);
             this.grpSteps.Controls.Add(this.btnCmdStep1);
@@ -491,31 +537,31 @@ namespace MSIFAITOOLS
             this.grpSteps.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
             this.grpSteps.Location = new System.Drawing.Point(20, 228);
             this.grpSteps.Name = "grpSteps";
-            this.grpSteps.Size = new System.Drawing.Size(860, 112);
+            this.grpSteps.Size = new System.Drawing.Size(860, 170);
             this.grpSteps.TabIndex = 2;
             this.grpSteps.TabStop = false;
-            this.grpSteps.Text = "③  分步执行（CMD 分析 第 0 ~ 6 步，可单独执行）";
-            // 默认收起：只有标题栏勾选 Debug 后才显示（见 Form1.ApplyStepsPanelLayout）
-            this.grpSteps.Visible = false;
+            this.grpSteps.Text = "③  分步执行（开始分解 / CMD 分析 / AI 分析 / 第 0 ~ 6 步，可单独执行）";
+            // 面板整块受标题栏 Debug 控制：不勾选时不显示（④ 运行日志 直接接在 ② 下面），
+            // 勾选后连同「第 0 ~ 6 步」一起出现（见 Form1.ApplyStepsPanelLayout）
             // 
             // progressBar
             // 
             this.progressBar.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.progressBar.Location = new System.Drawing.Point(692, 56);
+            this.progressBar.Location = new System.Drawing.Point(376, 56);
             this.progressBar.Name = "progressBar";
-            this.progressBar.Size = new System.Drawing.Size(150, 18);
-            this.progressBar.TabIndex = 6;
+            this.progressBar.Size = new System.Drawing.Size(460, 18);
+            this.progressBar.TabIndex = 3;
             // 
             // lblProgress
             // 
             this.lblProgress.AutoSize = true;
             this.lblProgress.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblProgress.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(108)))), ((int)(((byte)(117)))), ((int)(((byte)(125)))));
-            this.lblProgress.Location = new System.Drawing.Point(692, 34);
+            this.lblProgress.Location = new System.Drawing.Point(376, 34);
             this.lblProgress.Name = "lblProgress";
             this.lblProgress.Size = new System.Drawing.Size(56, 17);
-            this.lblProgress.TabIndex = 5;
+            this.lblProgress.TabIndex = 2;
             this.lblProgress.Text = "等待开始";
             // 
             // btnOpenOutput
@@ -527,10 +573,10 @@ namespace MSIFAITOOLS
             this.btnOpenOutput.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnOpenOutput.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnOpenOutput.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(73)))), ((int)(((byte)(94)))));
-            this.btnOpenOutput.Location = new System.Drawing.Point(572, 34);
+            this.btnOpenOutput.Location = new System.Drawing.Point(230, 34);
             this.btnOpenOutput.Name = "btnOpenOutput";
-            this.btnOpenOutput.Size = new System.Drawing.Size(116, 46);
-            this.btnOpenOutput.TabIndex = 4;
+            this.btnOpenOutput.Size = new System.Drawing.Size(130, 46);
+            this.btnOpenOutput.TabIndex = 1;
             this.btnOpenOutput.Text = "打开输出目录";
             this.btnOpenOutput.UseVisualStyleBackColor = false;
             this.btnOpenOutput.Click += new System.EventHandler(this.BtnOpenOutput_Click);
@@ -545,7 +591,8 @@ namespace MSIFAITOOLS
             this.btnStart.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnStart.Font = new System.Drawing.Font("Microsoft YaHei", 11F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnStart.ForeColor = System.Drawing.Color.White;
-            this.btnStart.Location = new System.Drawing.Point(18, 34);
+            // 「开始分解」放在 ③ 分步执行 的第一行（子控件是 grpSteps，坐标相对分组框）
+            this.btnStart.Location = new System.Drawing.Point(18, 24);
             this.btnStart.Name = "btnStart";
             this.btnStart.Size = new System.Drawing.Size(190, 46);
             this.btnStart.TabIndex = 0;
@@ -563,7 +610,8 @@ namespace MSIFAITOOLS
             this.btnCmdAnalyze.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdAnalyze.Font = new System.Drawing.Font("Microsoft YaHei", 11F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdAnalyze.ForeColor = System.Drawing.Color.White;
-            this.btnCmdAnalyze.Location = new System.Drawing.Point(214, 34);
+            // 「CMD 分析」放在 ③ 分步执行 的第一行，紧挨【开始分解】
+            this.btnCmdAnalyze.Location = new System.Drawing.Point(214, 24);
             this.btnCmdAnalyze.Name = "btnCmdAnalyze";
             this.btnCmdAnalyze.Size = new System.Drawing.Size(112, 46);
             this.btnCmdAnalyze.TabIndex = 1;
@@ -581,7 +629,8 @@ namespace MSIFAITOOLS
             this.btnAiAnalyze.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnAiAnalyze.Font = new System.Drawing.Font("Microsoft YaHei", 11F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnAiAnalyze.ForeColor = System.Drawing.Color.White;
-            this.btnAiAnalyze.Location = new System.Drawing.Point(332, 34);
+            // 「AI 分析」放在 ③ 分步执行 的第一行，紧挨【CMD 分析】
+            this.btnAiAnalyze.Location = new System.Drawing.Point(332, 24);
             this.btnAiAnalyze.Name = "btnAiAnalyze";
             this.btnAiAnalyze.Size = new System.Drawing.Size(118, 46);
             this.btnAiAnalyze.TabIndex = 2;
@@ -601,10 +650,10 @@ namespace MSIFAITOOLS
             this.btnRunAll.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnRunAll.Font = new System.Drawing.Font("Microsoft YaHei", 11F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnRunAll.ForeColor = System.Drawing.Color.White;
-            this.btnRunAll.Location = new System.Drawing.Point(456, 34);
+            this.btnRunAll.Location = new System.Drawing.Point(18, 34);
             this.btnRunAll.Name = "btnRunAll";
-            this.btnRunAll.Size = new System.Drawing.Size(108, 46);
-            this.btnRunAll.TabIndex = 3;
+            this.btnRunAll.Size = new System.Drawing.Size(200, 46);
+            this.btnRunAll.TabIndex = 0;
             this.btnRunAll.Text = "一括执行";
             this.btnRunAll.UseVisualStyleBackColor = false;
             this.btnRunAll.Click += new System.EventHandler(this.BtnRunAll_Click);
@@ -613,7 +662,7 @@ namespace MSIFAITOOLS
             // 
             this.lblCmdStepHint.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblCmdStepHint.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(108)))), ((int)(((byte)(117)))), ((int)(((byte)(125)))));
-            this.lblCmdStepHint.Location = new System.Drawing.Point(18, 26);
+            this.lblCmdStepHint.Location = new System.Drawing.Point(18, 84);
             this.lblCmdStepHint.Name = "lblCmdStepHint";
             this.lblCmdStepHint.Size = new System.Drawing.Size(78, 20);
             this.lblCmdStepHint.TabIndex = 7;
@@ -629,7 +678,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep0.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep0.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep0.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep0.Location = new System.Drawing.Point(100, 22);
+            this.btnCmdStep0.Location = new System.Drawing.Point(100, 80);
             this.btnCmdStep0.Name = "btnCmdStep0";
             this.btnCmdStep0.Size = new System.Drawing.Size(200, 28);
             this.btnCmdStep0.TabIndex = 17;
@@ -646,7 +695,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep1.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep1.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep1.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep1.Location = new System.Drawing.Point(306, 22);
+            this.btnCmdStep1.Location = new System.Drawing.Point(306, 80);
             this.btnCmdStep1.Name = "btnCmdStep1";
             this.btnCmdStep1.Size = new System.Drawing.Size(176, 28);
             this.btnCmdStep1.TabIndex = 8;
@@ -663,7 +712,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep2.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep2.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep2.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep2.Location = new System.Drawing.Point(488, 22);
+            this.btnCmdStep2.Location = new System.Drawing.Point(488, 80);
             this.btnCmdStep2.Name = "btnCmdStep2";
             this.btnCmdStep2.Size = new System.Drawing.Size(124, 28);
             this.btnCmdStep2.TabIndex = 9;
@@ -680,7 +729,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep3.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep3.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep3.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep3.Location = new System.Drawing.Point(618, 22);
+            this.btnCmdStep3.Location = new System.Drawing.Point(618, 80);
             this.btnCmdStep3.Name = "btnCmdStep3";
             this.btnCmdStep3.Size = new System.Drawing.Size(168, 28);
             this.btnCmdStep3.TabIndex = 10;
@@ -697,7 +746,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep4.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep4.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep4.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep4.Location = new System.Drawing.Point(100, 54);
+            this.btnCmdStep4.Location = new System.Drawing.Point(100, 112);
             this.btnCmdStep4.Name = "btnCmdStep4";
             this.btnCmdStep4.Size = new System.Drawing.Size(206, 28);
             this.btnCmdStep4.TabIndex = 12;
@@ -714,7 +763,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep5.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep5.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep5.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep5.Location = new System.Drawing.Point(312, 54);
+            this.btnCmdStep5.Location = new System.Drawing.Point(312, 112);
             this.btnCmdStep5.Name = "btnCmdStep5";
             this.btnCmdStep5.Size = new System.Drawing.Size(200, 28);
             this.btnCmdStep5.TabIndex = 13;
@@ -731,7 +780,7 @@ namespace MSIFAITOOLS
             this.btnCmdStep6.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCmdStep6.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCmdStep6.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.btnCmdStep6.Location = new System.Drawing.Point(518, 54);
+            this.btnCmdStep6.Location = new System.Drawing.Point(518, 112);
             this.btnCmdStep6.Name = "btnCmdStep6";
             this.btnCmdStep6.Size = new System.Drawing.Size(200, 28);
             this.btnCmdStep6.TabIndex = 14;
@@ -743,7 +792,7 @@ namespace MSIFAITOOLS
             // 
             this.lblCmdStepNote.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblCmdStepNote.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(108)))), ((int)(((byte)(117)))), ((int)(((byte)(125)))));
-            this.lblCmdStepNote.Location = new System.Drawing.Point(100, 86);
+            this.lblCmdStepNote.Location = new System.Drawing.Point(100, 144);
             this.lblCmdStepNote.Name = "lblCmdStepNote";
             this.lblCmdStepNote.Size = new System.Drawing.Size(480, 18);
             this.lblCmdStepNote.TabIndex = 11;
@@ -760,7 +809,7 @@ namespace MSIFAITOOLS
             this.chkCmdStep0.Enabled = false;
             this.chkCmdStep0.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.chkCmdStep0.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(0)))), ((int)(((byte)(105)))), ((int)(((byte)(92)))));
-            this.chkCmdStep0.Location = new System.Drawing.Point(586, 84);
+            this.chkCmdStep0.Location = new System.Drawing.Point(586, 142);
             this.chkCmdStep0.Name = "chkCmdStep0";
             this.chkCmdStep0.Size = new System.Drawing.Size(232, 21);
             this.chkCmdStep0.TabIndex = 16;
@@ -1020,6 +1069,12 @@ namespace MSIFAITOOLS
 
         private System.Windows.Forms.Panel pnlHeader;
         private System.Windows.Forms.CheckBox chkDebug;
+
+        /// <summary>标题栏「中文」语言切换按钮（与「日本語」按钮成对，选中的高亮）。</summary>
+        private System.Windows.Forms.Button btnLangZh;
+
+        /// <summary>标题栏「日本語」语言切换按钮。</summary>
+        private System.Windows.Forms.Button btnLangJa;
         private System.Windows.Forms.Label lblAppTitle;
         private System.Windows.Forms.Label lblAppSub;
         private System.Windows.Forms.Label lblVersion;

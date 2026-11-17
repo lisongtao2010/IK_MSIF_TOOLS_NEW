@@ -16,6 +16,10 @@ namespace MSIFAITOOLS
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            // 中日双语：先读上次保存的界面语言（%APPDATA%\MSIFAITOOLS\ui-language.json，
+            // 环境变量 MSIF_UI_LANGUAGE 优先），主画面构造时再按它刷一遍全部文字
+            UiText.LoadSaved();
+
             PrepareMemberPartDatabase();
             PrepareMemberNameMapping();
             PreparePdfRenderer();

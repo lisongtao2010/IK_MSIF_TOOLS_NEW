@@ -116,8 +116,11 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 「部材名AI推荐」列名（后加的可选列，打开旧数据库时自动补上）。
-        /// 【AI 分析】对「部材名」里带 <c>|</c> 的行算出的推荐值写在这里，
-        /// 只推荐、不覆盖「部材名」（见 <see cref="PartBasicInfo.MemberNameAiSuggestion"/>）。
+        /// <para>
+        /// <b>历史残留</b>：以前的【AI 分析】会把为「アッセンブリ図」行推荐的部材名写进这一列，
+        /// 该机能已删除（画面上也不再表示）。列定义 / 读写保留只为兼容老数据库（老数据原值保留），
+        /// 不再有业务逻辑使用（见 <see cref="PartBasicInfo.MemberNameAiSuggestion"/>）。
+        /// </para>
         /// </summary>
         public const string MemberNameAiColumnName = "部材名AI推荐";
 
@@ -1048,63 +1051,6 @@ namespace MSIFAITOOLS.Services
                     }
 
                     updated = command.ExecuteNonQuery();
-                }
-
-                transaction.Commit();
-            }
-
-            return updated;
-        }
-
-        /// <summary>
-        /// 只更新「部材名AI推荐」列（【AI 分析】用）。
-        /// 定位键 = 図番 + 页码 + 番号 + 部品コード（与唯一索引一致），其它列一概不动，
-        /// 所以「部材名」「登录时间」「校验状态」等不会被推荐值连带改掉。
-        /// 推荐值为空的行跳过（不会被清空已有推荐）。
-        /// </summary>
-        /// <param name="drawingNo">図番（PDF 文件名去扩展名）。</param>
-        /// <param name="parts">推荐值已设好的行（只读 <see cref="PartBasicInfo.MemberNameAiSuggestion"/> 与定位键）。</param>
-        /// <returns>实际更新的行数。</returns>
-        public int UpdateMemberNameSuggestions(string drawingNo, IList<PartBasicInfo> parts)
-        {
-            if (string.IsNullOrWhiteSpace(drawingNo) || parts == null || parts.Count == 0)
-            {
-                return 0;
-            }
-
-            string key = drawingNo.Trim();
-            int updated = 0;
-
-            string sql =
-                "UPDATE [" + TableName + "] SET [" + MemberNameAiColumnName + "] = @推荐値 " +
-                "WHERE [図番] = @図番 AND [页码] = @页码 AND [番号] = @番号 AND [" +
-                PartCodeColumnName + "] = @部品コード;";
-
-            using (SQLiteTransaction transaction = _connection.BeginTransaction())
-            {
-                using (SQLiteCommand command = new SQLiteCommand(sql, _connection, transaction))
-                {
-                    command.Parameters.Add(new SQLiteParameter("@推荐値"));
-                    command.Parameters.Add(new SQLiteParameter("@図番"));
-                    command.Parameters.Add(new SQLiteParameter("@页码"));
-                    command.Parameters.Add(new SQLiteParameter("@番号"));
-                    command.Parameters.Add(new SQLiteParameter("@部品コード"));
-
-                    foreach (PartBasicInfo part in parts)
-                    {
-                        if (part == null || string.IsNullOrWhiteSpace(part.MemberNameAiSuggestion))
-                        {
-                            continue;
-                        }
-
-                        command.Parameters["@推荐値"].Value = part.MemberNameAiSuggestion.Trim();
-                        command.Parameters["@図番"].Value = key;
-                        command.Parameters["@页码"].Value = part.Page;
-                        command.Parameters["@番号"].Value = part.Number;
-                        command.Parameters["@部品コード"].Value = part.PartCode ?? string.Empty;
-
-                        updated += command.ExecuteNonQuery();
-                    }
                 }
 
                 transaction.Commit();

@@ -81,20 +81,17 @@ namespace MSIFAITOOLS
         {
             InitializeComponent();
             InitializeClassifyGrid();
-            _startButtonText = btnStart.Text;
-            _aiButtonText = btnAiAnalyze.Text;
-            _cmdButtonText = btnCmdAnalyze.Text;
-            _runAllButtonText = btnRunAll.Text;
 
-            // 七个子按钮（第 0 步 + 第 1~6 步）的文字统一取自 CmdAnalysisSteps
-            // （步骤名的唯一定义处），保证按钮 / 日志叫法一致
-            btnCmdStep0.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.MaintainTzJson);
-            btnCmdStep1.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.Assembly);
-            btnCmdStep2.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.CalloutSplit);
-            btnCmdStep3.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.YoryoAppend);
-            btnCmdStep4.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.TzAppend);
-            btnCmdStep5.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.PartCode);
-            btnCmdStep6.Text = CmdAnalysisSteps.ButtonText(CmdAnalysisStepKind.UsageKind);
+            // 中日双语：按上次保存的语言（%APPDATA%\MSIFAITOOLS\ui-language.json）刷一遍全部文字。
+            // 主按钮 / 第 0 ~ 6 步按钮的基础文字也在里面按语言设好（_startButtonText / _cmdButtonText …），
+            // 所以这里不再直接取设计器里的中文。
+            InitializeLanguage();
+
+            // 标题栏 Debug 默认不勾选 → ③ 分步执行 整块不显示（主按钮 与 第 0 ~ 6 步 一起收起），
+            // 免得窗体首次绘制时闪一下；真正的位置 / 高度在 Form1_Shown 里按 DPI 缩放后的
+            // 真实尺寸再算（ApplyStepsPanelLayout）
+            ApplyStepsButtonsVisible(false);
+            grpSteps.Visible = false;
 
             // 【分类结果】标签选中时进入「一览全画面」，切回【运行日志】时自动还原
             tabMain.SelectedIndexChanged += TabMain_SelectedIndexChanged;
@@ -114,7 +111,7 @@ namespace MSIFAITOOLS
             ShowEngineInfo();
             ShowPdfiumInfo();
 
-            // 标题栏 Debug 默认不勾选：收起 ③ 分步执行，④ 运行日志 撑满。
+            // 标题栏 Debug 默认不勾选：③ 分步执行 整块收起，④ 运行日志 直接接在 ② 下面撑满。
             // 放在 Shown 里再算一次，用的是 DPI / 字体自动缩放之后的真实尺寸。
             ApplyStepsPanelLayout();
         }
@@ -182,7 +179,7 @@ namespace MSIFAITOOLS
         private void ShowEngineInfo()
         {
             string version = GetEngineVersion();
-            lblEngine.Text = "引擎：PdfPig " + version;
+            UpdateEngineLabel(version);
             lblEngine.ForeColor = Color.FromArgb(46, 125, 50);
             AppendLog("PDF 解析引擎：PdfPig " + version + "（纯 .NET，无需 Python 运行时）",
                 Color.FromArgb(150, 220, 150));
@@ -237,7 +234,7 @@ namespace MSIFAITOOLS
         {
             using (FolderBrowserDialog fbd = new FolderBrowserDialog())
             {
-                fbd.Description = "请选择存放 PDF 文件的文件夹";
+                fbd.Description = UiText.T("请选择存放 PDF 文件的文件夹");
                 fbd.ShowNewFolderButton = false;
 
                 string current = txtFolder.Text.Trim();
@@ -254,7 +251,7 @@ namespace MSIFAITOOLS
                 txtFolder.Text = fbd.SelectedPath;
 
                 int count = CountPdfFiles(fbd.SelectedPath);
-                lblPdfInfo.Text = "PDF：" + count + " 个";
+                UpdatePdfCountLabel(count);
                 SetStatus("已选择文件夹（PDF " + count + " 个）", Color.FromArgb(21, 101, 192));
                 AppendLog("选择目录：" + fbd.SelectedPath, Color.FromArgb(180, 180, 180));
                 AppendLog("目录内 PDF 数量：" + count + " 个", Color.FromArgb(180, 180, 180));
@@ -388,9 +385,12 @@ namespace MSIFAITOOLS
         /// </summary>
         private void SetStatus(string text, Color color)
         {
+            // 记住中文原文：切换语言后按它重画状态栏（见 ApplyDynamicLanguageTexts）
+            _lastStatusText = text;
+
             RunOnUi(delegate
             {
-                lblStatus.Text = text;
+                lblStatus.Text = UiText.Translate(text);
                 lblStatus.ForeColor = color;
             });
         }
@@ -433,6 +433,9 @@ namespace MSIFAITOOLS
             {
                 return;
             }
+
+            // 日志统一在这里翻成当前语言（对照表里没有的句子原样输出中文）
+            message = UiText.Translate(message);
 
             if (rtbLog.InvokeRequired)
             {
@@ -520,7 +523,7 @@ namespace MSIFAITOOLS
             mnuLogCopy.Enabled = hasText;
             mnuLogCopyAll.Enabled = hasText;
             mnuLogSelectAll.Enabled = hasText;
-            mnuLogCopy.Text = hasSelection ? "复制选中内容" : "复制全部内容";
+            mnuLogCopy.Text = UiText.T(hasSelection ? "复制选中内容" : "复制全部内容");
         }
 
         /// <summary>日志右键菜单「复制选中内容」（没有选中时复制全部日志）。</summary>
@@ -569,7 +572,7 @@ namespace MSIFAITOOLS
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "复制到剪贴板失败：\n" + ex.Message, "提示",
+                ShowMessage("复制到剪贴板失败：\n" + ex.Message, "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -603,10 +606,10 @@ namespace MSIFAITOOLS
             btnBrowse.Enabled = !busy;
             txtFolder.Enabled = !busy;
             chkCadSplit.Enabled = !busy;
-            btnStart.Text = running ? "分解中..." : _startButtonText;
-            btnAiAnalyze.Text = running ? "分析中..." : _aiButtonText;
-            btnCmdAnalyze.Text = running ? "分析中..." : _cmdButtonText;
-            btnRunAll.Text = busy ? "执行中..." : _runAllButtonText;
+            btnStart.Text = running ? UiText.T("分解中...") : _startButtonText;
+            btnAiAnalyze.Text = running ? UiText.T("分析中...") : _aiButtonText;
+            btnCmdAnalyze.Text = running ? UiText.T("分析中...") : _cmdButtonText;
+            btnRunAll.Text = busy ? UiText.T("执行中...") : _runAllButtonText;
 
             if (running)
             {
@@ -630,8 +633,8 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            lblProgress.Text = string.Format("{0} {1}/{2}：{3}",
-                progress.Stage, progress.Index, progress.Total, progress.FileName);
+            SetProgressText(string.Format("{0} {1}/{2}：{3}",
+                UiText.Translate(progress.Stage), progress.Index, progress.Total, progress.FileName));
 
             SetStatus(string.Format("正在分解 {0}/{1}（{2}%）",
                 progress.Index, progress.Total, progress.Percent), Color.FromArgb(230, 126, 34));
@@ -700,7 +703,7 @@ namespace MSIFAITOOLS
 
             AppendLog("第 1 步：调用 CadPartSplitter 做零件分割", Color.FromArgb(120, 200, 255));
             SetStatus("正在执行 CadPartSplitter 零件分割...", Color.FromArgb(230, 126, 34));
-            RunOnUi(delegate { lblProgress.Text = "CadPartSplitter 分割中..."; });
+            RunOnUi(delegate { SetProgressText("CadPartSplitter 分割中..."); });
 
             CadPartSplitResult cadResult = CadPartSplitterRunner.RunBatch(folder, AppendCadSplitLog);
 
@@ -757,7 +760,7 @@ namespace MSIFAITOOLS
             AppendLog("第 2 步：执行 MSIF AI TOOLS 自身的 PDF 分解（" + pdfCount + " 个 PDF）",
                 Color.FromArgb(120, 200, 255));
             SetStatus("正在分解（共 " + pdfCount + " 个 PDF）...", Color.FromArgb(230, 126, 34));
-            RunOnUi(delegate { lblProgress.Text = "正在分解，请稍候..."; });
+            RunOnUi(delegate { SetProgressText("正在分解，请稍候..."); });
         }
 
         /// <summary>
@@ -765,7 +768,24 @@ namespace MSIFAITOOLS
         /// </summary>
         private async void BtnStart_Click(object sender, EventArgs e)
         {
-            await RunSplitAsync(true);
+            // 单独执行：询问框选「否」= 直接使用现有分解结果（方便接着单独跑 CMD / AI 分析）
+            await RunSplitAsync(true, false);
+        }
+
+        /// <summary>
+        /// 【开始分解】的执行结果：让【一括执行】区分「失败」与「用户取消」。
+        /// 用户取消（询问框选「否」）时不弹「执行停止」警告框，也不继续后面的步骤。
+        /// </summary>
+        private enum SplitRunOutcome
+        {
+            /// <summary>分解成功，或按用户选择复用了已有的分解结果。</summary>
+            Success,
+
+            /// <summary>用户在「是否重新分解」的询问框选择了「否」，本次执行中止。</summary>
+            Cancelled,
+
+            /// <summary>前置检查不通过 / 执行异常 / 分解失败。</summary>
+            Failed
         }
 
         /// <summary>
@@ -777,22 +797,30 @@ namespace MSIFAITOOLS
         /// </para>
         /// </summary>
         /// <param name="showCompletionDialog">是否弹出结束 / 失败对话框。</param>
-        /// <returns>分解结果可用（含「直接使用现有结果」）返回 <c>true</c>；前置检查失败 / 执行异常返回 <c>false</c>。</returns>
-        private async Task<bool> RunSplitAsync(bool showCompletionDialog)
+        /// <param name="cancelWhenDeclining">
+        /// 询问「是否重新分解」时选「否」的处理方式：
+        /// <c>true</c> = 中止本次执行（【一括执行】用：不重新分解，后续【CMD 分析】/【AI 分析】也不执行）；
+        /// <c>false</c> = 直接使用现有分解结果继续（单独点【开始分解】时用）。
+        /// </param>
+        /// <returns>
+        /// 分解结果可用返回 <c>Success</c>；用户选择「否」且要求中止返回 <c>Cancelled</c>；
+        /// 前置检查失败 / 执行异常 / 分解失败返回 <c>Failed</c>。
+        /// </returns>
+        private async Task<SplitRunOutcome> RunSplitAsync(bool showCompletionDialog, bool cancelWhenDeclining)
         {
             if (_isRunning)
             {
-                return false;
+                return SplitRunOutcome.Failed;
             }
 
             string folder = txtFolder.Text.Trim();
 
             if (folder.Length == 0 || !Directory.Exists(folder))
             {
-                MessageBox.Show(this, "请确认已选择有效的 PDF 文件夹！", "提示",
+                ShowMessage("请确认已选择有效的 PDF 文件夹！", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("文件夹无效", Color.FromArgb(239, 108, 0));
-                return false;
+                return SplitRunOutcome.Failed;
             }
 
             // 统计文件夹中的 PDF 数量（严格匹配 .pdf 扩展名）
@@ -804,36 +832,49 @@ namespace MSIFAITOOLS
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "读取文件夹失败：\n" + ex.Message, "错误",
+                ShowMessage("读取文件夹失败：\n" + ex.Message, "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return false;
+                return SplitRunOutcome.Failed;
             }
 
             if (pdfFiles.Length == 0)
             {
-                MessageBox.Show(this, "该文件夹中没有找到 PDF 文件！", "提示",
+                ShowMessage("该文件夹中没有找到 PDF 文件！", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("未找到 PDF 文件", Color.FromArgb(239, 108, 0));
-                return false;
+                return SplitRunOutcome.Failed;
             }
 
-            lblPdfInfo.Text = "PDF：" + pdfFiles.Length + " 个";
+            UpdatePdfCountLabel(pdfFiles.Length);
 
             // 已存在全部分解结果时，先询问是否重新分解（开发调试时避免每次都重新解析 PDF）
             if (PdfSplitService.CountCompletedOutputs(folder, pdfFiles, null) == pdfFiles.Length)
             {
-                DialogResult answer = MessageBox.Show(this,
-                    "该文件夹中已存在全部分解结果（" + pdfFiles.Length + " 个 PDF 的 xy / table / plu txt 文件齐全）。\n\n" +
-                    "是否重新分解？\n\n" +
-                    "「是」= 重新分解并覆盖现有结果\n" +
-                    "「否」= 直接使用现有结果（可接着点击【AI 分析】/【CMD 分析】）",
+                // 一括执行时「否」= 停在这里（后面的 CMD 分析 / AI 分析也不执行）；
+                // 单独点【开始分解】时「否」= 直接使用现有结果，方便接着单独跑后面的步骤。
+                DialogResult answer = ShowMessage(
+                    cancelWhenDeclining
+                        ? UiText.F("该文件夹中已存在全部分解结果（{0} 个 PDF 的 xy / table / plu txt 文件齐全）。\n\n" +
+                                   "是否重新分解？\n\n" +
+                                   "「是」= 重新分解并覆盖现有结果\n" +
+                                   "「否」= 中止本次一括执行（不重新分解，后续【CMD 分析】/【AI 分析】也不执行）", pdfFiles.Length)
+                        : UiText.F("该文件夹中已存在全部分解结果（{0} 个 PDF 的 xy / table / plu txt 文件齐全）。\n\n" +
+                                   "是否重新分解？\n\n" +
+                                   "「是」= 重新分解并覆盖现有结果\n" +
+                                   "「否」= 直接使用现有结果（可接着点击【AI 分析】/【CMD 分析】）", pdfFiles.Length),
                     "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2);
 
                 if (answer != DialogResult.Yes)
                 {
+                    if (cancelWhenDeclining)
+                    {
+                        // 只回「被取消」，日志 / 状态栏 / 进度由【一括执行】统一记录（避免重复输出两行）
+                        return SplitRunOutcome.Cancelled;
+                    }
+
                     UseExistingSplitResult(folder, pdfFiles);
-                    return true;
+                    return SplitRunOutcome.Success;
                 }
             }
 
@@ -847,7 +888,7 @@ namespace MSIFAITOOLS
             AppendLog("PDF 文件夹：" + folder, Color.FromArgb(120, 200, 255));
             AppendLog("待处理 PDF：" + pdfFiles.Length + " 个", Color.FromArgb(120, 200, 255));
             SetStatus("正在分解（共 " + pdfFiles.Length + " 个 PDF）...", Color.FromArgb(230, 126, 34));
-            lblProgress.Text = "正在分解，请稍候...";
+            SetProgressText("正在分解，请稍候...");
 
             PdfSplitResult result = null;
             Exception failure = null;
@@ -884,22 +925,22 @@ namespace MSIFAITOOLS
             {
                 AppendLog("分解失败：" + failure.Message, Color.FromArgb(255, 140, 140));
                 SetStatus("分解异常", Color.FromArgb(198, 40, 40));
-                lblProgress.Text = "执行异常";
+                SetProgressText("执行异常");
 
                 if (showCompletionDialog)
                 {
-                    MessageBox.Show(this, "分解失败：\n" + failure.Message, "异常",
+                    ShowMessage("分解失败：\n" + failure.Message, "异常",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
 
-                return false;
+                return SplitRunOutcome.Failed;
             }
 
             if (result == null)
             {
                 SetStatus("分解失败", Color.FromArgb(198, 40, 40));
-                lblProgress.Text = "分解失败";
-                return false;
+                SetProgressText("分解失败");
+                return SplitRunOutcome.Failed;
             }
 
             string outputDir = result.OutputDirectory;
@@ -930,27 +971,26 @@ namespace MSIFAITOOLS
                     unknownCount > 0 ? Color.FromArgb(255, 200, 120) : Color.FromArgb(150, 220, 150));
 
                 SetStatus("分解完成（" + result.Total + " 个 PDF）", Color.FromArgb(46, 125, 50));
-                lblProgress.Text = "分解完成";
+                SetProgressText("分解完成");
                 progressBar.Style = ProgressBarStyle.Continuous;
                 progressBar.Value = progressBar.Maximum;
 
                 if (showCompletionDialog)
                 {
-                    MessageBox.Show(this,
-                        "批量分解成功！\n\n共处理 " + result.Total + " 个 PDF\n\n" +
-                        "输出根目录（每个 PDF 一个以図番号命名的子文件夹）：\n" + outputDir + "\n\n" +
-                        "各 PDF 子文件夹中的文件：\n" +
-                        "xy.txt / xy_imgtext.txt / table.txt /\n" +
-                        "plu_text.txt / plu_layout.txt / plu_table.txt / plu_image.txt / plu_all.txt\n\n" +
-                        "CadPartSplitter 生成的部品表（CMD 分析用）：\n" +
+                    ShowMessage(
+                        UiText.F("批量分解成功！共处理 {0} 个 PDF。", result.Total) + "\n\n" +
+                        UiText.F("输出根目录（每个 PDF 一个以図番号命名的子文件夹）：\n{0}", outputDir) + "\n\n" +
+                        UiText.T("各 PDF 子文件夹中的文件：\nxy.txt / xy_imgtext.txt / table.txt /\n" +
+                                 "plu_text.txt / plu_layout.txt / plu_table.txt / plu_image.txt / plu_all.txt") + "\n\n" +
+                        UiText.T("CadPartSplitter 生成的部品表（CMD 分析用）：") + "\n" +
                         CmdPartAnalyzer.LtStep1FileName + "（アッセンブリ図）/ " +
                         CmdInstructionPartCollector.YoryoListFileName + "（要領図一覧）/ " +
                         CmdInstructionPartCollector.YoryoPartFileName + "（要領図）\n\n" +
-                        "分类清单（PdfInfoList.txt）：\n" + _classifyDirectory + "\n\n" +
+                        UiText.F("分类清单（PdfInfoList.txt）：\n{0}", _classifyDirectory) + "\n\n" +
                         PdfClassifier.BuildSummaryText(result.Classifications) +
                         (unknownCount > 0
-                            ? "\n\n有 " + unknownCount + " 个 PDF 在分类清单里没有记录，请在上游工具的分类清单里补充。"
-                            : "\n\n分类已全部确定。"),
+                            ? "\n\n" + UiText.F("有 {0} 个 PDF 在分类清单里没有记录，请在上游工具的分类清单里补充。", unknownCount)
+                            : "\n\n" + UiText.T("分类已全部确定。")),
                         "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
@@ -967,21 +1007,21 @@ namespace MSIFAITOOLS
 
                 SetStatus("分解完成（成功 " + result.Succeeded + "，失败 " + result.Failed + "）",
                     Color.FromArgb(198, 40, 40));
-                lblProgress.Text = "分解完成（有失败）";
+                SetProgressText("分解完成（有失败）");
                 progressBar.Style = ProgressBarStyle.Continuous;
                 progressBar.Value = 0;
 
                 if (showCompletionDialog)
                 {
-                    MessageBox.Show(this,
-                        "分解完成，但有 " + result.Failed + " 个文件处理失败。\n\n" +
-                        "成功 " + result.Succeeded + " / 共 " + result.Total + " 个 PDF\n\n" +
-                        "首个错误：\n" + result.Errors[0],
+                    ShowMessage(
+                        UiText.F("分解完成，但有 {0} 个文件处理失败。", result.Failed) + "\n\n" +
+                        UiText.F("成功 {0} / 共 {1} 个 PDF", result.Succeeded, result.Total) + "\n\n" +
+                        UiText.F("首个错误：\n{0}", result.Errors[0]),
                         "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }
 
-            return true;
+            return SplitRunOutcome.Success;
         }
 
 
@@ -999,7 +1039,7 @@ namespace MSIFAITOOLS
             _lastOutputDir = outputRoot;
             _classifyDirectory = classifyDir;
 
-            lblPdfInfo.Text = "PDF：" + pdfFiles.Length + " 个";
+            UpdatePdfCountLabel(pdfFiles.Length);
 
             // 分类读自 <输出根目录>\classify\PdfInfoList.txt（外部生成，本工具只读）：
             // 清单里没有的 PDF 记为未知，在画面上标黄提示
@@ -1035,7 +1075,7 @@ namespace MSIFAITOOLS
             AppendLog("现有结果已就绪，可直接点击【AI 分析】或【CMD 分析】。", Color.FromArgb(150, 220, 150));
 
             SetStatus("已使用现有分解结果（" + pdfFiles.Length + " 个 PDF）", Color.FromArgb(46, 125, 50));
-            lblProgress.Text = "使用现有分解结果";
+            SetProgressText("使用现有分解结果");
             progressBar.Style = ProgressBarStyle.Continuous;
             progressBar.Value = 0;
         }
@@ -1076,24 +1116,17 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 【AI 分析】＝部材名 AI 推荐：遍历【分类结果】中「アッセンブリ図」的 PDF，
-        /// 对该図番里「数据来源 = CMD分析・アッセンブリ図」的<b>全部</b>行，
-        /// 用该页 <c>parts_info.json</c> 的圈号坐标 + 零件图文字坐标 + 部材マスタ
-        /// （<c>部材部品\部材部品.csv</c>）让 AI 判断「每个番号装在哪个部材上」，
-        /// 结果写进部品基本信息表的「部材名AI推荐」列（见 <see cref="MemberNameAiAdvisor"/>）。
-        /// <para>
-        /// 为什么需要 AI：第 1 步把圈号所在零件图的全部 texts 都当成同一个番号的部材名，
-        /// 两个番号挨得很近时会写成 <c>鴨居|上レール</c>；而且图上的文字可能是部品名
-        /// （<c>部品ｾｯﾄ</c> / <c>取説</c>）、或者根本没写部材名。
-        /// </para>
-        /// <para>
-        /// <b>追加机能</b>：部材名判定之后，再把 PDF 文件夹下文件名第 5 位是 <c>Z</c> 的 Excel
-        /// （<c>.xls</c> / <c>.xlsx</c> / <c>.xlsm</c>）交给 AI 判「数量」，
+        /// 【AI 分析】＝特注品记录的数量设定：对 PDF 文件夹下文件名第 5 位是 <c>Z</c> 的 Excel
+        /// （<c>.xls</c> / <c>.xlsx</c> / <c>.xlsm</c>）读整表原文，交给 AI 判「这份特注品记录的数量」，
         /// 写进部品基本信息表的「数量」列与 <c>classify\特注品.json</c> 的「員数」
-        /// （见 <see cref="SpecialProductQuantityAdvisor"/>；失败不影响部材名结果）。
+        /// （见 <see cref="SpecialProductQuantityAdvisor"/>）。
+        /// <para>
+        /// <b>部材名 AI 推荐已删除</b>：原先会用该页 <c>parts_info.json</c> 的圈号坐标 + 零件图文字坐标
+        /// + 部材マスタ让 AI 判断「每个番号装在哪个部材上」，结果写进「部材名AI推荐」列；
+        /// 现在这一列不再显示（部品基本信息画面已去掉），也不再计算、不再写库。
         /// </para>
         /// <para>
-        /// 旧版本这里是「用 AI 从 plu_table.txt 提取整张部品表」，该功能已停用
+        /// 旧版本这里是「用 AI 从 plu_table.txt 提取整张部品表」，该功能也已停用
         /// （<see cref="PartAnalysisService.AnalyzeAndSave"/> 不再被按钮调用）。
         /// </para>
         /// </summary>
@@ -1108,7 +1141,7 @@ namespace MSIFAITOOLS
 
             if (_classifications == null || _classifications.Count == 0)
             {
-                MessageBox.Show(this, "请先点击【开始分解】，并在【分类结果】页确认分类后再执行 AI 分析。",
+                ShowMessage("请先点击【开始分解】，并在【分类结果】页确认分类后再执行 AI 分析。",
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("尚未分解，无法 AI 分析", Color.FromArgb(239, 108, 0));
                 return false;
@@ -1118,54 +1151,11 @@ namespace MSIFAITOOLS
 
             if (string.IsNullOrEmpty(outputDir) || !Directory.Exists(outputDir))
             {
-                MessageBox.Show(this,
-                    "找不到分解输出目录，请先执行【开始分解】。\n\n" + (outputDir ?? string.Empty),
+                ShowMessage(
+                    UiText.F("找不到分解输出目录，请先执行【开始分解】。\n\n{0}", outputDir ?? string.Empty),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("找不到分解输出目录", Color.FromArgb(239, 108, 0));
                 return false;
-            }
-
-            // 后台线程只读快照，避免分析期间界面修改分类造成并发问题
-            List<PdfClassification> snapshot = new List<PdfClassification>();
-
-            foreach (PdfClassification item in _classifications)
-            {
-                if (item != null && item.Category == PdfCategory.Assembly)
-                {
-                    snapshot.Add(new PdfClassification(item.FilePath, item.Category, item.Evidence,
-                        item.IsAutomatic));
-                }
-            }
-
-            if (snapshot.Count == 0)
-            {
-                MessageBox.Show(this,
-                    "【分类结果】中没有「" + PdfCategoryNames.Assembly + "」的 PDF。\n\n" +
-                    "请在【分类结果】页确认分类（分类由上游工具写入 PdfInfoList.txt）后再执行。",
-                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                SetStatus("没有「" + PdfCategoryNames.Assembly + "」，无需分析", Color.FromArgb(239, 108, 0));
-                return false;
-            }
-
-            // 【开发调试】PartAnalysisService.DebugSingleFileOnly = true 时只分析指定 PDF
-            if (PartAnalysisService.IsDebugSingleFileMode)
-            {
-                List<PdfClassification> debugTargets = PartAnalysisService.ApplyDebugFilter(snapshot);
-
-                if (debugTargets.Count == 0)
-                {
-                    MessageBox.Show(this,
-                        "【调试模式】只分析「" + PartAnalysisService.DebugSingleFileName + "」，" +
-                        "但【分类结果】中没有这个文件。\n\n" +
-                        "请确认该 PDF 已分类为「" + PdfCategoryNames.Assembly + "」，" +
-                        "或把 PartAnalysisService.DebugSingleFileOnly 改为 false。",
-                        "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    SetStatus("【调试模式】未找到 " + PartAnalysisService.DebugSingleFileName,
-                        Color.FromArgb(239, 108, 0));
-                    return false;
-                }
-
-                snapshot = debugTargets;
             }
 
             AiApiOptions options = AiApiOptions.FromConfiguration();
@@ -1178,24 +1168,29 @@ namespace MSIFAITOOLS
 
                 if (!string.IsNullOrEmpty(configError))
                 {
-                    errorNote += "\n\nApp.config 读取失败：\n" + configError;
+                    errorNote += UiText.F("\n\nApp.config 读取失败：\n{0}", configError);
                 }
 
                 if (!string.IsNullOrEmpty(settingsError))
                 {
-                    errorNote += "\n\n用户设置文件读取失败：\n" + settingsError;
+                    errorNote += UiText.F("\n\n用户设置文件读取失败：\n{0}", settingsError);
                 }
 
-                MessageBox.Show(this,
-                    "尚未配置 AI 接口密钥。\n\n" +
-                    "请点击【AI 设置】按钮填写 ApiKey（保存后立即生效），" +
-                    "或在 App.config 的 <appSettings> 中填写 AiApiKey，" +
-                    "或设置环境变量 " + AiApiOptions.ApiKeyEnvironmentKey + "。" + errorNote,
+                ShowMessage(
+                    UiText.F("尚未配置 AI 接口密钥。\n\n" +
+                             "请点击【AI 设置】按钮填写 ApiKey（保存后立即生效），" +
+                             "或在 App.config 的 <appSettings> 中填写 AiApiKey，" +
+                             "或设置环境变量 {0}。{1}", AiApiOptions.ApiKeyEnvironmentKey, errorNote),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                AppendLog("AI 分析已取消：未配置 AiApiKey（可在【AI 设置】中填写）/ " +
-                    AiApiOptions.ApiKeyEnvironmentKey +
-                    (string.IsNullOrEmpty(configError) ? string.Empty : "（App.config 读取失败：" + configError + "）") +
-                    (string.IsNullOrEmpty(settingsError) ? string.Empty : "（用户设置读取失败：" + settingsError + "）"),
+                AppendLog(
+                    UiText.F("AI 分析已取消：未配置 AiApiKey（可在【AI 设置】中填写）/ {0}{1}{2}",
+                        AiApiOptions.ApiKeyEnvironmentKey,
+                        string.IsNullOrEmpty(configError)
+                            ? string.Empty
+                            : UiText.F("（App.config 读取失败：{0}）", configError),
+                        string.IsNullOrEmpty(settingsError)
+                            ? string.Empty
+                            : UiText.F("（用户设置读取失败：{0}）", settingsError)),
                     Color.FromArgb(255, 200, 120));
                 SetStatus("未配置 AI 密钥", Color.FromArgb(239, 108, 0));
                 return false;
@@ -1208,134 +1203,70 @@ namespace MSIFAITOOLS
             tabMain.SelectedTab = tabPageLog;
 
             AppendLog("==================================================", Color.FromArgb(90, 90, 90));
-            AppendLog(string.Format("AI 分析开始（部材名判定）：{0} 个「{1}」PDF", snapshot.Count,
-                PdfCategoryNames.Assembly), Color.FromArgb(120, 200, 255));
+            AppendLog("AI 分析开始（特注品记录的数量设定）", Color.FromArgb(120, 200, 255));
             AppendLog("AI 配置：" + options.Describe(), Color.FromArgb(180, 180, 180));
             AppendLog("分解输出目录：" + outputDir, Color.FromArgb(180, 180, 180));
-            AppendLog("只处理「数据来源 = " + PartSourceKind.CmdAssembly + "」的行（部材名 为空 / その他 / 含 | 都要判），" +
-                "参照「" + MemberPartCatalogLoader.FolderName + "\\" + MemberPartCatalogLoader.FileName +
-                "」→ 结果写进「" + PartBasicInfoRepository.MemberNameAiColumnName + "」列",
+            AppendLog("处理对象：PDF 文件夹下文件名第 5 位是 Z 的 Excel（.xls / .xlsx / .xlsm）" +
+                "→ AI 判数量 → 写进部品基本信息表的「数量」列与 classify\\特注品.json 的「員数」",
                 Color.FromArgb(180, 180, 180));
             AppendLog("部品基本信息数据库：" + ResolvePartDatabasePath(),
                 Color.FromArgb(180, 180, 180));
 
-            if (PartAnalysisService.IsDebugSingleFileMode)
-            {
-                AppendLog("【调试模式】只分析指定文件：" + PartAnalysisService.DebugSingleFileName,
-                    Color.FromArgb(255, 200, 120));
-            }
+            SetStatus("正在 AI 分析（特注品记录的数量设定）...", Color.FromArgb(230, 126, 34));
+            SetProgressText("AI 分析中（特注品数量）...");
 
-            SetStatus("正在 AI 分析（部材名判定，共 " + snapshot.Count + " 个 PDF）...", Color.FromArgb(230, 126, 34));
-            lblProgress.Text = "AI 分析中（部材名判定）...";
-
-            MemberNameAiSummary summary = null;
-            Exception failure = null;
+            // 特注品记录的数量设定：把 PDF 文件夹下文件名第 5 位是 Z 的 Excel（.xls / .xlsx / .xlsm）
+            // 交给 AI 判数量，写进部品基本信息表的「数量」列与 classify\特注品.json 的「員数」。
+            // 失败只记日志（见 SpecialProductQuantityAdvisor）。
+            SpecialProductQuantitySummary quantitySummary = null;
 
             try
             {
-                MemberNameAiAdvisor advisor = new MemberNameAiAdvisor(options,
-                    ResolvePartDatabasePath());
+                string databasePath = ResolvePartDatabasePath();
 
-                // 同上：用匿名方法（delegate）代替 Lambda 表达式，日志回调复用 OnServiceLog
-                Func<MemberNameAiSummary> analyzeWork = delegate
+                Func<SpecialProductQuantitySummary> quantityWork = delegate
                 {
-                    return advisor.AnalyzeAndSave(snapshot, outputDir, OnServiceLog);
+                    string root = outputDir.TrimEnd(Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar);
+
+                    return SpecialProductQuantityAdvisor.Run(Path.GetDirectoryName(root), outputDir,
+                        databasePath, options, OnServiceLog);
                 };
 
-                summary = await Task.Run(analyzeWork);
+                quantitySummary = await Task.Run(quantityWork);
             }
             catch (Exception ex)
             {
-                failure = ex;
-            }
-
-            // 【AI 分析】追加机能 · 特注品记录的数量设定：
-            // 部材名判定之后，再把 PDF 文件夹下文件名第 5 位是 Z 的 Excel（.xls / .xlsx / .xlsm）交给 AI 判数量，
-            // 写进部品基本信息表的「数量」列与 classify\特注品.json 的「員数」。
-            // 数量判定失败只记日志，不影响上面已经完成的部材名结果（见 SpecialProductQuantityAdvisor）。
-            SpecialProductQuantitySummary quantitySummary = null;
-
-            if (failure == null)
-            {
-                string databasePath = ResolvePartDatabasePath();
-
-                try
-                {
-                    Func<SpecialProductQuantitySummary> quantityWork = delegate
-                    {
-                        string root = outputDir.TrimEnd(Path.DirectorySeparatorChar,
-                            Path.AltDirectorySeparatorChar);
-
-                        return SpecialProductQuantityAdvisor.Run(Path.GetDirectoryName(root), outputDir,
-                            databasePath, options, OnServiceLog);
-                    };
-
-                    quantitySummary = await Task.Run(quantityWork);
-                }
-                catch (Exception ex)
-                {
-                    AppendLog("特注品数量设定失败：" + ex.Message, Color.FromArgb(255, 200, 120));
-                }
+                AppendLog("特注品数量设定失败：" + ex.Message, Color.FromArgb(255, 200, 120));
             }
 
             SetRunning(false);
 
-            if (failure != null)
-            {
-                AppendLog("AI 分析失败：" + failure.Message, Color.FromArgb(255, 140, 140));
-                SetStatus("AI 分析异常", Color.FromArgb(198, 40, 40));
-                lblProgress.Text = "AI 分析异常";
-
-                if (showCompletionDialog)
-                {
-                    MessageBox.Show(this, "AI 分析失败：\n" + failure.Message, "异常",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-
-                return false;
-            }
-
-            if (summary == null)
+            if (quantitySummary == null)
             {
                 SetStatus("AI 分析未返回结果", Color.FromArgb(198, 40, 40));
-                lblProgress.Text = "AI 分析未返回结果";
+                SetProgressText("AI 分析未返回结果");
                 return false;
             }
 
-            string summaryText = MemberNameAiAdvisor.BuildSummaryText(summary);
+            string summaryText = UiText.Translate(SpecialProductQuantityAdvisor.BuildSummaryText(quantitySummary));
+            bool updated = quantitySummary.DatabaseUpdatedCount > 0 || quantitySummary.JsonUpdatedCount > 0;
 
             progressBar.Style = ProgressBarStyle.Continuous;
-            progressBar.Value = summary.SavedRowCount > 0 ? progressBar.Maximum : 0;
-            lblProgress.Text = "AI 分析完成";
+            progressBar.Value = updated ? progressBar.Maximum : 0;
+            SetProgressText("AI 分析完成");
 
             AppendLog("--------------------------------------------------", Color.FromArgb(90, 90, 90));
-            AppendLog(summaryText, summary.SuggestedRowCount > 0
+            AppendLog(summaryText, updated
                 ? Color.FromArgb(150, 220, 150)
                 : Color.FromArgb(255, 200, 120));
-            AppendLog("部品基本信息数据库：" + summary.DatabasePath, Color.FromArgb(180, 180, 180));
 
-            if (quantitySummary != null)
-            {
-                AppendLog(SpecialProductQuantityAdvisor.BuildSummaryText(quantitySummary),
-                    quantitySummary.DatabaseUpdatedCount > 0 || quantitySummary.JsonUpdatedCount > 0
-                        ? Color.FromArgb(150, 220, 150)
-                        : Color.FromArgb(255, 200, 120));
-            }
-
-            SetStatus(summaryText, summary.FailedDrawingCount > 0
-                ? Color.FromArgb(255, 140, 140)
-                : Color.FromArgb(46, 125, 50));
+            SetStatus(summaryText, Color.FromArgb(46, 125, 50));
 
             if (showCompletionDialog)
             {
-                MessageBox.Show(this,
-                    "AI 分析完成！\n\n" + summaryText + "\n\n" +
-                    (quantitySummary == null
-                        ? string.Empty
-                        : SpecialProductQuantityAdvisor.BuildSummaryText(quantitySummary) + "\n\n") +
-                    "部品基本信息数据库：\n" + summary.DatabasePath + "\n\n" +
-                    "可在【分类结果】选中 PDF 行后点击【部品信息】，查看「" +
-                    PartBasicInfoRepository.MemberNameAiColumnName + "」列。",
+                ShowMessage(
+                    UiText.F("AI 分析完成！\n\n{0}\n\n可在【分类结果】选中 PDF 行后点击【部品信息】查看「数量」列。", summaryText),
                     "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
 
@@ -1346,7 +1277,7 @@ namespace MSIFAITOOLS
         /// 【CMD 分析】遍历【分类结果】中「アッセンブリ図」的 PDF，
         /// 用本工具自己的逻辑（<b>不调用 AI</b>）读取 CadPartSplitter 生成的
         /// 01_アッセンブリ図_部品機能情報.csv（&lt;输出根目录&gt;\&lt;図番号&gt;\…，旧名 LT_STEP1.csv），
-        /// 以 xy.txt 校验后登录到 SQLite 部品基本信息表（与【AI 分析】的「部材名AI推荐」同一张表）。
+        /// 以 xy.txt 校验后登录到 SQLite 部品基本信息表（与【AI 分析】写入「数量」的是同一张表）。
         ///
         /// 点一次依次走「第 0 步 + 最前面 1 步 + 第 1~6 步」（名字见 <see cref="CmdAnalysisSteps"/>）：
         /// <b>第 0 步 特注品.json 维护（固定最先执行）</b>（PDF 文件夹下文件名第 5 位是 Z 的 xlsx，
@@ -1447,7 +1378,7 @@ namespace MSIFAITOOLS
 
             if (_classifications == null || _classifications.Count == 0)
             {
-                MessageBox.Show(this, "请先点击【开始分解】，并在【分类结果】页确认分类后再执行 CMD 分析。",
+                ShowMessage("请先点击【开始分解】，并在【分类结果】页确认分类后再执行 CMD 分析。",
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("尚未分解，无法 CMD 分析", Color.FromArgb(239, 108, 0));
                 return false;
@@ -1457,8 +1388,8 @@ namespace MSIFAITOOLS
 
             if (string.IsNullOrEmpty(outputDir) || !Directory.Exists(outputDir))
             {
-                MessageBox.Show(this,
-                    "找不到分解输出目录，请先执行【开始分解】。\n\n" + (outputDir ?? string.Empty),
+                ShowMessage(
+                    UiText.F("找不到分解输出目录，请先执行【开始分解】。\n\n{0}", outputDir ?? string.Empty),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("找不到分解输出目录", Color.FromArgb(239, 108, 0));
                 return false;
@@ -1482,9 +1413,10 @@ namespace MSIFAITOOLS
                 stepKind != CmdAnalysisStepKind.SpecialProductCsv &&
                 stepKind != CmdAnalysisStepKind.MaintainTzJson)
             {
-                MessageBox.Show(this,
-                    "【分类结果】中没有「" + PdfCategoryNames.Assembly + "」的 PDF。\n\n" +
-                    "请在【分类结果】页确认分类（分类由上游工具写入 PdfInfoList.txt）后再执行。",
+                ShowMessage(
+                    UiText.F("【分类结果】中没有「{0}」的 PDF。\n\n" +
+                             "请在【分类结果】页确认分类（分类由上游工具写入 PdfInfoList.txt）后再执行。",
+                        PdfCategoryNames.Assembly),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetStatus("没有「" + PdfCategoryNames.Assembly + "」，无需分析", Color.FromArgb(239, 108, 0));
                 return false;
@@ -1499,7 +1431,7 @@ namespace MSIFAITOOLS
 
             // 主按钮 / 子按钮共用：日志与状态栏都用同一步骤名（名字来自 CmdAnalysisSteps）
             CmdAnalysisStep step = CmdAnalysisSteps.GetStep(stepKind);
-            string actionName = step == null ? "CMD 分析" : step.Label;
+            string actionName = step == null ? UiText.T("CMD 分析") : UiText.T(step.Label);
 
             SetRunning(true);
             tabMain.SelectedTab = tabPageLog;
@@ -1513,7 +1445,7 @@ namespace MSIFAITOOLS
             if (stepKind == CmdAnalysisStepKind.All)
             {
                 AppendLog(CmdAnalysisSteps.MaintainTzJsonStep.LogHeader +
-                    " 固定最先执行：只对 特注品.json 里还没有的文件让 AI 读取并补足",
+                    UiText.T(" 固定最先执行：只对 特注品.json 里还没有的文件让 AI 读取并补足"),
                     Color.FromArgb(120, 200, 255));
             }
             AppendLog("分解输出目录：" + outputDir, Color.FromArgb(180, 180, 180));
@@ -1521,7 +1453,7 @@ namespace MSIFAITOOLS
                 Color.FromArgb(180, 180, 180));
 
             SetStatus("正在 " + actionName + "（共 " + snapshot.Count + " 个 PDF）...", Color.FromArgb(230, 126, 34));
-            lblProgress.Text = actionName + " 中...";
+            SetProgressText(actionName + " 中...");
 
             PartAnalysisSummary summary = null;
             Exception failure = null;
@@ -1550,11 +1482,11 @@ namespace MSIFAITOOLS
             {
                 AppendLog(actionName + " 失败：" + failure.Message, Color.FromArgb(255, 140, 140));
                 SetStatus(actionName + " 异常", Color.FromArgb(198, 40, 40));
-                lblProgress.Text = actionName + " 异常";
+                SetProgressText(actionName + " 异常");
 
                 if (showCompletionDialog)
                 {
-                    MessageBox.Show(this, actionName + " 失败：\n" + failure.Message, "异常",
+                    ShowMessage(actionName + " 失败：\n" + failure.Message, "异常",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
 
@@ -1564,22 +1496,22 @@ namespace MSIFAITOOLS
             if (summary == null)
             {
                 SetStatus(actionName + " 未返回结果", Color.FromArgb(198, 40, 40));
-                lblProgress.Text = actionName + " 未返回结果";
+                SetProgressText(actionName + " 未返回结果");
                 return false;
             }
 
-            string summaryText = CmdPartAnalysisService.BuildSummaryText(summary);
+            string summaryText = UiText.Translate(CmdPartAnalysisService.BuildSummaryText(summary));
 
             // 第 0 步不写数据库：完成提示换成说明文字，避免看起来像「保存 0 行」的失败
             if (stepKind == CmdAnalysisStepKind.MaintainTzJson)
             {
-                summaryText = CmdAnalysisSteps.MaintainTzJsonStep.Label +
-                    " 已完成（这一步不写数据库，明细见上方日志）。";
+                summaryText = UiText.F("{0} 已完成（这一步不写数据库，明细见上方日志）。",
+                    CmdAnalysisSteps.MaintainTzJsonStep.Label);
             }
 
             progressBar.Style = ProgressBarStyle.Continuous;
             progressBar.Value = summary.SavedRowCount > 0 ? progressBar.Maximum : 0;
-            lblProgress.Text = actionName + " 完成";
+            SetProgressText(actionName + " 完成");
 
             AppendLog("--------------------------------------------------", Color.FromArgb(90, 90, 90));
             AppendLog(summaryText, summary.SavedRowCount > 0
@@ -1593,10 +1525,10 @@ namespace MSIFAITOOLS
 
             if (showCompletionDialog)
             {
-                MessageBox.Show(this,
-                    actionName + " 完成！\n\n" + summaryText + "\n\n" +
-                    "部品基本信息数据库：\n" + summary.DatabasePath + "\n\n" +
-                    "可在【分类结果】选中 PDF 行后点击【部品信息】查看登录的部品基本信息。",
+                ShowMessage(
+                    UiText.F("{0} 完成！\n\n{1}\n\n部品基本信息数据库：\n{2}\n\n" +
+                             "可在【分类结果】选中 PDF 行后点击【部品信息】查看登录的部品基本信息。",
+                        actionName, summaryText, summary.DatabasePath),
                     "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
 
@@ -1611,9 +1543,9 @@ namespace MSIFAITOOLS
         /// （日志、状态栏、进度条照常刷新，只是不弹「完成」框），最后统一弹一次结果。
         /// </para>
         /// <para>
-        /// 任何一步返回 <c>false</c>（前置检查不通过 / 执行异常 / 用户取消）就停下，
-        /// 不再跑后面的步骤 —— 后面的步骤都依赖前一步的产物（分解结果 → CMD 入库 → AI 判定）。
-        /// 分解时「是否重新分解」的询问框仍然会弹（那是决定，不是提示）。
+        /// 任何一步失败就停下，不再跑后面的步骤 —— 后面的步骤都依赖前一步的产物（分解结果 → CMD 入库 → AI 判定）。
+        /// 分解时「是否重新分解」的询问框仍然会弹（那是决定，不是提示）：选「否」= 中止整次一括执行，
+        /// 后面的【CMD 分析】/【AI 分析】都不执行（只在日志 / 状态栏留下「已取消」，不弹警告框）。
         /// </para>
         /// </summary>
         private async void BtnRunAll_Click(object sender, EventArgs e)
@@ -1646,18 +1578,28 @@ namespace MSIFAITOOLS
                 Color.FromArgb(200, 170, 255));
             SetStatus("一括执行中：开始分解...", Color.FromArgb(230, 126, 34));
 
-            // ① 开始分解（不弹完成框；「是否重新分解」的询问框照常）
-            bool splitOk = await RunSplitAsync(false);
+            // ① 开始分解（不弹完成框；「是否重新分解」的询问框照常，选「否」= 中止整次一括执行）
+            SplitRunOutcome splitOutcome = await RunSplitAsync(false, true);
 
-            if (!splitOk)
+            if (splitOutcome == SplitRunOutcome.Cancelled)
+            {
+                // 用户主动取消：不再跑后面的步骤，也不再弹「执行停止」的警告框（只留日志 / 状态栏）
+                AppendLog("一括执行已取消（询问框选择了「否」）：【CMD 分析】/【AI 分析】未执行。",
+                    Color.FromArgb(255, 200, 120));
+                SetStatus("一括执行已取消（后续步骤未执行）", Color.FromArgb(90, 90, 90));
+                SetProgressText("一括执行已取消");
+                return;
+            }
+
+            if (splitOutcome != SplitRunOutcome.Success)
             {
                 AppendLog("一括执行已停止：【开始分解】未成功，后续【CMD 分析】/【AI 分析】未执行。",
                     Color.FromArgb(255, 140, 140));
                 SetStatus("一括执行已停止（开始分解失败）", Color.FromArgb(198, 40, 40));
 
-                MessageBox.Show(this,
-                    "一括执行已停止。\n\n【开始分解】未成功，后续【CMD 分析】/【AI 分析】没有执行。\n\n" +
-                    "原因见【运行日志】，处理后可以重新点击【一括执行】，或单独重试某一步。",
+                ShowMessage(
+                    UiText.T("一括执行已停止。\n\n【开始分解】未成功，后续【CMD 分析】/【AI 分析】没有执行。\n\n" +
+                             "原因见【运行日志】，处理后可以重新点击【一括执行】，或单独重试某一步。"),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1673,14 +1615,14 @@ namespace MSIFAITOOLS
                     Color.FromArgb(255, 140, 140));
                 SetStatus("一括执行已停止（CMD 分析失败）", Color.FromArgb(198, 40, 40));
 
-                MessageBox.Show(this,
-                    "一括执行已停止。\n\n【开始分解】已完成，但【CMD 分析】未成功，" +
-                    "【AI 分析】没有执行。\n\n原因见【运行日志】。",
+                ShowMessage(
+                    UiText.T("一括执行已停止。\n\n【开始分解】已完成，但【CMD 分析】未成功，" +
+                             "【AI 分析】没有执行。\n\n原因见【运行日志】。"),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            // ③ AI 分析（部材名 AI 推荐 + 特注品数量）
+            // ③ AI 分析（特注品数量）
             SetStatus("一括执行中：AI 分析...", Color.FromArgb(230, 126, 34));
 
             bool aiOk = await RunAiAnalysisAsync(false);
@@ -1691,9 +1633,9 @@ namespace MSIFAITOOLS
                     Color.FromArgb(255, 200, 120));
                 SetStatus("一括执行结束（AI 分析未完成）", Color.FromArgb(198, 40, 40));
 
-                MessageBox.Show(this,
-                    "一括执行结束，但【AI 分析】未完成。\n\n" +
-                    "【开始分解】与【CMD 分析】的结果已经保存，原因见【运行日志】。",
+                ShowMessage(
+                    UiText.T("一括执行结束，但【AI 分析】未完成。\n\n" +
+                             "【开始分解】与【CMD 分析】的结果已经保存，原因见【运行日志】。"),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -1702,13 +1644,13 @@ namespace MSIFAITOOLS
             AppendLog("一括执行完成：开始分解 → CMD 分析 → AI 分析 全部结束。",
                 Color.FromArgb(150, 220, 150));
             SetStatus("一括执行完成", Color.FromArgb(46, 125, 50));
-            lblProgress.Text = "一括执行完成";
+            SetProgressText("一括执行完成");
 
-            MessageBox.Show(this,
-                "一括执行完成！\n\n" +
-                "① 开始分解\n② CMD 分析（第 0 ~ 6 步）\n③ AI 分析（部材名 AI 推荐 + 特注品数量）\n\n" +
-                "每一步的结果明细见【运行日志】；部品基本信息可在【分类结果】选中 PDF 行后" +
-                "点击【部品信息】查看。",
+            ShowMessage(
+                UiText.T("一括执行完成！\n\n" +
+                         "① 开始分解\n② CMD 分析（第 0 ~ 6 步）\n③ AI 分析（特注品数量）\n\n" +
+                         "每一步的结果明细见【运行日志】；部品基本信息可在【分类结果】选中 PDF 行后" +
+                         "点击【部品信息】查看。"),
                 "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
@@ -1773,7 +1715,7 @@ namespace MSIFAITOOLS
                     int rowIndex = dgvClassify.Rows.Add(
                         (index + 1).ToString(),
                         item.FileName,
-                        item.CategoryName,
+                        UiText.T(item.CategoryName),
                         item.Evidence);
 
                     dgvClassify.Rows[rowIndex].Tag = item;
@@ -2310,9 +2252,6 @@ namespace MSIFAITOOLS
         /// <summary>进入全画面之前 ② 执行 是否可见（退出时还原）。</summary>
         private bool _grpActionVisibleBeforeFullScreen;
 
-        /// <summary>进入全画面之前日志组的标题（退出时还原）。</summary>
-        private string _grpLogTextBeforeFullScreen;
-
         /// <summary>进入全画面之前的窗体状态（只在本次确实最大化过时才还原窗口大小）。</summary>
         private FormWindowState _windowStateBeforeFullScreen;
 
@@ -2462,18 +2401,18 @@ namespace MSIFAITOOLS
 
             // 先记下原始布局，退出时逐项还原（不写死设计器里的具体数值）
             _grpLogBoundsBeforeFullScreen = grpLog.Bounds;
-            _grpLogTextBeforeFullScreen = grpLog.Text;
             _grpInputVisibleBeforeFullScreen = grpInput.Visible;
             _grpActionVisibleBeforeFullScreen = grpAction.Visible;
             _windowStateBeforeFullScreen = WindowState;
             _windowBoundsBeforeFullScreen = Bounds;
 
-            // 看一览时用不到这三块，收起来才能把高度全部让给表格
+            // 看一览时用不到这三块（③ 里现在是开始分解 / CMD 分析 / AI 分析 + 分步按钮），
+            // 收起来才能把高度全部让给表格
             grpInput.Visible = false;
             grpAction.Visible = false;
             grpSteps.Visible = false;
 
-            grpLog.Text = "④  分类结果一览（全画面）— 按 Esc 或切回【运行日志】标签即还原布局";
+            UpdateLogGroupTitle();
 
             // 「全画面」= 窗口先最大化；本来就已经最大化 / 最小化时不动窗口
             if (_windowStateBeforeFullScreen == FormWindowState.Normal)
@@ -2499,7 +2438,7 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 退出【分类结果】全画面：还原 ① / ② 的显示状态、日志组标题与位置、窗口大小；
-        /// ③ 分步执行 的显示与否由标题栏 Debug 决定（见 <see cref="ApplyStepsPanelLayout"/>）。
+        /// ③ 分步执行 的「第 0 ~ 6 步」由标题栏 Debug 决定（见 <see cref="ApplyStepsPanelLayout"/>）。
         /// </summary>
         private void ExitClassifyFullScreen()
         {
@@ -2512,7 +2451,7 @@ namespace MSIFAITOOLS
 
             grpInput.Visible = _grpInputVisibleBeforeFullScreen;
             grpAction.Visible = _grpActionVisibleBeforeFullScreen;
-            grpLog.Text = _grpLogTextBeforeFullScreen;
+            UpdateLogGroupTitle();
 
             // 只有本次确实把窗口最大化过，才需要还原窗口大小（用户本来最大化就保持最大化）
             if (_windowStateBeforeFullScreen == FormWindowState.Normal)
@@ -2527,7 +2466,7 @@ namespace MSIFAITOOLS
 
             grpLog.Bounds = _grpLogBoundsBeforeFullScreen;
 
-            // ③ 分步执行 显示与否由标题栏 Debug 决定；并按内容区实际高度重排 ④（不留空白）
+            // ③ 分步执行 里的「第 0 ~ 6 步」由标题栏 Debug 决定；并按内容区实际高度重排 ④（不留空白）
             ApplyStepsPanelLayout();
         }
 
@@ -2556,8 +2495,10 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 按标题栏「Debug」勾选状态摆放内容区下半部分：
         /// <list type="bullet">
-        /// <item>勾选 → 显示 ③ 分步执行（CMD 分析第 0 ~ 6 步），④ 运行日志 排到它下方；</item>
-        /// <item>不勾选（默认）→ 收起 ③，④ 运行日志 直接顶到 ② 执行 下面，并一直撑到内容区底部（不留空白）。</item>
+        /// <item>勾选 Debug → 显示 ③ 分步执行（第一行【开始分解】/【CMD 分析】/【AI 分析】，
+        ///       下面再排「CMD 分析 第 0 ~ 6 步」），④ 运行日志 排到它下方；</item>
+        /// <item>不勾选（默认）→ ③ 分步执行 整块不显示（主按钮也一起收起），
+        ///       ④ 运行日志 直接接在 ② 执行 下面并撑到内容区底部。</item>
         /// </list>
         /// <para>
         /// 位置不用写死的常量：② 执行 的底边、③ 的高度都取控件的实际值，
@@ -2581,22 +2522,21 @@ namespace MSIFAITOOLS
 
             bool showSteps = chkDebug != null && chkDebug.Checked;
 
+            // ③ 分步执行 整块跟着 Debug 收 / 放：不勾选时连主按钮那一行也不显示，
+            // 平时用 ② 执行 里的【一括执行】即可；勾选后才出现（含第 0 ~ 6 步）。
+            // 面板高度始终是设计器里的值（不再按 Debug 收放），所以这里不用改 Height。
             grpSteps.Visible = showSteps;
+            ApplyStepsButtonsVisible(showSteps);
 
             // 左 / 右 / 底留白直接取 ② 执行 的设计左边距（20px），块间距取 ③ 与 ② 之间的设计间距（6px）：
             // 都是控件运行时的真实值，DPI / 字体自动缩放把尺寸放大后依然保持均匀留白。
             int margin = grpAction.Left;
             int gap = Math.Max(0, grpSteps.Top - grpAction.Bottom);
             int width = pnlContent.ClientSize.Width - margin * 2;
-            int top = grpAction.Bottom + gap;
+
+            // ③ 收起时 ④ 直接接在 ② 下面（中间仍是同一个 6px 块间距），不留下空白
+            int top = (showSteps ? grpSteps.Bottom : grpAction.Bottom) + gap;
             int bottom = pnlContent.ClientSize.Height - margin;
-
-            if (showSteps)
-            {
-                // 有 ③ 时 ④ 排在它下面（grpSteps.Bottom 随 DPI 缩放，别写成常量）
-                top = grpSteps.Bottom + gap;
-            }
-
             int height = bottom - top;
 
             if (width <= 0 || height <= 0)
@@ -2608,8 +2548,32 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 标题栏「Debug」开关：勾选后显示 ③ 分步执行 面板（第 0 ~ 6 步可单独执行），
-        /// 取消勾选则收起该面板，并让 ④ 运行日志 撑满剩余高度（不留空白）。
+        /// 显示 / 收起 ③ 分步执行 里的「第 0 ~ 6 步」（标题栏 Debug 控制）。
+        /// <para>
+        /// 主按钮（【开始分解】/【CMD 分析】/【AI 分析】）与第 0 ~ 6 步 一起受 Debug 控制：
+        /// Debug 不勾选时整块 ③ 由 <see cref="ApplyStepsPanelLayout"/> 收起，这里只负责
+        /// 把组内控件恢复成「勾选时的样子」，免得再次显示时出现半隐藏的状态。
+        /// </para>
+        /// </summary>
+        /// <param name="visible">true = 显示分步按钮；false = 只留主按钮那一行（③ 本身随即被收起）。</param>
+        private void ApplyStepsButtonsVisible(bool visible)
+        {
+            lblCmdStepHint.Visible = visible;
+            btnCmdStep0.Visible = visible;
+            btnCmdStep1.Visible = visible;
+            btnCmdStep2.Visible = visible;
+            btnCmdStep3.Visible = visible;
+            btnCmdStep4.Visible = visible;
+            btnCmdStep5.Visible = visible;
+            btnCmdStep6.Visible = visible;
+            lblCmdStepNote.Visible = visible;
+            chkCmdStep0.Visible = visible;
+        }
+
+        /// <summary>
+        /// 标题栏「Debug」开关：勾选后显示 ③ 分步执行 整块（【开始分解】/【CMD 分析】/【AI 分析】
+        /// 与第 0 ~ 6 步，均可单独执行），取消勾选则把 ③ 整块收起、让 ④ 运行日志 直接接在
+        /// ② 执行 下面并撑满剩余高度（不留空白，平时用 ② 里的【一括执行】即可）。
         /// </summary>
         private void ChkDebug_CheckedChanged(object sender, EventArgs e)
         {
@@ -2619,11 +2583,11 @@ namespace MSIFAITOOLS
 
             AppendLog(
                 debugOn
-                    ? "Debug 已开启：显示【分步执行】面板（CMD 分析 第 0 ~ 6 步可单独执行）。"
-                    : "Debug 已关闭：隐藏【分步执行】面板，④ 运行日志 已撑满内容区。",
+                    ? "Debug 已开启：显示【分步执行】面板（开始分解 / CMD 分析 / AI 分析 与第 0 ~ 6 步，可单独执行）。"
+                    : "Debug 已关闭：收起【分步执行】面板（平时用【一括执行】），④ 运行日志 已上移并撑满内容区。",
                 Color.FromArgb(150, 200, 255));
 
-            SetStatus(debugOn ? "已显示【分步执行】面板" : "已隐藏【分步执行】面板",
+            SetStatus(debugOn ? "已显示【分步执行】面板" : "已收起【分步执行】面板",
                 Color.FromArgb(108, 117, 125));
         }
 
@@ -2634,7 +2598,7 @@ namespace MSIFAITOOLS
         {
             if (_classifications == null || _classifications.Count == 0)
             {
-                lblClassifySummary.Text = "尚未执行分类";
+                lblClassifySummary.Text = UiText.T("尚未执行分类");
                 lblClassifySummary.ForeColor = Color.FromArgb(52, 73, 94);
                 return;
             }
@@ -2642,7 +2606,9 @@ namespace MSIFAITOOLS
             int unknown = PdfClassifier.Count(_classifications, PdfCategory.Unknown);
 
             lblClassifySummary.Text = PdfClassifier.BuildSummaryText(_classifications) + "\n" +
-                (unknown > 0 ? "未知 " + unknown + " 个：分类清单（PdfInfoList.txt）里没有记录" : "全部已确定");
+                (unknown > 0
+                    ? UiText.F("未知 {0} 个：分类清单（PdfInfoList.txt）里没有记录", unknown)
+                    : UiText.T("全部已确定"));
 
             lblClassifySummary.ForeColor = unknown > 0
                 ? Color.FromArgb(198, 40, 40)
@@ -2669,7 +2635,7 @@ namespace MSIFAITOOLS
 
             if (string.IsNullOrEmpty(target) || !Directory.Exists(target))
             {
-                MessageBox.Show(this, "分类目录还不存在，请先执行 PDF 分解。", "提示",
+                ShowMessage("分类目录还不存在，请先执行 PDF 分解。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -2681,7 +2647,7 @@ namespace MSIFAITOOLS
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "打开目录失败：\n" + ex.Message, "异常",
+                ShowMessage("打开目录失败：\n" + ex.Message, "异常",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -2707,7 +2673,7 @@ namespace MSIFAITOOLS
 
             if (target == null)
             {
-                MessageBox.Show(this, "暂无可打开的输出目录，请先选择 PDF 文件夹并执行分解。",
+                ShowMessage("暂无可打开的输出目录，请先选择 PDF 文件夹并执行分解。",
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -2719,7 +2685,7 @@ namespace MSIFAITOOLS
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "打开目录失败：\n" + ex.Message, "异常",
+                ShowMessage("打开目录失败：\n" + ex.Message, "异常",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }

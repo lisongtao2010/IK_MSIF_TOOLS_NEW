@@ -77,6 +77,9 @@
     <Compile Include="Form1.Designer.cs">
       <DependentUpon>Form1.cs</DependentUpon>
     </Compile>
+    <Compile Include="Form1.Localization.cs">
+      <DependentUpon>Form1.cs</DependentUpon>
+    </Compile>
     <Compile Include="PdfPreviewForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -115,7 +118,9 @@
     <Compile Include="MemberNamePickerForm.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="MemberNamePickerForm.Style.cs" />
+    <Compile Include="MemberNamePickerForm.Style.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="MemberNamePickerForm.Designer.cs">
       <DependentUpon>MemberNamePickerForm.cs</DependentUpon>
     </Compile>
@@ -135,6 +140,8 @@
     <Compile Include="Services\AiPartResponseParser.cs" />
     <Compile Include="Services\AiPromptStore.cs" />
     <Compile Include="Services\PluTablePageLocator.cs" />
+    <Compile Include="Services\UiText.cs" />
+    <Compile Include="Services\UiText.Japanese.cs" />
     <Compile Include="Services\AiPartAnalyzer.cs" />
     <Compile Include="Services\PartBasicInfoRepository.cs" />
     <Compile Include="Services\PartAnalysisService.cs" />
@@ -156,8 +163,9 @@
     <Compile Include="Services\CmdTzJsonMaintainer.cs" />
     <Compile Include="Services\TzJsonMaintainPromptStore.cs" />
     <Compile Include="Services\PartsInfoIndex.cs" />
-    <Compile Include="Services\MemberNameAiAdvisor.cs" />
-    <Compile Include="Services\MemberNamePromptStore.cs" />
+    <!-- 部材名 AI 推荐已于 2026-11-16 删除：MemberNameAiAdvisor.cs / MemberNamePromptStore.cs
+         与 Prompts\MemberNameAdvisor.Prompt.txt 不再存在，故不在此列出；
+         部材マスタ（MemberPartCatalog / MemberPartRepository）仍被部品基本信息画面使用，保留。 -->
     <Compile Include="Services\MemberPartCatalog.cs" />
     <Compile Include="Services\MemberPartRepository.cs" />
     <Compile Include="Services\MemberMappingDbSettings.cs" />
@@ -217,10 +225,6 @@
     <EmbeddedResource Include="Prompts\AiPartAnalyzer.Prompt.txt">
       <LogicalName>MSIFAITOOLS.Prompts.AiPartAnalyzer.Prompt.txt</LogicalName>
     </EmbeddedResource>
-    <!-- 【AI 分析】部材名判定提示语：同样既编译进 exe（兜底），又复制到输出目录（可运行时编辑） -->
-    <EmbeddedResource Include="Prompts\MemberNameAdvisor.Prompt.txt">
-      <LogicalName>MSIFAITOOLS.Prompts.MemberNameAdvisor.Prompt.txt</LogicalName>
-    </EmbeddedResource>
     <!-- 【CMD 分析】特注品 CSV 的 AI 补足提示语：同样既编译进 exe（兜底），又复制到输出目录（可运行时编辑） -->
     <EmbeddedResource Include="Prompts\SpecialProductAdvisor.Prompt.txt">
       <LogicalName>MSIFAITOOLS.Prompts.SpecialProductAdvisor.Prompt.txt</LogicalName>
@@ -243,9 +247,6 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Include="Prompts\AiPartAnalyzer.Prompt.txt">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="Prompts\MemberNameAdvisor.Prompt.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="Prompts\SpecialProductAdvisor.Prompt.txt">

@@ -38,7 +38,6 @@ namespace MSIFAITOOLS
     /// <list type="number">
     ///   <item><b>分割</b> —— 备注里带「<see cref="CmdCalloutPartSplitter.RemarkPositionPrefix"/>」的行：
     ///     部材名 是按圈号 / 位置从零件图分割出来的，最可信；</item>
-    ///   <item><b>AI</b> —— 「部材名 AI 推荐」（<c>colMemberNameAi</c>）有值的行；</item>
     ///   <item><b>DB</b> —— 部材部品マスタ（<see cref="MemberPartCatalog"/>＝SQLite「部材部品」表，
     ///     保存时由 <see cref="MemberPartCatalogLoader.RegisterRules"/> 登录的关联项目）里
     ///     和本行「部材名」对应的部品名（本行没有部材名 时用整张表）；</item>
@@ -57,7 +56,6 @@ namespace MSIFAITOOLS
         /// 候选项的来源优先度（数字越小越靠前）+ 列表右侧显示的灰色标识。
         /// <list type="bullet">
         ///   <item><c>Split</c>：备注里带「位置：」的行（部材名 来自分割）；</item>
-        ///   <item><c>AiMemberName</c>：「部材名 AI 推荐」有值的行；</item>
         ///   <item><c>DbRelation</c>：部材部品 DB（部材名 → 部品名 的关联项目）；</item>
         ///   <item><c>Grid</c>：表格里其它行；</item>
         ///   <item><c>PartMaster</c>：部品マスタ CSV。</item>
@@ -71,26 +69,20 @@ namespace MSIFAITOOLS
             /// <summary>分割行在列表右侧显示的标识。</summary>
             public const string SplitHint = "分割";
 
-            /// <summary>部材名 来自 AI 推荐的行（<c>colMemberNameAi</c> 有值）。</summary>
-            public const int AiMemberName = 1;
-
-            /// <summary>AI 推荐行在列表右侧显示的标识。</summary>
-            public const string AiMemberNameHint = "AI";
-
             /// <summary>部材部品 DB 里登记的关联项目。</summary>
-            public const int DbRelation = 2;
+            public const int DbRelation = 1;
 
             /// <summary>DB 关联项目在列表右侧显示的标识。</summary>
             public const string DbRelationHint = "DB";
 
             /// <summary>表格里其它行已有的部品名。</summary>
-            public const int Grid = 3;
+            public const int Grid = 2;
 
             /// <summary>表格里其它行在列表右侧显示的标识。</summary>
             public const string GridHint = "表";
 
             /// <summary>部品マスタ（CSV）的部品名。</summary>
-            public const int PartMaster = 4;
+            public const int PartMaster = 3;
 
             /// <summary>部品マスタ 在列表右侧显示的标识。</summary>
             public const string PartMasterHint = "マスタ";
@@ -114,12 +106,6 @@ namespace MSIFAITOOLS
         /// 那不是用户在打字，不能因此弹出候选列表。等这一轮消息处理完再置 true。
         /// </summary>
         private bool _partNameCandidateEditorReady;
-
-        /// <summary>
-        /// 「部材名 AI 推荐」列的名字（<c>colMemberNameAi</c>）：有值 = 这一行的部材名 是 AI 推的
-        /// （还没人工确认），候选列表里排在「分割」之后、DB 关联之前。
-        /// </summary>
-        private const string MemberNameAiColumnName = "colMemberNameAi";
 
         /// <summary>
         /// 「部品名」单元格开始编辑时（单击 / 直接打字 / F2）：挂上编辑框的 <c>TextChanged</c>，
@@ -179,11 +165,17 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 单元格开始进入编辑：如果进入的是「部材名」（<c>colMemberName</c>）的<b>内嵌编辑</b>
-        /// （F2 / 直接打字），先把「部品名 候補」窗口收掉。
+        /// （F2 / 直接打字 / 双击），先把「部品名 候補」窗口和「选择部材名」窗口
+        /// （<see cref="MemberNamePickerForm"/>）都收掉。
         /// <para>
         /// 「部材名」和「部品名」用的是同一个编辑控件（<see cref="DataGridView.EditingControl"/>），
         /// 候选窗口挂在这个控件的 <c>TextChanged</c> 上 —— 在「部材名」里打字时不能弹部品名的候选
         /// （见 <see cref="IsMemberNameCellEditing"/>）。
+        /// </para>
+        /// <para>
+        /// 「选择部材名」窗口也是<b>非模态</b>的，可能还开着（点「部材名」打开之后又按 F2 / 双击）——
+        /// 这时收起它（<see cref="HideMemberNamePicker"/>），免得面板浮在编辑框上面，
+        /// 面板里的数字键 / 滑轮还把值写进正在编辑的这一格；再点单元格会重新打开。
         /// </para>
         /// <para>
         /// 这里<b>只收窗口、不摘事件</b>：摘了之后万一这一轮没有回到
@@ -200,6 +192,10 @@ namespace MSIFAITOOLS
             if (IsMemberNameColumn(dgvParts.Columns[e.ColumnIndex]))
             {
                 HidePartNameCandidates();
+
+                // 点「部材名」打开的选择面板（非模态）此刻可能还开着：进入内嵌编辑就把它收起来，
+                // 免得面板盖在编辑框上面、数字键 / 滑轮又把值写进这一格
+                HideMemberNamePicker();
             }
         }
 
@@ -471,7 +467,6 @@ namespace MSIFAITOOLS
         /// <list type="number">
         ///   <item><b>分割</b>：备注里带「位置：」（<see cref="CmdCalloutPartSplitter.RemarkPositionPrefix"/>）
         ///     的行 —— 部材名 是按圈号 / 位置从零件图分割出来的，最可信；</item>
-        ///   <item><b>AI</b>：「部材名 AI 推荐」（<c>colMemberNameAi</c>）有值的行；</item>
         ///   <item><b>DB</b>：部材部品マスタ（<see cref="MemberPartCatalog"/>＝SQLite「部材部品」表）里
         ///     和本行「部材名」对应的部品名（本行没有部材名 / 表里没登记时用整张表）；</item>
         ///   <item><b>表</b>：表格里其它行已经填好的部品名（同一张图里通常反复用同样的几种）；</item>
@@ -505,22 +500,10 @@ namespace MSIFAITOOLS
                     PartNameSource.Split, PartNameSource.SplitHint);
             }
 
-            // ② 部材名 是 AI 推荐的行
-            foreach (DataGridViewRow row in dgvParts.Rows)
-            {
-                if (row.IsNewRow || !IsAiMemberNameRow(row))
-                {
-                    continue;
-                }
-
-                AddPartNameCandidate(pool, byKey, GetCellText(row, PartNameColumnName),
-                    PartNameSource.AiMemberName, PartNameSource.AiMemberNameHint);
-            }
-
-            // ③ 部材部品 DB 里和本行部材名 关联的部品名（保存时登录的关联项目）
+            // ② 部材部品 DB 里和本行部材名 关联的部品名（保存时登录的关联项目）
             AddMemberPartCandidates(pool, byKey, GetEditingRowMemberName());
 
-            // ④ 表格里其它行已经填好的部品名
+            // ③ 表格里其它行已经填好的部品名
             foreach (DataGridViewRow row in dgvParts.Rows)
             {
                 if (row.IsNewRow)
@@ -532,7 +515,7 @@ namespace MSIFAITOOLS
                     PartNameSource.Grid, PartNameSource.GridHint);
             }
 
-            // ⑤ 部品マスタ（部品コード 自动推定用的同一份 CSV）里的部品名 一览 → 标准写法
+            // ④ 部品マスタ（部品コード 自动推定用的同一份 CSV）里的部品名 一览 → 标准写法
             CmdPartMasterIndex partMaster = GetPartMasterIndex();
 
             if (partMaster != null && partMaster.PartNames != null)
@@ -596,34 +579,6 @@ namespace MSIFAITOOLS
             }
 
             return result;
-        }
-
-        /// <summary>
-        /// 这一行的「部材名」是不是 AI 推荐的那个：「部材名 AI 推荐」（<c>colMemberNameAi</c>）有值、
-        /// 并且「部材名」为空或与推荐值相同（归一化后比较，半角カナ / 全角英数 / 空白 / 大小写都算一样）。
-        /// <para>
-        /// 人工改过部材名 的行<b>不算</b> —— 那种行的部材名 已经是用户确认过的，
-        /// 候选顺序里归到「表格其它行」这一档，不再冒充 AI 推荐。
-        /// </para>
-        /// </summary>
-        private static bool IsAiMemberNameRow(DataGridViewRow row)
-        {
-            string suggestion = GetCellText(row, MemberNameAiColumnName);
-
-            if (suggestion.Length == 0)
-            {
-                return false;
-            }
-
-            string memberName = GetCellText(row, MemberNameColumnName);
-
-            if (memberName.Length == 0)
-            {
-                return true;
-            }
-
-            return string.Equals(MemberPartCatalogLoader.NormalizeKey(memberName),
-                MemberPartCatalogLoader.NormalizeKey(suggestion), StringComparison.Ordinal);
         }
 
         /// <summary>

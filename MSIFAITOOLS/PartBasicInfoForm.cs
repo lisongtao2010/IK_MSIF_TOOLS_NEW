@@ -386,7 +386,6 @@ namespace MSIFAITOOLS
                     int rowIndex = dgvParts.Rows.Add(
                         part.Number.ToString(),     // 番号
                         part.MemberName,            // 部材名
-                        part.MemberNameAiSuggestion,// 部材名AI推荐
                         part.PartName,              // 部品名
                         part.FrameKind,             // 区分
                         part.Quantity,              // 数量
@@ -426,7 +425,7 @@ namespace MSIFAITOOLS
         }
         /// <summary>
         /// 初始化部品明细表格的列（与 <see cref="PopulateParts"/> 的填充顺序一致）。
-        /// 前 15 列是业务必需列，按「番号 / 部材名 / 部材名AI推荐 / 部品名 / 区分 / 数量 / 切断寸法 / 部品コード /
+        /// 前 14 列是业务必需列，按「番号 / 部材名 / 部品名 / 区分 / 数量 / 切断寸法 / 部品コード /
         /// 参照元 / H下限 / H上限 / W下限 / W上限 / 使い分け / 特注」的顺序优先显示，其余为辅助列。
         /// 除「No」「参照元」「数据来源」「登录时间」以外均可编辑；「校验状态」为下拉选择。
         /// </summary>
@@ -440,9 +439,6 @@ namespace MSIFAITOOLS
             // 部材名：用「番号」在 parts_info.json 的 callouts 里找圈号后，取该圈号所在零件图的
             // texts（去掉数字、去掉「XX部」）用 | 连接；程序自动填，也允许在画面上修正
             AddColumn("colMemberName", "部材名", 120, DataGridViewContentAlignment.MiddleLeft, false);
-            // 部材名AI推荐：【AI 分析】对「部材名」里含 | 的行用 AI 重新判定的推荐值
-            // （数据来源 = CMD分析・アッセンブリ図 且 部材名含 | 的行；只推荐，不覆盖「部材名」）
-            AddColumn("colMemberNameAi", "部材名AI推荐", 120, DataGridViewContentAlignment.MiddleLeft, false);
             AddColumn("colPartName", "部品名", 170, DataGridViewContentAlignment.MiddleLeft, false);
             AddColumn("colFrameKind", "区分", 66, DataGridViewContentAlignment.MiddleCenter, false);
             AddColumn("colQuantity", "数量", 56, DataGridViewContentAlignment.MiddleCenter, false);
@@ -622,7 +618,6 @@ namespace MSIFAITOOLS
                 dgvParts.Rows.Insert(insertIndex,
                     number.ToString(),                  // 番号
                     string.Empty,                       // 部材名
-                    string.Empty,                       // 部材名AI推荐
                     string.Empty,                       // 部品名
                     string.Empty,                       // 区分
                     string.Empty,                       // 数量
@@ -1013,7 +1008,6 @@ namespace MSIFAITOOLS
                 string status = GetCellText(row, "colVerifyStatus");
                 part.VerifyStatus = IsKnownVerifyStatus(status) ? status : PartVerifyStatus.NotChecked;
                 part.MemberName = GetCellText(row, "colMemberName");
-                part.MemberNameAiSuggestion = GetCellText(row, "colMemberNameAi");
                 part.HeightMin = GetCellText(row, "colHeightMin");
                 part.HeightMax = GetCellText(row, "colHeightMax");
                 part.WidthMin = GetCellText(row, "colWidthMin");
@@ -1030,6 +1024,9 @@ namespace MSIFAITOOLS
                     part.SourceFile = origin.SourceFile ?? string.Empty;
                     part.PdfFile = string.IsNullOrEmpty(origin.PdfFile) ? _pdfPath : origin.PdfFile;
                     part.LoginTime = origin.LoginTime ?? string.Empty;
+                    // 「部材名AI推荐」已不在画面上表示（AI 推荐机能已删除）：保存时沿用库里原来的值，
+                    // 免得手工保存一次就把老数据清掉（这一列只作历史残留，不再参与任何逻辑）
+                    part.MemberNameAiSuggestion = origin.MemberNameAiSuggestion ?? string.Empty;
                 }
                 else
                 {
@@ -1501,7 +1498,6 @@ namespace MSIFAITOOLS
             int passedCount = 0;
             int failedCount = 0;
             int notCheckedCount = 0;
-            int aiSuggestionCount = 0;
 
             foreach (DataGridViewRow row in dgvParts.Rows)
             {
@@ -1526,17 +1522,10 @@ namespace MSIFAITOOLS
                 {
                     notCheckedCount++;
                 }
-
-                // 「部材名AI推荐」有值的行数（【AI 分析】写进来的推荐）
-                if (!string.IsNullOrWhiteSpace(GetCellText(row, "colMemberNameAi")))
-                {
-                    aiSuggestionCount++;
-                }
             }
 
-            lblSummary.Text = string.Format("共 {0} 条（坐标一致 {1} / 不符 {2} / 未校验 {3}）{4}{5}",
+            lblSummary.Text = string.Format("共 {0} 条（坐标一致 {1} / 不符 {2} / 未校验 {3}）{4}",
                 total, passedCount, failedCount, notCheckedCount,
-                aiSuggestionCount > 0 ? string.Format("　AI 推荐 {0} 条", aiSuggestionCount) : string.Empty,
                 _isDirty ? "　＊未保存" : string.Empty);
         }
 
@@ -2072,6 +2061,8 @@ namespace MSIFAITOOLS
         /// 窗口是<b>非模态</b>的：开着的时候本画面照常操作（改别的格子 / 换行 / 看图纸都不受影响）；
         /// 单击窗口里的一项，就立刻把这一项写进这一格（见 <see cref="MemberNamePicker_MemberNamePicked"/>），
         /// 不用勾选、也不用点确定。窗口已经开着时只把「写入目标」换成这一次点的格子。
+        /// 窗口被「部材名」单元格的内嵌编辑（F2 / 双击 / 直接打字）收起过
+        /// （<see cref="HideMemberNamePicker"/>）时，再点这一格会重新显示。
         /// </summary>
         private void ShowMemberNamePicker(DataGridViewCell cell)
         {
@@ -2266,6 +2257,27 @@ namespace MSIFAITOOLS
 
             _memberNamePicker = null;
             _memberNamePickerCell = null;
+        }
+
+        /// <summary>
+        /// 收起「选择部材名」窗口（<b>不关闭</b>）：「部材名」单元格进入<b>内嵌编辑</b>
+        /// （F2 / 直接打字 / 双击）时用 —— 编辑框和候选面板同时开着，
+        /// 既挡视线，面板上的数字键 / 滑轮还会把值写进正在编辑的这一格
+        /// （见 <see cref="DgvParts_CellBeginEdit"/>）。
+        /// <para>
+        /// 再点「部材名」单元格会重新显示（<see cref="ShowMemberNamePicker"/> 里有
+        /// <c>!Visible</c> 就 <c>Show(this)</c> 的分支），所以这里只 <c>Hide</c> 不 <c>Close</c>：
+        /// 窗口里的候选列表 / 滚动位置都留着。
+        /// </para>
+        /// </summary>
+        private void HideMemberNamePicker()
+        {
+            MemberNamePickerForm picker = _memberNamePicker;
+
+            if (picker != null && !picker.IsDisposed && picker.Visible)
+            {
+                picker.Hide();
+            }
         }
 
         /// <summary>

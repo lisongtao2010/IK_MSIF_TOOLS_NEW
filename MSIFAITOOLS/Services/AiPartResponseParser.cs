@@ -308,7 +308,6 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 从 AI 回复中截取 JSON 主体（去掉 Markdown 代码块与解释文字）。
-        /// 【AI 分析】（<see cref="MemberNameAiAdvisor"/>）解析「番号 → 部材名」时也复用它。
         /// </summary>
         internal static string ExtractJson(string content)
         {

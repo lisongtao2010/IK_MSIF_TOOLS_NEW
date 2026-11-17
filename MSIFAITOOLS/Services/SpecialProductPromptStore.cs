@@ -43,7 +43,7 @@ namespace MSIFAITOOLS.Services
     /// <c>Prompts\SpecialProductAdvisor.Prompt.txt</c>（运行时可改、无需重新编译），
     /// 不可用时回退到编译进 exe 的同名内嵌资源，最后回退到内置默认值。文件变化后（按修改时间）自动重新加载。
     /// <para>
-    /// 文件格式与 <see cref="MemberNamePromptStore"/> 相同，只是用户提示词分两个分节：
+    /// 文件格式与 <see cref="SpecialProductQuantityPromptStore"/> 相同，只是用户提示词分两个分节：
     /// <c>[system]</c> / <c>[user_fields]</c>（补缺行 / 缺字段）/ <c>[user_special]</c>（补特注寸法）。
     /// 第一个分节之前的 <c>#</c> 注释行不送给 AI。
     /// </para>

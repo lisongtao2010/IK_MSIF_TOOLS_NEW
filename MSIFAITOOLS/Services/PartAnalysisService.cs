@@ -198,8 +198,7 @@ namespace MSIFAITOOLS.Services
         /// 分析一览中「アッセンブリ図」的 PDF 并登录到 SQLite，返回汇总结果。
         /// 每个 PDF 的分解结果位于 &lt;输出根目录&gt;\&lt;図番号&gt;\（plu_table.txt / xy.txt）。
         /// <para>
-        /// <b>已停用</b>：主界面【AI 分析】按钮不再调用本方法（改为
-        /// <see cref="MemberNameAiAdvisor"/> 只补「部材名AI推荐」），
+        /// <b>已停用</b>：主界面【AI 分析】按钮不再调用本方法（现为特注品记录的「数量」设定），
         /// 代码保留仅为兼容/回退；<see cref="SelectAssemblyTargets"/> 等静态工具仍被【CMD 分析】使用。
         /// </para>
         /// </summary>

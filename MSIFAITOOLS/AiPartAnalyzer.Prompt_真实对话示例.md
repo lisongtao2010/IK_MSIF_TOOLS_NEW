@@ -1,12 +1,10 @@
 # 「AI 分析」真实对话示例（H310U10004.pdf）
 
-> **⚠ 本文档记录的是已停用的旧流程**：主界面【AI 分析】按钮现在不再用 AI 从 `plu_table.txt`
-> 提取整张部品表，而是对「数据来源 = `CMD分析・アッセンブリ図`」的**全部行**做「部材名AI推荐」
-> （含部材名为空 / 已经是 `その他` / 含 `|` 的行），并参照 部材部品 数据库
-> （`D:\MSIFDB\MSIF_MemberParts.db` 的「部材部品」表，原 `部材部品\部材部品.csv`，第一次运行时自动导入）
-> 判断取到的部材名到底是不是部材
-> （`Services\MemberNameAiAdvisor.cs` + `Services\MemberPartCatalog.cs` + `Prompts\MemberNameAdvisor.Prompt.txt`，
-> 说明见 `docs\CMD分析_功能概要.md` 的「部材名AI推荐」列）。
+> **⚠ 本文档记录的是已停用的旧流程**：主界面【AI 分析】按钮现在既不用 AI 从 `plu_table.txt`
+> 提取整张部品表，也不做「部材名AI推荐」（2026-11-16 起该机能已删除，
+> `Services\MemberNameAiAdvisor.cs` / `Services\MemberNamePromptStore.cs` /
+> `Prompts\MemberNameAdvisor.Prompt.txt` 已移除），只保留**特注品记录的数量设定**
+> （`Services\SpecialProductQuantityAdvisor.cs`）。
 > 本文保留作为**新提示词写法的参考**（system / user 分节、真实请求体、回复解析）。
 
 > 本文是**实测抓取**的完整对话内容，不是手写示意。

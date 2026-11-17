@@ -35,8 +35,8 @@ namespace MSIFAITOOLS.Services
     /// 用 AI 从 plu_table.txt 中提取【部品基本信息列表】，
     /// 并用 xy.txt 的文字坐标对提取结果做交叉校验。
     /// <para>
-    /// <b>已停用</b>：主界面【AI 分析】按钮不再走这条流程（现为 <see cref="MemberNameAiAdvisor"/>
-    /// 的「部材名AI推荐」），本类保留仅为兼容/回退。
+    /// <b>已停用</b>：主界面【AI 分析】按钮不走这条流程（现为特注品记录的「数量」设定），
+    /// 本类保留仅为兼容/回退。
     /// </para>
     /// </summary>
     internal sealed class AiPartAnalyzer
