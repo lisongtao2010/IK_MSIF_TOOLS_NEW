@@ -102,6 +102,24 @@ namespace MSIFAITOOLS.Services
         public const string SourceTagColumnName = "参照元";
 
         /// <summary>
+        /// 「図番」列名：PDF 文件名去扩展名，<b>可能带着図面タイトル</b>
+        /// （<c>H453U10001アセンブリ図</c>）。定位用的键，不要截断；
+        /// 「参照元」只写它的前 <see cref="ReferenceTagLength"/> 位。
+        /// </summary>
+        public const string DrawingNoColumnName = "図番";
+
+        /// <summary>
+        /// 「参照元」写几位図番：<b>前 10 位</b>（例 <c>H310U10022</c>）。
+        /// <para>
+        /// PDF 文件名常见写法是「図番 + 図面タイトル」（<c>H453U10001アセンブリ図.pdf</c>、
+        /// <c>H467U10006_V片引戸 枠 …要領図（Ａ､Ｍ部）.PDF</c>），図番 本身固定 10 位，
+        /// 后面的标题不属于図番。所以「参照元」只取文件名去扩展名后的前 10 位
+        /// （见 <see cref="ResolveReferenceTag"/>）。
+        /// </para>
+        /// </summary>
+        public const int ReferenceTagLength = 10;
+
+        /// <summary>
         /// 「来源表格文件」列名：写的是来源文件的完整路径。
         /// 【CMD 分析】第 4 步（特注品.json 部品追加）写的是该図番的 <c>特注品.csv</c>，
         /// 【AI 分析】的特注品数量设定就按这个路径定位要改「数量」的行。
@@ -442,7 +460,7 @@ namespace MSIFAITOOLS.Services
                     BackfillSourceTag(transaction);
                 }
 
-                // 统一「参照元 = 図番」「部材名 空 → その他」（老数据也一起对齐，可重复执行）
+                // 统一「参照元 = 図番 前 10 位」「部材名 空 → その他」（老数据也一起对齐，可重复执行）
                 NormalizeReferenceColumns(transaction);
 
                 Execute(dropLegacyIndex, transaction);
@@ -693,11 +711,12 @@ namespace MSIFAITOOLS.Services
             command.Parameters["@数量"].Value = part.Quantity;
             command.Parameters["@切断寸法"].Value = part.CutSize;
             command.Parameters["@部品コード"].Value = part.PartCode;
-            // 「参照元」= 该行的「図番」（不再写 要領図 / 特注品.json（旧简称 tz.json）之类的来源简称）。
+            // 「参照元」= 该行的「図番」的前 10 位（不再写 要領図 / 特注品.json（旧简称 tz.json）之类的来源简称）。
+            // 図番 本身固定 10 位，PDF 文件名后面跟着的図面タイトル不算（见 ReferenceTagLength）。
             // 来源分类看「数据来源」列（PartBasicInfo.SourceKind）。
             command.Parameters["@参照元"].Value = string.IsNullOrWhiteSpace(drawingNo)
                 ? part.SourceTag ?? string.Empty
-                : drawingNo.Trim();
+                : ResolveReferenceTag(drawingNo);
             command.Parameters["@H下限"].Value = part.HeightMin ?? string.Empty;
             command.Parameters["@H上限"].Value = part.HeightMax ?? string.Empty;
             command.Parameters["@W下限"].Value = part.WidthMin ?? string.Empty;
@@ -726,19 +745,25 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 把已有数据对齐到「参照元 = 図番」「部材名 空 → その他」（可重复执行，第二次不会再改任何行）：
+        /// 把已有数据对齐到「参照元 = 図番 的前 10 位」「部材名 空 → その他」（可重复执行，第二次不会再改任何行）：
         /// <list type="number">
-        ///   <item>「参照元」不等于「図番」的行一律改成该行的「図番」——
+        ///   <item>「参照元」不等于「図番 前 10 位」的行一律改成该行的「図番 前 10 位」——
         ///         以前这里写的是 要領図 / アッセンブリ図 / 特注品.json（旧简称 tz.json）之类的来源简称，
-        ///         现在来源分类看「数据来源」列；</item>
+        ///         后来改成整条図番（PDF 文件名去扩展名，带着図面タイトル），
+        ///         现在只留前 10 位（図番 本身的位数，见 <see cref="ReferenceTagLength"/>）；
+        ///         来源分类看「数据来源」列；</item>
         ///   <item>「部材名」为 NULL / 空串 / 只有空白的行补成 <see cref="PartBasicInfo.MemberNameFallback"/>。</item>
         /// </list>
         /// 发生在 <see cref="EnsureSchema"/> 里，所以老数据库一打开就对齐，画面上不会再看到旧值。
         /// </summary>
         private void NormalizeReferenceColumns(SQLiteTransaction transaction)
         {
-            Execute("UPDATE [" + TableName + "] SET [" + SourceTagColumnName + "] = [図番] " +
-                "WHERE IFNULL([" + SourceTagColumnName + "], '') <> [図番];", transaction);
+            // SQLite 的 SUBSTR 按字符数算，図番 是半角英数字，前 10 位就是図番 本身
+            string drawingNoPrefix = "SUBSTR(IFNULL([" + DrawingNoColumnName + "], ''), 1, " +
+                ReferenceTagLength.ToString(CultureInfo.InvariantCulture) + ")";
+
+            Execute("UPDATE [" + TableName + "] SET [" + SourceTagColumnName + "] = " + drawingNoPrefix +
+                " WHERE IFNULL([" + SourceTagColumnName + "], '') <> " + drawingNoPrefix + ";", transaction);
 
             Execute("UPDATE [" + TableName + "] SET [" + MemberNameColumnName + "] = '" +
                 PartBasicInfo.MemberNameFallback + "' WHERE IFNULL(TRIM(REPLACE([" +
@@ -1211,6 +1236,30 @@ namespace MSIFAITOOLS.Services
             return string.IsNullOrWhiteSpace(pdfFilePath)
                 ? string.Empty
                 : Path.GetFileNameWithoutExtension(pdfFilePath.Trim());
+        }
+
+        /// <summary>
+        /// 求「参照元」要写进去的值：図番（= PDF 文件名去扩展名）的<b>前 10 位</b>。
+        /// <para>
+        /// 文件名常写成「図番 + 図面タイトル」（<c>H453U10001アセンブリ図.pdf</c>、
+        /// <c>H467U10006_V片引戸 枠 …要領図（Ａ､Ｍ部）.PDF</c>、<c>H467U10001_…_clean.pdf</c>），
+        /// 図番 本身固定 10 位（<see cref="ReferenceTagLength"/>），后面的标题 / <c>_clean</c> 都不算。
+        /// 不足 10 位时原样返回（例如本来就只有 <c>H310U10004</c>）。
+        /// </para>
+        /// </summary>
+        /// <param name="drawingNo">図番（PDF 文件名去扩展名，可带标题；null / 空白返回空串）。</param>
+        public static string ResolveReferenceTag(string drawingNo)
+        {
+            if (string.IsNullOrWhiteSpace(drawingNo))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = drawingNo.Trim();
+
+            return trimmed.Length <= ReferenceTagLength
+                ? trimmed
+                : trimmed.Substring(0, ReferenceTagLength);
         }
 
         /// <summary>SELECT 的列清单（= <see cref="ColumnNames"/> 的全部列，顺序相同）。</summary>

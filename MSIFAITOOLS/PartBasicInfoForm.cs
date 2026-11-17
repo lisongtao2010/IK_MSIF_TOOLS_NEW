@@ -457,8 +457,9 @@ namespace MSIFAITOOLS
             AddColumn("colQuantity", "数量", 56, DataGridViewContentAlignment.MiddleCenter, false);
             AddColumn("colCutSize", "切断寸法", 100, DataGridViewContentAlignment.MiddleLeft, false);
             AddColumn("colPartCode", "部品コード", 102, DataGridViewContentAlignment.MiddleLeft, false);
-            // 参照元 = 该行的「図番」（写库时统一由 PartBasicInfoRepository.BindInsertParameters 填成図番，
-            // 老数据库打开时也会把旧值改成図番），画面只读；来源分类看后面的「数据来源」列
+            // 参照元 = 该行的「図番」的前 10 位（写库时统一由 PartBasicInfoRepository.BindInsertParameters
+            // 按 ResolveReferenceTag 填；老数据库打开时也会把旧值改成同样的前 10 位），画面只读；
+            // 来源分类看后面的「数据来源」列
             AddColumn("colSourceTag", "参照元", 92, DataGridViewContentAlignment.MiddleCenter);
             AddColumn("colHeightMin", "H下限", 64, DataGridViewContentAlignment.MiddleCenter, false);
             AddColumn("colHeightMax", "H上限", 64, DataGridViewContentAlignment.MiddleCenter, false);
