@@ -1398,8 +1398,8 @@
       "column_count": 34,
       "cell_count": 62,
       "text_cell_count": 30,
-      "struck_row_count": 1,
-      "visible_row_count": 16,
+      "struck_row_count": 2,
+      "visible_row_count": 15,
       "rows": [
         {
           "index": 1,
@@ -1519,7 +1519,7 @@
         },
         {
           "index": 5,
-          "struck": false,
+          "struck": true,
           "pixel": { "x": 6729, "y": 5207, "w": 2821, "h": 121 },
           "cells": [
             {
@@ -1529,7 +1529,7 @@
               "column_span": 2,
               "text": "E",
               "word_count": 1,
-              "struck_words": 0,
+              "struck_words": 1,
               "pixel": { "x": 6729, "y": 5207, "w": 177, "h": 121 },
               "pdf_mm": { "x": 569.72, "y": 440.86, "w": 14.99, "h": 10.24 }
             },
