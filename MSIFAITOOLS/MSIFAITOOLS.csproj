@@ -142,8 +142,12 @@
     <Compile Include="Services\PluTablePageLocator.cs" />
     <Compile Include="Services\UiText.cs" />
     <Compile Include="Services\UiText.Japanese.cs" />
+    <Compile Include="Services\UiLocalization.cs" />
     <Compile Include="Services\AiPartAnalyzer.cs" />
     <Compile Include="Services\PartBasicInfoRepository.cs" />
+    <!-- 日文文本的宽度转换：全角片假名 → 半角片假名（部品基本信息表登录时「部材名 / 部品名」用）
+         ＋ NFKC 归一化（库里的半角值 与 PDF / Excel 原文的全角值 比较时用） -->
+    <Compile Include="Services\JapaneseTextConverter.cs" />
     <Compile Include="Services\PartAnalysisService.cs" />
     <Compile Include="Services\PartCoordinateVerifier.cs" />
     <Compile Include="Services\CmdPartAnalyzer.cs" />
@@ -172,8 +176,10 @@
     <Compile Include="Services\MemberNameReplacementRepository.cs" />
     <Compile Include="Services\MemberNameReplacementCatalog.cs" />
     <!-- 部材不材 mapping（MSIF 库的 dbo.DL_BuhinBuzaiMapping，连接名 connJP2）：
-         部品基本信息画面【保存】时把画面的「部品名 / 部材名 / 部品コード」登录 / 更新进该表 -->
+         部品基本信息画面【保存】时把画面的「部品名 / 部材名 / 部品コード」登录 / 更新进该表；
+         画面打开时整表读进内存（BuhinBuzaiMappingCatalog），当「选择部材名」窗口的推荐项 -->
     <Compile Include="Services\BuhinBuzaiMappingRepository.cs" />
+    <Compile Include="Services\BuhinBuzaiMappingCatalog.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <!--

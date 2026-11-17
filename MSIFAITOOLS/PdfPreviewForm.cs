@@ -97,6 +97,11 @@ namespace MSIFAITOOLS
             InitializeComponent();
             ApplyButtonStyle();
             InitializeSelection();
+
+            // 按钮 / 状态栏 / 右键菜单的中日切换（见 Services\UiLocalization.cs）：
+            // 右键菜单项要在这一步之前建好，挂接时才能一起记下中文原文
+            UiLocalization.Attach(this);
+
             InitializePan();
         }
 
@@ -206,7 +211,7 @@ namespace MSIFAITOOLS
                 // 另外用 PdfPig 打开一份（只读）用于文字选择；失败时只影响“能否选字”，不影响预览
                 OpenTextDocument(pdfFilePath);
 
-                Text = "PDF 预览 - " + Path.GetFileName(pdfFilePath);
+                UiLocalization.SetText(this, "PDF 预览 - " + Path.GetFileName(pdfFilePath));
 
                 RenderPage();
             }
@@ -216,12 +221,12 @@ namespace MSIFAITOOLS
 
                 // 保留路径：【打开外部】按钮还要用它（引擎不可用时仍能让系统默认程序打开 PDF）
                 _currentPath = pdfFilePath;
-                Text = "PDF 预览 - 读取失败";
+                UiLocalization.SetText(this, "PDF 预览 - 读取失败");
                 ShowError("无法显示该 PDF：" + ex.Message);
 
                 if (showErrorDialog)
                 {
-                    MessageBox.Show(this,
+                    ShowMessage(
                         "无法显示该 PDF：\n" + pdfFilePath + "\n\n" + ex.Message,
                         "PDF 预览", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
@@ -440,7 +445,7 @@ namespace MSIFAITOOLS
 
             if (_document == null)
             {
-                lblStatus.Text = "尚未选择 PDF";
+                UiLocalization.SetText(lblStatus, "尚未选择 PDF");
                 lblPageInfo.Text = "- / -";
                 lblZoom.Text = "-";
                 return;
@@ -450,7 +455,9 @@ namespace MSIFAITOOLS
 
             lblPageInfo.Text = (_pageIndex + 1) + " / " + _document.PageCount;
             lblZoom.Text = percent + "%";
-            lblStatus.Text = string.Format("{0}　第 {1} / {2} 页　缩放 {3}%　（← → 翻页，Ctrl+滚轮 / +- 缩放，滚轮滚动，拖拽选字后 Ctrl+C 复制）",
+
+            // 中文原文照旧拼好（对照表按模板匹配），再交给 SetText 翻成当前语言
+            string status = string.Format("{0}　第 {1} / {2} 页　缩放 {3}%　（← → 翻页，Ctrl+滚轮 / +- 缩放，滚轮滚动，拖拽选字后 Ctrl+C 复制）",
                 Path.GetFileName(_currentPath ?? string.Empty),
                 _pageIndex + 1,
                 _document.PageCount,
@@ -458,22 +465,31 @@ namespace MSIFAITOOLS
 
             if (_isPanMode)
             {
-                lblStatus.Text += "　拖动模式：按住左键拖动画布";
+                status += "　拖动模式：按住左键拖动画布";
             }
 
             PdfTextRange selection = GetSelectionRange();
 
             if (!selection.IsEmpty)
             {
-                lblStatus.Text += "　已选 " + selection.Length + " 个字符";
+                status += "　已选 " + selection.Length + " 个字符";
             }
+
+            UiLocalization.SetText(lblStatus, status);
         }
 
         /// <summary>在状态栏显示红色错误信息。</summary>
         private void ShowError(string message)
         {
-            lblStatus.Text = message;
+            UiLocalization.SetText(lblStatus, message);
             lblStatus.ForeColor = Color.FromArgb(198, 40, 40);
+        }
+
+        /// <summary>统一弹窗：标题 / 正文都按当前语言翻译（正文里的动态部分由对照表的模板匹配处理）。</summary>
+        private DialogResult ShowMessage(string message, string caption,
+            MessageBoxButtons buttons, MessageBoxIcon icon)
+        {
+            return MessageBox.Show(this, UiText.Translate(message), UiText.T(caption), buttons, icon);
         }
 
         /// <summary>把数值限制在 [min, max] 区间内。</summary>
@@ -726,8 +742,9 @@ namespace MSIFAITOOLS
         {
             ToolTip tip = new ToolTip(components);
 
-            tip.SetToolTip(btnPan, "开启后用左键按住页面拖动画面（任何模式下按住鼠标中键也可拖动）\nCtrl + 鼠标滚轮：以鼠标位置为中心缩放");
-            tip.SetToolTip(pnlCanvas, "Ctrl + 鼠标滚轮缩放，滚轮上下滚动画面");
+            UiLocalization.SetToolTip(tip, btnPan,
+                "开启后用左键按住页面拖动画面（任何模式下按住鼠标中键也可拖动）\nCtrl + 鼠标滚轮：以鼠标位置为中心缩放");
+            UiLocalization.SetToolTip(tip, pnlCanvas, "Ctrl + 鼠标滚轮缩放，滚轮上下滚动画面");
 
             _wheelFilter = new CanvasWheelMessageFilter(this);
             Application.AddMessageFilter(_wheelFilter);
@@ -1292,7 +1309,7 @@ namespace MSIFAITOOLS
             {
                 Clipboard.SetText(text);
                 lblStatus.ForeColor = Color.FromArgb(52, 73, 94);
-                lblStatus.Text = "已复制 " + text.Length + " 个字符到剪贴板。";
+                UiLocalization.SetText(lblStatus, "已复制 " + text.Length + " 个字符到剪贴板。");
             }
             catch (Exception ex)
             {

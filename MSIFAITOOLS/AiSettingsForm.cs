@@ -49,7 +49,10 @@ namespace MSIFAITOOLS
             InitializeComponent();
             _loading = false;
 
-            lblSettingsPath.Text = "保存位置：" + AiSettingsStore.SettingsFilePath;
+            // 按钮 / 标签等文字的中日切换（见 Services\UiLocalization.cs）
+            UiLocalization.Attach(this);
+
+            UiLocalization.SetText(lblSettingsPath, "保存位置：" + AiSettingsStore.SettingsFilePath);
             LoadCurrentSettings();
         }
 
@@ -72,17 +75,17 @@ namespace MSIFAITOOLS
                 if (!string.IsNullOrEmpty(AiApiOptions.LastSettingsError))
                 {
                     lblStatus.ForeColor = Color.FromArgb(198, 40, 40);
-                    lblStatus.Text = "用户配置文件读取失败：" + AiApiOptions.LastSettingsError;
+                    UiLocalization.SetText(lblStatus, "用户配置文件读取失败：" + AiApiOptions.LastSettingsError);
                 }
                 else if (!string.IsNullOrEmpty(AiApiOptions.LastConfigurationError))
                 {
                     lblStatus.ForeColor = Color.FromArgb(198, 40, 40);
-                    lblStatus.Text = "App.config 读取失败：" + AiApiOptions.LastConfigurationError;
+                    UiLocalization.SetText(lblStatus, "App.config 读取失败：" + AiApiOptions.LastConfigurationError);
                 }
                 else
                 {
                     lblStatus.ForeColor = Color.FromArgb(52, 73, 94);
-                    lblStatus.Text = "当前配置来源：" + current.ConfigurationSource;
+                    UiLocalization.SetText(lblStatus, "当前配置来源：" + current.ConfigurationSource);
                 }
             }
             finally
@@ -189,8 +192,8 @@ namespace MSIFAITOOLS
             if (!AiSettingsStore.Save(settings, out error))
             {
                 lblStatus.ForeColor = Color.FromArgb(198, 40, 40);
-                lblStatus.Text = "保存失败：" + error;
-                MessageBox.Show(this, "保存设置失败：\n" + error, "错误",
+                UiLocalization.SetText(lblStatus, "保存失败：" + error);
+                ShowMessage("保存设置失败：\n" + error, "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
@@ -246,13 +249,13 @@ namespace MSIFAITOOLS
 
                 SetBusy(false, string.Empty);
                 lblStatus.ForeColor = Color.FromArgb(46, 125, 50);
-                lblStatus.Text = "连接成功，模型返回：" + Shorten(reply, 60);
+                UiLocalization.SetText(lblStatus, "连接成功，模型返回：" + Shorten(reply, 60));
             }
             catch (Exception ex)
             {
                 SetBusy(false, string.Empty);
                 lblStatus.ForeColor = Color.FromArgb(198, 40, 40);
-                lblStatus.Text = "连接失败：" + Shorten(ex.Message, 200);
+                UiLocalization.SetText(lblStatus, "连接失败：" + Shorten(ex.Message, 200));
             }
         }
 
@@ -266,7 +269,7 @@ namespace MSIFAITOOLS
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "打开配置目录失败：\n" + ex.Message, "提示",
+                ShowMessage("打开配置目录失败：\n" + ex.Message, "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -320,8 +323,8 @@ namespace MSIFAITOOLS
         private void ShowValidationError(string message)
         {
             lblStatus.ForeColor = Color.FromArgb(239, 108, 0);
-            lblStatus.Text = message;
-            MessageBox.Show(this, message, "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            UiLocalization.SetText(lblStatus, message);
+            ShowMessage(message, "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
             if (message.IndexOf("接口地址", StringComparison.Ordinal) >= 0)
             {
@@ -335,6 +338,13 @@ namespace MSIFAITOOLS
             {
                 cboModel.Focus();
             }
+        }
+
+        /// <summary>统一弹窗：标题 / 正文都按当前语言翻译（正文里的动态部分由对照表的模板匹配处理）。</summary>
+        private DialogResult ShowMessage(string message, string caption,
+            MessageBoxButtons buttons, MessageBoxIcon icon)
+        {
+            return MessageBox.Show(this, UiText.Translate(message), UiText.T(caption), buttons, icon);
         }
 
         /// <summary>测试连接期间锁定输入控件并显示进度文字。</summary>
@@ -351,12 +361,12 @@ namespace MSIFAITOOLS
             numTimeout.Enabled = !busy;
             btnTest.Enabled = !busy;
             btnSave.Enabled = !busy;
-            btnTest.Text = busy ? "测试中..." : "测试连接";
+            UiLocalization.SetText(btnTest, busy ? "测试中..." : "测试连接");
 
             if (!string.IsNullOrEmpty(status))
             {
                 lblStatus.ForeColor = Color.FromArgb(230, 126, 34);
-                lblStatus.Text = status;
+                UiLocalization.SetText(lblStatus, status);
             }
         }
 
@@ -367,7 +377,7 @@ namespace MSIFAITOOLS
             {
                 e.Cancel = true;
                 lblStatus.ForeColor = Color.FromArgb(230, 126, 34);
-                lblStatus.Text = "测试连接进行中，请稍候...";
+                UiLocalization.SetText(lblStatus, "测试连接进行中，请稍候...");
                 return;
             }
 
@@ -406,7 +416,8 @@ namespace MSIFAITOOLS
 
             public override string ToString()
             {
-                return Name;
+                // 下拉列表里显示的名称：中文原文照写在 EndpointPresets 里，日语查对照表
+                return UiText.T(Name);
             }
         }
     }

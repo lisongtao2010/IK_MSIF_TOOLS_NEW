@@ -39,18 +39,25 @@ namespace MSIFAITOOLS
     /// <b>每页 10 项</b>：数字键只有 1～9 和 0，所以一页固定显示 10 项，编号每页都从 1 重新开始，
     /// 第 11 项以后翻到下一页（<c>PageUp</c> / <c>PageDown</c>、<c>↑</c> 到页首再按一次 / <c>↓</c> 到页尾再按一次、
     /// 鼠标滚轮、底部「‹ 1/3 ›」按钮）。过滤条件一变就回到第 1 页，
-    /// 所以按 <c>1</c> 永远是当前页的第 1 项（打开窗口时就是置换表的推荐项）。
+    /// 所以按 <c>1</c> 永远是当前页的第 1 项（打开窗口时就是这一行的推荐项：
+    /// 部品CD 一致 → 部品名 一致 → 表示部材名，见下面的候选顺序）。
     /// </para>
     ///
     /// <para>
-    /// <b>候选顺序</b>：
-    /// ① 这一行的「部品名」在置换表（SQL Server 表 <c>genpin.dbo.T_M_MergeName</c>，
-    ///    <c>MsifDevName</c> = 取得的词）里对应的「置换后」（<c>GenpinName</c>）——排最前，按 1 就是它；
-    ///    置换表在程序启动 / 主画面打开时已经整表读进内存（<see cref="MemberNameReplacementCatalog"/>），
-    ///    点「部材名」时<b>只查内存，不连数据库</b>；
-    /// ② 「部材名」单元格现在的值（拆开 <c>|</c>，方便改回原值）；
-    /// ③ 部材部品マスタ（<see cref="MemberPartCatalog.MemberNames"/>）里的部材名 一览
-    ///    （同样在主画面打开时读好，窗口打开时不再读盘）。
+    /// <b>候选顺序</b>（数字越小越靠前；打开窗口时按 1 就是第 ① 项）：
+    /// ① 部材不材 mapping（SQL Server 表 <c>MSIF.dbo.DL_BuhinBuzaiMapping</c>，
+    ///    <see cref="BuhinBuzaiMappingCatalog"/>）里<b>部品CD（<c>BuhinCd</c>）与这一行的「部品コード」一致</b>的
+    ///    部材名（<c>BuzaiName</c>）—— 同一条部品实际用过的部材，最可信；
+    /// ② 同一张表里<b>部品名（<c>BuhinName</c>）与这一行的「部品名」一致</b>的部材名
+    ///    （部品CD 没登记时的退路）；
+    /// ③ 这一行的「部品名」在置换表（SQL Server 表 <c>genpin.dbo.T_M_MergeName</c>）里的<b>表示部材名</b>
+    ///    （<c>MsifDevName</c> = 图面上的写法；同一个部材的其它叫法也一起列出来，
+    ///    见 <see cref="MemberNameReplacementCatalog.GetDisplayNames"/>）——
+    ///    面板里显示、写进单元格的都是这种写法，<b>不会</b>换成原部材名（<c>GenpinName</c>）；
+    /// ④ 「部材名」单元格现在的值（拆开 <c>|</c>，方便改回原值）；
+    /// ⑤ 部材部品マスタ（<see cref="MemberPartCatalog.MemberNames"/>）里的部材名 一览。
+    /// ①～③ 的数据在主画面打开时已经整表读进内存，点「部材名」时<b>只查内存，不连数据库</b>；
+    /// ⑤ 的部材部品マスタ 也在主画面打开时读好，窗口打开时不再读盘。
     /// </para>
     ///
     /// <para>
@@ -84,8 +91,8 @@ namespace MSIFAITOOLS
         private static readonly Color PreviewEmptyColor = Color.FromArgb(217, 48, 37);
 
         /// <summary>
-        /// 全部候选项（置换表的推荐项在前，其次是这一格现在的值，最后是部材部品マスタ 的部材名；
-        /// 去重后保持这个顺序）。
+        /// 全部候选项（推荐项在前：部材不材 mapping 的部材名 → 表示部材名，其次是这一格现在的值，
+        /// 最后是部材部品マスタ 的部材名；去重后保持这个顺序）。
         /// </summary>
         private readonly List<string> _items = new List<string>();
 
@@ -108,21 +115,34 @@ namespace MSIFAITOOLS
         private string _currentValue = string.Empty;
 
         /// <summary>
-        /// 这次要写入的那一行的「部品名」（<c>colPartName</c>）：用它去置换表
-        /// <c>T_M_MergeName</c>（<c>MsifDevName</c>）查对应的置换后（<c>GenpinName</c>），
-        /// 作为第 1 号候选排在列表最前。主画面换了目标行时由 <see cref="SetTarget"/> 更新；
+        /// 这次要写入的那一行的「部品名」（<c>colPartName</c>）：用它去
+        /// ① 部材不材 mapping（<see cref="BuhinBuzaiMappingCatalog.GetBuzaiNamesByBuhinName"/>）和
+        /// ② 置换表 <c>T_M_MergeName</c>（<see cref="MemberNameReplacementCatalog.GetDisplayNames"/>，
+        ///    表示部材名 <c>MsifDevName</c>）查推荐项。主画面换了目标行时由 <see cref="SetTarget"/> 更新；
         /// 空串 = 那一行没填部品名。
         /// </summary>
         private string _partName = string.Empty;
 
         /// <summary>
-        /// 部品名 → 部材名 的推荐项（由 <see cref="MemberNameReplacementCatalog.GetTargets"/> 从内存里查；
-        /// 主画面打开时置换表已经整表读进内存，点「部材名」时<b>不连数据库</b>）。
+        /// 这次要写入的那一行的「部品コード」（<c>colPartCode</c>）：用它在部材不材 mapping
+        /// （<see cref="BuhinBuzaiMappingCatalog.GetBuzaiNamesByBuhinCd"/>）里查<b>这条部品用过的部材名</b>，
+        /// 作为第 1 号候选排在最前。空串 = 那一行没填部品コード（只用部品名 查）。
+        /// </summary>
+        private string _partCode = string.Empty;
+
+        /// <summary>
+        /// 这一行的推荐项（顺序 = 部品CD 一致的部材名 → 部品名 一致的部材名 → 表示部材名；
+        /// 由 <see cref="LoadMappingTargets"/> 从内存里的
+        /// <see cref="BuhinBuzaiMappingCatalog"/> / <see cref="MemberNameReplacementCatalog"/> 取出，
+        /// 点「部材名」时<b>不连数据库</b>）。
         /// </summary>
         private string[] _mappingTargets = new string[0];
 
-        /// <summary>置换表没读进内存的原因（成功时为空串；只写在状态行，不弹窗）。</summary>
+        /// <summary>置换表（表示部材名）没读进内存的原因（成功时为空串；只写在状态行，不弹窗）。</summary>
         private string _mappingError = string.Empty;
+
+        /// <summary>部材不材 mapping（以前用过的部材名）没读进内存的原因（成功时为空串；只写在状态行，不弹窗）。</summary>
+        private string _buzaiError = string.Empty;
 
         /// <summary>输入框上的操作提示（编号键 / Enter 的用法）。</summary>
         private readonly ToolTip _hintToolTip = new ToolTip();
@@ -143,25 +163,48 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 创建「选择部材名」窗口，并按这一行的<b>部品名</b> 去置换表
-        /// （SQL Server 表 <c>T_M_MergeName</c>）查对应的部材名，作为第 1 号候选排在列表最前。
+        /// 创建「选择部材名」窗口，并按这一行的<b>部品名</b> 查推荐项
+        /// （部材不材 mapping 的部材名 + 置换表的表示部材名），排在列表最前。
         /// </summary>
         /// <param name="catalog">部材部品マスタ（可为 <c>null</c>：候选列表只剩推荐项和原值）。</param>
         /// <param name="currentValue">「部材名」单元格当前的值（<c>|</c> 分开的多项会拆开加进候选）。</param>
         /// <param name="partName">同一行的「部品名」（<c>colPartName</c>；空 = 不知道，只列出候选项）。</param>
         public MemberNamePickerForm(MemberPartCatalog catalog, string currentValue, string partName)
+            : this(catalog, currentValue, partName, string.Empty)
+        {
+        }
+
+        /// <summary>
+        /// 创建「选择部材名」窗口，并同时给出这一行的<b>部品名</b> 和<b>部品コード</b>：
+        /// 推荐项按 ① 部品CD 一致的部材名（部材不材 mapping）→ ② 部品名 一致的部材名
+        /// → ③ 表示部材名（置换表 <c>MsifDevName</c>）的顺序排，第 1 号候选就是这一行按 1 写入的值。
+        /// </summary>
+        /// <param name="catalog">部材部品マスタ（可为 <c>null</c>：候选列表只剩推荐项和原值）。</param>
+        /// <param name="currentValue">「部材名」单元格当前的值（<c>|</c> 分开的多项会拆开加进候选）。</param>
+        /// <param name="partName">同一行的「部品名」（<c>colPartName</c>；空 = 不知道，只列出候选项）。</param>
+        /// <param name="partCode">同一行的「部品コード」（<c>colPartCode</c>；空 = 只按部品名 查）。</param>
+        public MemberNamePickerForm(MemberPartCatalog catalog, string currentValue, string partName,
+            string partCode)
         {
             InitializeComponent();
+
+            // 按钮 / 标签等文字的中日切换（见 Services\UiLocalization.cs）
+            UiLocalization.Attach(this);
 
             _catalog = catalog;
             _currentValue = currentValue == null ? string.Empty : currentValue.Trim();
             _partName = partName == null ? string.Empty : partName.Trim();
+            _partCode = partCode == null ? string.Empty : partCode.Trim();
 
-            _hintToolTip.SetToolTip(txtFilter,
+            UiLocalization.SetToolTip(_hintToolTip, txtFilter,
                 "输入关键字过滤部材名；按 1～9（0 = 第 10 项）直接写入；↑↓ 换候选项，Enter 写入。\n" +
                 "一页 10 项：PageUp / PageDown（或 ↑↓ 走到页首 / 页尾、鼠标滚轮、底部 ‹ ›）翻页。");
-            _hintToolTip.SetToolTip(btnPrevPage, "上一页（PageUp / 滚轮往上 / 在页首再按 ↑）");
-            _hintToolTip.SetToolTip(btnNextPage, "下一页（PageDown / 滚轮往下 / 在页尾再按 ↓）");
+            UiLocalization.SetToolTip(_hintToolTip, btnPrevPage, "上一页（PageUp / 滚轮往上 / 在页首再按 ↑）");
+            UiLocalization.SetToolTip(_hintToolTip, btnNextPage, "下一页（PageDown / 滚轮往下 / 在页尾再按 ↓）");
+
+            // 检索框的灰色提示不是控件文字，语言切换时单独重写一次
+            UiText.LanguageChanged += MemberNamePicker_LanguageChanged;
+            FormClosed += MemberNamePicker_FormClosed;
 
             LoadMappingTargets();
             LoadItems();
@@ -181,21 +224,34 @@ namespace MSIFAITOOLS
         /// <param name="currentValue">目标单元格当前的值（可为 <c>null</c>）。</param>
         public void SetCurrentValue(string currentValue)
         {
-            // 只换写入目标、部品名不变（推荐项按同一个部品名 从内存里的置换表再取一次，零开销）
-            SetTarget(currentValue, _partName);
+            // 只换写入目标、部品名 / 部品コード 不变（推荐项按同一行从内存里再取一次，零开销）
+            SetTarget(currentValue, _partName, _partCode);
         }
 
         /// <summary>
         /// 切换「要写入的目标单元格」并同时更新这一行的<b>部品名</b>
-        /// （主画面点了另一行的「部材名」时调用）：列表里会把这一格现在的值预先选中，
-        /// 候选列表换成新部品名 在置换表里对应的推荐项 + 新的原值。
+        /// （部品コード 沿用上一次的值）。
         /// </summary>
         /// <param name="currentValue">目标单元格当前的值（可为 <c>null</c>）。</param>
         /// <param name="partName">同一行的「部品名」（可为 <c>null</c> / 空）。</param>
         public void SetTarget(string currentValue, string partName)
         {
+            SetTarget(currentValue, partName, _partCode);
+        }
+
+        /// <summary>
+        /// 切换「要写入的目标单元格」并更新这一行的<b>部品名 / 部品コード</b>
+        /// （主画面点了另一行的「部材名」时调用）：列表里会把这一格现在的值预先选中，
+        /// 候选列表换成这一行的推荐项（部品CD 一致的部材名 → 部品名 一致的部材名 → 表示部材名）+ 新的原值。
+        /// </summary>
+        /// <param name="currentValue">目标单元格当前的值（可为 <c>null</c>）。</param>
+        /// <param name="partName">同一行的「部品名」（可为 <c>null</c> / 空）。</param>
+        /// <param name="partCode">同一行的「部品コード」（可为 <c>null</c> / 空）。</param>
+        public void SetTarget(string currentValue, string partName, string partCode)
+        {
             _currentValue = currentValue == null ? string.Empty : currentValue.Trim();
             _partName = partName == null ? string.Empty : partName.Trim();
+            _partCode = partCode == null ? string.Empty : partCode.Trim();
 
             LoadMappingTargets();
             LoadItems();
@@ -204,33 +260,82 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 按 <see cref="_partName"/> 从<b>内存里</b>的置换表（<see cref="MemberNameReplacementCatalog"/>，
-        /// 程序启动 / 主画面打开时整表读好的 <c>genpin.dbo.T_M_MergeName</c>）取推荐项放进
-        /// <see cref="_mappingTargets"/>，由 <see cref="LoadItems"/> 排成第 1 号候选。
-        /// <b>不连数据库</b>：打开窗口、换行都只是内存查找，所以是瞬间的；
-        /// 置换表没读进内存时只记在 <see cref="_mappingError"/>（状态行提示），不弹窗。
+        /// 取这一行的推荐项放进 <see cref="_mappingTargets"/>，由 <see cref="LoadItems"/> 排在最前
+        /// （第 1 号候选 = 按 1 写入的值）。<b>只查内存</b>：打开窗口、换行都是瞬间的，不连数据库。
+        /// <list type="number">
+        ///   <item><see cref="BuhinBuzaiMappingCatalog.GetBuzaiNamesByBuhinCd"/>：
+        ///     部品不材 mapping 里<b>部品CD 一致</b>的部材名（这条部品实际用过的部材，最可信）；</item>
+        ///   <item><see cref="BuhinBuzaiMappingCatalog.GetBuzaiNamesByBuhinName"/>：
+        ///     同一张表里<b>部品名 一致</b>的部材名（部品CD 没登记时的退路）；</item>
+        ///   <item><see cref="MemberNameReplacementCatalog.GetDisplayNames"/>：
+        ///     置换表 <c>T_M_MergeName</c> 里的<b>表示部材名</b>（<c>MsifDevName</c>，
+        ///     同一个部材的其它叫法也一起列出）。</item>
+        /// </list>
+        /// 两边的表都没读进内存时只记在 <see cref="_mappingError"/> / <see cref="_buzaiError"/>
+        /// （状态行提示），不弹窗，其余候选照常可用。
         /// </summary>
         private void LoadMappingTargets()
         {
             _mappingTargets = new string[0];
             _mappingError = string.Empty;
+            _buzaiError = string.Empty;
 
-            if (_partName.Length == 0)
+            if (_partName.Length == 0 && _partCode.Length == 0)
             {
                 return;
             }
 
-            if (!MemberNameReplacementCatalog.IsLoaded)
+            // 部材不材 mapping（以前用过的部材名）：部品CD → 部品名 的顺序
+            if (BuhinBuzaiMappingCatalog.IsLoaded)
             {
-                // 启动时没连上置换表（主画面打开时补读也失败）→ 没有推荐项，但仍然可以用下面的候选
+                AppendTargets(BuhinBuzaiMappingCatalog.GetBuzaiNamesByBuhinCd(_partCode));
+                AppendTargets(BuhinBuzaiMappingCatalog.GetBuzaiNamesByBuhinName(_partName));
+            }
+            else
+            {
+                // 画面打开时没连上 MSIF 库 → 没有「以前用过的部材名」，但仍然可以用下面的候选
+                _buzaiError = BuhinBuzaiMappingCatalog.LastError;
+            }
+
+            // 置换表的表示部材名（MsifDevName）
+            if (MemberNameReplacementCatalog.IsLoaded)
+            {
+                AppendTargets(MemberNameReplacementCatalog.GetDisplayNames(_partName));
+            }
+            else
+            {
+                // 启动时没连上置换表（主画面打开时补读也失败）→ 没有表示部材名，但其它候选照常可用
                 _mappingError = MemberNameReplacementCatalog.LastError;
+            }
+        }
 
+        /// <summary>把推荐项加进 <see cref="_mappingTargets"/>（去空白、去重、保持顺序）。</summary>
+        /// <param name="names">要加进去的部材名（可为 <c>null</c>）。</param>
+        private void AppendTargets(IList<string> names)
+        {
+            if (names == null || names.Count == 0)
+            {
                 return;
             }
 
-            IList<string> targets = MemberNameReplacementCatalog.GetTargets(_partName);
+            List<string> targets = new List<string>(_mappingTargets);
+            bool added = false;
 
-            _mappingTargets = new List<string>(targets).ToArray();
+            foreach (string name in names)
+            {
+                string text = name == null ? string.Empty : name.Trim();
+
+                if (text.Length > 0 && !targets.Contains(text))
+                {
+                    targets.Add(text);
+                    added = true;
+                }
+            }
+
+            if (added)
+            {
+                _mappingTargets = targets.ToArray();
+            }
         }
 
         /// <summary>
@@ -272,7 +377,7 @@ namespace MSIFAITOOLS
             string custom = txtFilter.Text.Trim();
 
             if (custom.Length == 0 &&
-                MessageBox.Show(this,
+                ShowMessage(
                     "输入框是空的：按 Enter 会清空主画面这一格。\n\n要清空吗？",
                     "确认清空", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes)
@@ -295,12 +400,25 @@ namespace MSIFAITOOLS
                 ? "这一格现在是空的"
                 : "这一格现在是：" + _currentValue;
 
-            if (_mappingError.Length > 0)
+            if (_buzaiError.Length > 0)
             {
-                text += "（置换表连不上，没有推荐项）";
+                text += "（部材不材 mapping 连不上，没有以前用过的部材名）";
             }
 
-            lblPreview.Text = text;
+            if (_mappingError.Length > 0)
+            {
+                text += "（置换表连不上，没有表示部材名）";
+            }
+
+            UiLocalization.SetText(lblPreview, text);
+        }
+
+        /// <summary>统一弹窗：标题 / 正文都按当前语言翻译（正文里的动态部分由对照表的模板匹配处理）。</summary>
+        private DialogResult ShowMessage(string message, string caption,
+            MessageBoxButtons buttons, MessageBoxIcon icon, MessageBoxDefaultButton defaultButton)
+        {
+            return MessageBox.Show(this, UiText.Translate(message), UiText.T(caption),
+                buttons, icon, defaultButton);
         }
 
         /// <summary>窗口显示时把焦点放到过滤框（直接打字就是搜索）。</summary>
@@ -313,13 +431,12 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 组装候选项：置换表的推荐项 → 原值拆出来的项 → 部材部品マスタ 的部材名（去重后保持这个顺序）。
+        /// 组装候选项：推荐项（部品CD / 部品名 一致的部材名 → 表示部材名）→ 原值拆出来的项
+        /// → 部材部品マスタ 的部材名（去重后保持这个顺序）。
         /// <para>
-        /// 置换表的推荐项（<c>GenpinName</c>）已经是置换<b>后</b>的词，原样加入；
-        /// 原值拆出来的项与部材部品マスタ 的部材名 是图面上的叫法（<c>MsifDevName</c>），
-        /// 加入前先按 <see cref="MemberNameReplacementCatalog.Replace"/> 置换一次
-        /// （与 <see cref="PartBasicInfo.MemberName"/> 的 setter 同一规则：<c>鴨居 → 上枠</c>、
-        /// <c>右鴨居 → 右上枠</c>），所以在这里挑名字写入的就是置换后的值。
+        /// 各来源都<b>原样</b>加入（不再按置换表换成 <c>GenpinName</c>）：面板里看到什么、写进单元格的
+        /// 就是什么，保存时也是原值（见 <see cref="PartBasicInfo.SetMemberNameFromInput"/>）。
+        /// 原部材名（<c>GenpinName</c>）只在 genpin 侧使用，本工具的画面里不出现。
         /// </para>
         /// </summary>
         private void LoadItems()
@@ -333,12 +450,12 @@ namespace MSIFAITOOLS
 
             foreach (string part in SplitValue(_currentValue))
             {
-                AddItem(MemberNameReplacementCatalog.Replace(part));
+                AddItem(part);
             }
 
             if (_catalog != null)
             {
-                foreach (string memberName in MemberNameReplacementCatalog.ReplaceMany(_catalog.MemberNames))
+                foreach (string memberName in _catalog.MemberNames)
                 {
                     AddItem(memberName);
                 }
@@ -604,9 +721,9 @@ namespace MSIFAITOOLS
         {
             bool empty = _currentValue.Length == 0;
 
-            lblPreview.Text = empty
+            UiLocalization.SetText(lblPreview, empty
                 ? "已写入：（空）→ 清空了这一格"
-                : "已写入：" + _currentValue;
+                : "已写入：" + _currentValue);
             lblPreview.ForeColor = empty ? PreviewEmptyColor : PreviewNormalColor;
         }
 

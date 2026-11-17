@@ -82,7 +82,6 @@ namespace MSIFAITOOLS
             this.txtFolder = new System.Windows.Forms.TextBox();
             this.lblFolder = new System.Windows.Forms.Label();
             this.chkCadSplit = new System.Windows.Forms.CheckBox();
-            this.btnMemberNameMap = new System.Windows.Forms.Button();
             this.btnDbJp1 = new System.Windows.Forms.Button();
             this.btnDbJp2 = new System.Windows.Forms.Button();
             this.lblDbHint = new System.Windows.Forms.Label();
@@ -114,8 +113,7 @@ namespace MSIFAITOOLS
             this.pnlHeader.Controls.Add(this.lblVersion);
             this.pnlHeader.Controls.Add(this.lblAppSub);
             this.pnlHeader.Controls.Add(this.lblAppTitle);
-            // 标题栏右上角：AI 设置 / 部材名置换表 两个全局入口（随窗体宽度一同右移）
-            this.pnlHeader.Controls.Add(this.btnMemberNameMap);
+            // 标题栏右上角：AI 设置全局入口（随窗体宽度一同右移）
             this.pnlHeader.Controls.Add(this.btnAiSettings);
             // 标题栏第二行：SQL Server 两个连接（① genpin / ② MSIF）各自维护
             this.pnlHeader.Controls.Add(this.btnDbJp1);
@@ -908,25 +906,6 @@ namespace MSIFAITOOLS
             this.chkCadSplit.TabIndex = 3;
             this.chkCadSplit.Text = "开始分解前先调用 CadPartSplitter 做零件分割（Part_NN.png 等）";
             this.chkCadSplit.UseVisualStyleBackColor = true;
-            // 
-            // btnMemberNameMap
-            // 
-            this.btnMemberNameMap.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnMemberNameMap.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(37)))), ((int)(((byte)(74)))), ((int)(((byte)(118)))));
-            this.btnMemberNameMap.Cursor = System.Windows.Forms.Cursors.Hand;
-            this.btnMemberNameMap.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(74)))), ((int)(((byte)(116)))), ((int)(((byte)(163)))));
-            this.btnMemberNameMap.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(24)))), ((int)(((byte)(50)))), ((int)(((byte)(84)))));
-            this.btnMemberNameMap.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(52)))), ((int)(((byte)(92)))), ((int)(((byte)(140)))));
-            this.btnMemberNameMap.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnMemberNameMap.Font = new System.Drawing.Font("Microsoft YaHei", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.btnMemberNameMap.ForeColor = System.Drawing.Color.White;
-            this.btnMemberNameMap.Location = new System.Drawing.Point(562, 22);
-            this.btnMemberNameMap.Name = "btnMemberNameMap";
-            this.btnMemberNameMap.Size = new System.Drawing.Size(250, 28);
-            this.btnMemberNameMap.TabIndex = 15;
-            this.btnMemberNameMap.Text = "部材名置換表（例：鴨居 → 上枠）…";
-            this.btnMemberNameMap.UseVisualStyleBackColor = false;
-            this.btnMemberNameMap.Click += new System.EventHandler(this.BtnMemberNameMap_Click);
             //
             // lblDbHint
             //
@@ -1102,7 +1081,6 @@ namespace MSIFAITOOLS
         private System.Windows.Forms.Label lblCmdStepNote;
         private System.Windows.Forms.CheckBox chkCmdStep0;
         private System.Windows.Forms.Button btnAiSettings;
-        private System.Windows.Forms.Button btnMemberNameMap;
         private System.Windows.Forms.Label lblDbHint;
         private System.Windows.Forms.Button btnDbJp1;
         private System.Windows.Forms.Button btnDbJp2;

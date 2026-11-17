@@ -89,7 +89,6 @@ namespace MSIFAITOOLS
                 Text = UiText.T("MSIF AI TOOLS  -  PDF 分解工具（坐标 + 文本 + 分类）");
                 lblAppSub.Text = UiText.T("PDF 分解工具 · 坐标 / 文本 / plu（pdfplumber 风格）");
                 chkDebug.Text = UiText.T("Debug（显示分步执行面板）");
-                btnMemberNameMap.Text = UiText.T("部材名置換表（例：鴨居 → 上枠）…");
                 btnAiSettings.Text = UiText.T("AI 設定");
                 lblDbHint.Text = UiText.T("SQL Server 接続：");
                 btnDbJp1.Text = UiText.T("接続① genpin");

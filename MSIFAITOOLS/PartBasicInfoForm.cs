@@ -98,9 +98,17 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 「部品名」列的名字（<c>colPartName</c>）：打开「选择部材名」窗口
         /// （<see cref="MemberNamePickerForm"/>）时传给窗口，
-        /// 用来去置换表 <c>DL_BuhinBuzaiMapping</c> 查对应的部材名（<c>BuzaiName</c>）显示出来。
+        /// 用来去部材不材 mapping（<c>DL_BuhinBuzaiMapping</c> 的 <c>BuhinName</c>）和
+        /// 置换表（<c>T_M_MergeName</c> 的表示部材名 <c>MsifDevName</c>）查推荐项。
         /// </summary>
         private const string PartNameColumnName = "colPartName";
+
+        /// <summary>
+        /// 「部品コード」列的名字（<c>colPartCode</c>）：同样在打开「选择部材名」窗口时传给窗口，
+        /// 用来去部材不材 mapping 查<b>这个部品实际用过的部材名</b>
+        /// （<c>DL_BuhinBuzaiMapping.BuhinCd</c> = 这一列 → <c>BuzaiName</c>，推荐项里排最前）。
+        /// </summary>
+        private const string PartCodeColumnName = "colPartCode";
 
         /// <summary>
         /// 部材部品マスタ（部材名 → 部品名）索引：给「选择部材名」窗口当候选列表用。
@@ -234,6 +242,10 @@ namespace MSIFAITOOLS
             InitializeComponent();
             InitializePartsGrid();
             InitializePartsContextMenu();
+
+            // 按钮 / 列头 / 右键菜单 / 标签等文字的中日切换（见 Services\UiLocalization.cs）
+            UiLocalization.Attach(this);
+
             _databasePath = string.IsNullOrWhiteSpace(databasePath) ? null : databasePath.Trim();
         }
 
@@ -290,8 +302,8 @@ namespace MSIFAITOOLS
             _pdfPath = newPath;
             _drawingNo = PartBasicInfoRepository.ResolveDrawingNo(_pdfPath);
 
-            lblDrawingNo.Text = "図番：" + (_drawingNo.Length == 0 ? "-" : _drawingNo);
-            lblPdfPath.Text = "PDF：" + (_pdfPath.Length == 0 ? "-" : _pdfPath);
+            UiLocalization.SetText(lblDrawingNo, "図番：" + (_drawingNo.Length == 0 ? "-" : _drawingNo));
+            UiLocalization.SetText(lblPdfPath, "PDF：" + (_pdfPath.Length == 0 ? "-" : _pdfPath));
             UpdateTitle();
 
             LoadParts();
@@ -340,21 +352,22 @@ namespace MSIFAITOOLS
                 }
             }
 
-            lblDatabase.Text = "数据库：" + databasePath;
+            UiLocalization.SetText(lblDatabase, "数据库：" + databasePath);
 
             SetDirty(false);
             PopulateParts(parts);
 
             if (error != null)
             {
-                lblSummary.Text = "读取失败";
+                UiLocalization.SetText(lblSummary, "读取失败");
                 lblSummary.ForeColor = Color.FromArgb(198, 40, 40);
-                lblEmpty.Text = error;
+                UiLocalization.SetText(lblEmpty, error);
             }
             else
             {
                 lblSummary.ForeColor = Color.FromArgb(52, 73, 94);
-                lblEmpty.Text = "该図番尚未登录部品基本信息。\n可点击【追加行】手工录入，或先对该 PDF 执行【AI 分析】。";
+                UiLocalization.SetText(lblEmpty,
+                    "该図番尚未登录部品基本信息。\n可点击【追加行】手工录入，或先对该 PDF 执行【AI 分析】。");
             }
 
             lblEmpty.Visible = parts.Count == 0;
@@ -567,7 +580,7 @@ namespace MSIFAITOOLS
         {
             if (_drawingNo.Length == 0)
             {
-                MessageBox.Show(this, "无法从 PDF 文件名解析出図番，不能追加部品信息。", "提示",
+                ShowMessage("无法从 PDF 文件名解析出図番，不能追加部品信息。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -762,12 +775,12 @@ namespace MSIFAITOOLS
 
             if (targets.Count == 0)
             {
-                MessageBox.Show(this, "请先选中要删除的行。", "提示",
+                ShowMessage("请先选中要删除的行。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            if (MessageBox.Show(this,
+            if (ShowMessage(
                     "确定删除选中的 " + targets.Count + " 行吗？\n（点击【保存】后才会真正从数据库删除）",
                     "确认删除", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes)
@@ -941,7 +954,7 @@ namespace MSIFAITOOLS
         {
             if (_drawingNo.Length == 0)
             {
-                MessageBox.Show(this, "无法从 PDF 文件名解析出図番，不能保存部品信息。", "提示",
+                ShowMessage("无法从 PDF 文件名解析出図番，不能保存部品信息。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
@@ -1007,7 +1020,9 @@ namespace MSIFAITOOLS
 
                 string status = GetCellText(row, "colVerifyStatus");
                 part.VerifyStatus = IsKnownVerifyStatus(status) ? status : PartVerifyStatus.NotChecked;
-                part.MemberName = GetCellText(row, "colMemberName");
+                // 部材名：画面上填 / 选的是什么就登录什么 —— 不按置换表 T_M_MergeName 置换
+                // （置换只用于分析自动取得部材名的时点，见 PartBasicInfo.MemberName / SetMemberNameFromInput）
+                part.SetMemberNameFromInput(GetCellText(row, "colMemberName"));
                 part.HeightMin = GetCellText(row, "colHeightMin");
                 part.HeightMax = GetCellText(row, "colHeightMax");
                 part.WidthMin = GetCellText(row, "colWidthMin");
@@ -1043,7 +1058,7 @@ namespace MSIFAITOOLS
 
             if (errors.Count > 0)
             {
-                MessageBox.Show(this, "保存前请先修正以下问题：\n\n" + string.Join("\n", errors.ToArray()),
+                ShowMessage("保存前请先修正以下问题：\n\n" + string.Join("\n", errors.ToArray()),
                     "无法保存", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
@@ -1059,7 +1074,7 @@ namespace MSIFAITOOLS
             }
 
             if (blankCount > 0 &&
-                MessageBox.Show(this, "有 " + blankCount + " 行的「部品名」与「部品コード」都为空，仍要保存吗？",
+                ShowMessage("有 " + blankCount + " 行的「部品名」与「部品コード」都为空，仍要保存吗？",
                     "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes)
             {
@@ -1067,7 +1082,7 @@ namespace MSIFAITOOLS
             }
 
             if (parts.Count == 0 &&
-                MessageBox.Show(this, "表格中没有任何行，保存会清空该図番的全部部品明细。\n确定要继续吗？",
+                ShowMessage("表格中没有任何行，保存会清空该図番的全部部品明细。\n确定要继续吗？",
                     "确认清空", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes)
             {
@@ -1086,7 +1101,7 @@ namespace MSIFAITOOLS
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "保存到数据库失败：\n" + ex.Message, "错误",
+                ShowMessage("保存到数据库失败：\n" + ex.Message, "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
@@ -1104,11 +1119,19 @@ namespace MSIFAITOOLS
             // 连接名 connJP2）。表的主键是 BuhinName + BuzaiName，部品CD = 画面上的「部品コード」
             // （BuhinCd），所以更新时会把部品CD 一起刷新；BuhinCd 为空时保留表里原来的值。
             // 同样失败只提示（连不上 / 没权限 / 表不存在），不影响部品基本信息的保存。
-            string buhinBuzaiMessage = BuhinBuzaiMappingRepository.Register(parts);
+            bool buhinBuzaiUpdated;
+            string buhinBuzaiMessage = BuhinBuzaiMappingRepository.Register(parts, out buhinBuzaiUpdated);
+
+            // 部材不材 mapping 更新成功 → 重新读一次内存（部品名 / 部品CD → 部材名），
+            // 刚登录的「部品名 + 部材名」下一次点「部材名」就能在推荐项里选到（失败只影响推荐项，不弹提示）
+            if (buhinBuzaiUpdated)
+            {
+                BuhinBuzaiMappingCatalog.Reload();
+            }
 
             LoadParts();
 
-            MessageBox.Show(this, "已保存 " + written + " 条部品基本信息。" +
+            ShowMessage("已保存 " + written + " 条部品基本信息。" +
                 (ruleMessage.Length == 0 ? string.Empty : "\n" + ruleMessage) +
                 (buhinBuzaiMessage.Length == 0 ? string.Empty : "\n" + buhinBuzaiMessage), "完成",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1169,7 +1192,7 @@ namespace MSIFAITOOLS
         {
             if (_drawingNo.Length == 0)
             {
-                MessageBox.Show(this, "无法从 PDF 文件名解析出図番，不能导出 Excel。", "提示",
+                ShowMessage("无法从 PDF 文件名解析出図番，不能导出 Excel。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
@@ -1178,7 +1201,7 @@ namespace MSIFAITOOLS
 
             if (outputDirectory == null)
             {
-                MessageBox.Show(this,
+                ShowMessage(
                     "找不到 PDF 所在文件夹，无法确定导出目录：\n" +
                     (_pdfPath.Length == 0 ? "(未指定 PDF)" : _pdfPath),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1208,7 +1231,7 @@ namespace MSIFAITOOLS
 
             if (rows.Count == 0)
             {
-                MessageBox.Show(this, "当前図番没有任何部品明细，没有可导出的内容。", "提示",
+                ShowMessage("当前図番没有任何部品明细，没有可导出的内容。", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return false;
             }
@@ -1216,7 +1239,7 @@ namespace MSIFAITOOLS
             string filePath = Path.Combine(outputDirectory, ExportFileNamePrefix + _drawingNo + ".xlsx");
 
             if (File.Exists(filePath) &&
-                MessageBox.Show(this, "文件已存在，要覆盖吗？\n\n" + filePath, "确认覆盖",
+                ShowMessage("文件已存在，要覆盖吗？\n\n" + filePath, "确认覆盖",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes)
             {
@@ -1224,7 +1247,7 @@ namespace MSIFAITOOLS
             }
 
             if (_isDirty &&
-                MessageBox.Show(this,
+                ShowMessage(
                     "画面上还有未保存到数据库的修改。\n" +
                     "导出的是画面当前内容（含未保存的修改）。\n\n继续导出吗？",
                     "确认导出", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
@@ -1239,19 +1262,19 @@ namespace MSIFAITOOLS
             }
             catch (IOException ex)
             {
-                MessageBox.Show(this,
+                ShowMessage(
                     "无法写入 Excel 文件（可能正被 Excel 打开）：\n" + filePath + "\n\n" + ex.Message,
                     "导出失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "导出 Excel 失败：\n" + ex.Message, "错误",
+                ShowMessage("导出 Excel 失败：\n" + ex.Message, "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
 
-            if (MessageBox.Show(this,
+            if (ShowMessage(
                     "已导出 " + rows.Count + " 条到：\n" + filePath + "\n\n是否打开所在文件夹？",
                     "导出完成", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
             {
@@ -1291,7 +1314,7 @@ namespace MSIFAITOOLS
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "打开文件夹失败：\n" + ex.Message, "异常",
+                ShowMessage("打开文件夹失败：\n" + ex.Message, "异常",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -1301,7 +1324,7 @@ namespace MSIFAITOOLS
         {
             if (_pdfPath.Length == 0 || !File.Exists(_pdfPath))
             {
-                MessageBox.Show(this,
+                ShowMessage(
                     "找不到对应的 PDF 文件：\n" + (_pdfPath.Length == 0 ? "(未指定)" : _pdfPath),
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
@@ -1479,8 +1502,8 @@ namespace MSIFAITOOLS
         {
             string title = _drawingNo.Length == 0 ? "部品基本信息" : "部品基本信息 - " + _drawingNo;
 
-            Text = _isDirty ? title + "　＊有未保存的修改" : title;
-            btnSave.Text = _isDirty ? "保存 ＊" : "保存";
+            UiLocalization.SetText(this, _isDirty ? title + "　＊有未保存的修改" : title);
+            UiLocalization.SetText(btnSave, _isDirty ? "保存 ＊" : "保存");
         }
 
         /// <summary>设置「是否有未保存的修改」并刷新标题、统计标签。</summary>
@@ -1524,9 +1547,9 @@ namespace MSIFAITOOLS
                 }
             }
 
-            lblSummary.Text = string.Format("共 {0} 条（坐标一致 {1} / 不符 {2} / 未校验 {3}）{4}",
+            UiLocalization.SetText(lblSummary, string.Format("共 {0} 条（坐标一致 {1} / 不符 {2} / 未校验 {3}）{4}",
                 total, passedCount, failedCount, notCheckedCount,
-                _isDirty ? "　＊未保存" : string.Empty);
+                _isDirty ? "　＊未保存" : string.Empty));
         }
 
         /// <summary>重新编号「No」列（追加/删除行后保持连续）。</summary>
@@ -1651,14 +1674,14 @@ namespace MSIFAITOOLS
 
             if (IsSpecialNoteRow(row))
             {
-                cell.ToolTipText = "行背景 淡粉 = 特注（「特注」= " + PartBasicInfo.SpecialNoteMark + "）";
+                cell.ToolTipText = UiText.F("行背景 淡粉 = 特注（「特注」= {0}）", PartBasicInfo.SpecialNoteMark);
                 return;
             }
 
             if (IsSplitRow(row))
             {
-                cell.ToolTipText = "行背景 淡紫 = 被分割的行（备注含「" +
-                    CmdCalloutPartSplitter.RemarkPositionPrefix + "」，按圈号 / 位置 1 行拆成多条）";
+                cell.ToolTipText = UiText.F("行背景 淡紫 = 被分割的行（备注含「{0}」，按圈号 / 位置 1 行拆成多条）",
+                    CmdCalloutPartSplitter.RemarkPositionPrefix);
                 return;
             }
 
@@ -1666,19 +1689,19 @@ namespace MSIFAITOOLS
 
             if (string.Equals(sourceKind, PartSourceKind.CmdAssembly, StringComparison.Ordinal))
             {
-                cell.ToolTipText = "行背景 淡绿 = 数据来源「" + PartSourceKind.CmdAssembly + "」";
+                cell.ToolTipText = UiText.F("行背景 淡绿 = 数据来源「{0}」", PartSourceKind.CmdAssembly);
                 return;
             }
 
             if (string.Equals(sourceKind, PartSourceKind.CmdYoryo, StringComparison.Ordinal))
             {
-                cell.ToolTipText = "行背景 淡蓝 = 数据来源「" + PartSourceKind.CmdYoryo + "」";
+                cell.ToolTipText = UiText.F("行背景 淡蓝 = 数据来源「{0}」", PartSourceKind.CmdYoryo);
                 return;
             }
 
             cell.ToolTipText = sourceKind.Length == 0
-                ? "数据来源为空（老数据 / 未写来源）→ 行背景 白色"
-                : "行背景 白色 = 数据来源「" + sourceKind + "」（不属于上面几类）";
+                ? UiText.T("数据来源为空（老数据 / 未写来源）→ 行背景 白色")
+                : UiText.F("行背景 白色 = 数据来源「{0}」（不属于上面几类）", sourceKind);
         }
 
         /// <summary>
@@ -1759,8 +1782,8 @@ namespace MSIFAITOOLS
 
             if (partName.Length == 0)
             {
-                cell.ToolTipText = "部品コード 为空，部品名 也为空 → 无法从部品マスタ（"
-                    + CmdPartCodeNormalizer.FileName + "）推定，请手工输入";
+                cell.ToolTipText = UiText.F("部品コード 为空，部品名 也为空 → 无法从部品マスタ（{0}）推定，请手工输入",
+                    CmdPartCodeNormalizer.FileName);
 
                 return;
             }
@@ -1774,7 +1797,7 @@ namespace MSIFAITOOLS
                 if (!assignValue)
                 {
                     // 用户正在手工改部品コード → 只告诉他マスタ里是什么，不替他填
-                    cell.ToolTipText = string.Format(
+                    cell.ToolTipText = UiText.F(
                         "部品コード 为空 → 部品名「{0}」在部品マスタ 里是 {1}（{2} 第 {3} 行）→ 需要时请手工输入",
                         partName, found.PartCode, found.FileName, found.RowNumber);
 
@@ -1795,7 +1818,7 @@ namespace MSIFAITOOLS
                     _suppressGridEvents = previous;
                 }
 
-                cell.ToolTipText = string.Format(
+                cell.ToolTipText = UiText.F(
                     "部品コード 为空 → 按部品名「{0}」从部品マスタ 推定：{1}（{2} 第 {3} 行）。请确认。",
                     partName, found.PartCode, found.FileName, found.RowNumber);
 
@@ -1811,14 +1834,14 @@ namespace MSIFAITOOLS
                     codes.Add(candidate.PartCode);
                 }
 
-                cell.ToolTipText = string.Format(
+                cell.ToolTipText = UiText.F(
                     "部品マスタ 里「{0}」有 {1} 个部品コード：{2} → 请按材質 / 色 手工选择",
                     partName, candidates.Count, string.Join(" / ", codes.ToArray()));
 
                 return;
             }
 
-            cell.ToolTipText = string.Format(
+            cell.ToolTipText = UiText.F(
                 "部品マスタ（{0}）里没有「{1}」→ 请手工输入部品コード",
                 CmdPartCodeNormalizer.FileName, partName);
         }
@@ -1910,7 +1933,7 @@ namespace MSIFAITOOLS
                 return true;
             }
 
-            DialogResult result = MessageBox.Show(this,
+            DialogResult result = ShowMessage(
                 "有未保存的修改。\n\n是否先保存，再" + action + "？\n\n" +
                 "「是」：保存后" + action + "\n「否」：放弃修改并" + action + "\n「取消」：留在当前画面",
                 "确认", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question,
@@ -2075,14 +2098,16 @@ namespace MSIFAITOOLS
 
             string currentValue = GetCellText(cell.OwningRow, cell.OwningColumn.Name);
 
-            // 同一行的「部品名」= 置换表 DL_BuhinBuzaiMapping 的 BuhinName：
-            // 窗口用它查出对应的部材名（BuzaiName）显示在顶部，点那一行就能直接写入
+            // 同一行的「部品名」= 部材不材 mapping 的 BuhinName / 置换表的 MsifDevName，
+            // 「部品コード」= 部材不材 mapping 的 BuhinCd：
+            // 窗口用它们查出部材名（以前用过的部材名 / 表示部材名）排在候选最前，按数字键就能直接写入
             string partName = GetCellText(cell.OwningRow, PartNameColumnName);
+            string partCode = GetCellText(cell.OwningRow, PartCodeColumnName);
 
             if (_memberNamePicker == null || _memberNamePicker.IsDisposed)
             {
                 MemberNamePickerForm picker =
-                    new MemberNamePickerForm(GetMemberNameCatalog(), currentValue, partName);
+                    new MemberNamePickerForm(GetMemberNameCatalog(), currentValue, partName, partCode);
 
                 picker.MemberNamePicked += MemberNamePicker_MemberNamePicked;
                 picker.FormClosed += MemberNamePicker_FormClosed;
@@ -2094,9 +2119,9 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            // 已经开着：切换写入目标（列表里选中这一格现在的值 + 顶部换成这一行的部品名 对应的部材名），
+            // 已经开着：切换写入目标（列表里选中这一格现在的值 + 推荐项换成这一行的部品名 / 部品コード 对应的），
             // 不重新读マスタ
-            _memberNamePicker.SetTarget(currentValue, partName);
+            _memberNamePicker.SetTarget(currentValue, partName, partCode);
 
             if (!_memberNamePicker.Visible)
             {
@@ -2162,7 +2187,7 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 把表格的选择移到<b>下一行</b>的「部材名」单元格，并把「选择部材名」窗口的写入目标
-        /// 换成这一格（列表里预先选中的值 / 顶部推荐项 = 这一行的部品名 对应的部材名）。
+        /// 换成这一格（列表里预先选中的值 / 推荐项 = 这一行的部品CD / 部品名 对应的部材名）。
         /// <para>
         /// 已经到最后一行（下方没有可见行）时停在原地，不循环、也不自动追加行。
         /// 只移动选择、不进入编辑：改「部材名」一律走选择窗口。
@@ -2218,7 +2243,7 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 换「选择部材名」窗口的写入目标：单元格引用记到 <see cref="_memberNamePickerCell"/>，
-        /// 窗口开着时把这一格现在的值和同一行的部品名 一起交给它
+        /// 窗口开着时把这一格现在的值、同一行的部品名 / 部品コード 一起交给它
         /// （推荐项 / 预先选中项跟着换；窗口没开就不用管，下次点「部材名」会新建）。
         /// </summary>
         /// <param name="cell">新的目标单元格（「部材名」列）。</param>
@@ -2240,8 +2265,9 @@ namespace MSIFAITOOLS
             DataGridViewRow targetRow = row ?? cell.OwningRow;
             string currentValue = targetRow == null ? string.Empty : GetCellText(targetRow, cell.OwningColumn.Name);
             string partName = targetRow == null ? string.Empty : GetCellText(targetRow, PartNameColumnName);
+            string partCode = targetRow == null ? string.Empty : GetCellText(targetRow, PartCodeColumnName);
 
-            _memberNamePicker.SetTarget(currentValue, partName);
+            _memberNamePicker.SetTarget(currentValue, partName, partCode);
         }
 
         /// <summary>「选择部材名」窗口关闭后清掉引用（下次点「部材名」会重新创建）。</summary>
@@ -2455,9 +2481,11 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 画面打开时把「选择部材名」窗口要用的数据<b>一次性</b>读进内存：
-        /// ① 部材名置换表（SQL Server 的 <c>genpin.dbo.T_M_MergeName</c>；程序启动时已经预读过，
+        /// ① 部材不材 mapping（SQL Server 的 <c>MSIF.dbo.DL_BuhinBuzaiMapping</c>：部品CD / 部品名 → 部材名，
+        ///    推荐项里最靠前的一段）；
+        /// ② 部材名置换表（SQL Server 的 <c>genpin.dbo.T_M_MergeName</c>；程序启动时已经预读过，
         ///    这里只在启动时没读成功的情况下用短超时补读一次）；
-        /// ② 部材部品マスタ（SQLite「部材部品」表里的部材名 一览）。
+        /// ③ 部材部品マスタ（SQLite「部材部品」表里的部材名 一览）。
         /// 之后点「部材名」单元格只是内存查找，不会再连数据库 / 读盘。
         /// </summary>
         protected override void OnLoad(EventArgs e)
@@ -2468,10 +2496,21 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 预读「选择部材名」窗口的数据（置换表 + 部材部品マスタ）。失败只影响候选项，不弹提示。
+        /// 预读「选择部材名」窗口的数据（部材不材 mapping + 置换表 + 部材部品マスタ）。
+        /// 失败只影响候选项，不弹提示。
         /// </summary>
         private void PreloadMemberNamePickerData()
         {
+            try
+            {
+                // 部品CD / 部品名 → 部材名（现场没有 MSIF 库时这里用 3 秒超时放弃，只是没有推荐项）
+                BuhinBuzaiMappingCatalog.EnsurePreloaded();
+            }
+            catch (Exception)
+            {
+                // 读不到只影响推荐项（原因记在 BuhinBuzaiMappingCatalog.LastError）
+            }
+
             try
             {
                 MemberNameReplacementCatalog.EnsurePreloaded();
@@ -2532,6 +2571,24 @@ namespace MSIFAITOOLS
             }
 
             base.OnFormClosed(e);
+        }
+
+        /// <summary>
+        /// 统一弹窗：标题 / 正文都按当前语言翻译
+        /// （正文里的动态部分由 <c>Services\UiText.Japanese.cs</c> 的模板匹配处理）。
+        /// </summary>
+        private DialogResult ShowMessage(string message, string caption,
+            MessageBoxButtons buttons, MessageBoxIcon icon)
+        {
+            return MessageBox.Show(this, UiText.Translate(message), UiText.T(caption), buttons, icon);
+        }
+
+        /// <summary>统一弹窗（可指定默认按钮）。</summary>
+        private DialogResult ShowMessage(string message, string caption,
+            MessageBoxButtons buttons, MessageBoxIcon icon, MessageBoxDefaultButton defaultButton)
+        {
+            return MessageBox.Show(this, UiText.Translate(message), UiText.T(caption),
+                buttons, icon, defaultButton);
         }
     }
 }

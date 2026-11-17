@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using MSIFAITOOLS.Services;
 
 namespace MSIFAITOOLS
 {
@@ -410,7 +411,19 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            SendMessage(txtFilter.Handle, EmSetCueBanner, (IntPtr)1, "检索部材名（直接打字过滤）");
+            SendMessage(txtFilter.Handle, EmSetCueBanner, (IntPtr)1, UiText.T("检索部材名（直接打字过滤）"));
+        }
+
+        /// <summary>切换界面语言：重写检索框的灰色提示（它不是控件文字，不在自动切换范围内）。</summary>
+        private void MemberNamePicker_LanguageChanged(object sender, EventArgs e)
+        {
+            ApplySearchCueBanner();
+        }
+
+        /// <summary>窗口关闭：摘掉语言切换的登记（事件是进程级的，不摘会留着已释放的窗口）。</summary>
+        private void MemberNamePicker_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            UiText.LanguageChanged -= MemberNamePicker_LanguageChanged;
         }
 
         /// <summary>窗口句柄建好：挂滚轮过滤器 + 写检索框提示。</summary>

@@ -54,8 +54,9 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 程序启动时把「部材名置换表」（SQL Server 的表 <c>genpin.dbo.T_M_MergeName</c>）整表读进内存
-        /// （<see cref="MemberNameReplacementCatalog.Preload"/>）：之后分析 / 保存时的部材名置换、
+        /// （<see cref="MemberNameReplacementCatalog.Preload"/>）：之后分析（自动取得部材名的时点）的部材名置换、
         /// 「选择部材名」窗口的推荐项都只查内存，不再连数据库。
+        /// （画面【保存】不置换 —— 见 <see cref="PartBasicInfo.SetMemberNameFromInput"/>。）
         /// <para>
         /// 连不上也不影响启动：置换表为空 → 部材名原样保留，原因记在
         /// <see cref="MemberNameReplacementCatalog.LastError"/>；主画面打开时会再补读一次

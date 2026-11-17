@@ -10,10 +10,14 @@ namespace MSIFAITOOLS
     /// 「部材名面板」（部材名置换表・参照専用）：SQL Server 表 <c>genpin.dbo.T_M_MergeName</c> 的一览。
     ///
     /// <para>
-    /// 表里配的是「图纸 / <c>parts_info.json</c> 上取得的词（<c>MsifDevName</c>）→ 要置换成的词（<c>GenpinName</c>）」，
+    /// 表里配的是「表示部材名 <c>MsifDevName</c>（图纸 / <c>parts_info.json</c> 上取得的词）
+    /// → 原部材名 <c>GenpinName</c>（genpin 主档的叫法）」，
     /// 程序启动时整表预读进内存（<see cref="MemberNameReplacementCatalog.Preload"/>），
-    /// 之后【CMD 分析】第 1 / 2 / 3 步等写进「部材名」的值会按这张表置换
-    /// （<see cref="MemberNameReplacementCatalog"/>）。
+    /// 之后【CMD 分析】第 1 / 2 / 3 步等<b>自动取得部材名</b>时写进「部材名」的值会按这张表置换
+    /// （<see cref="MemberNameReplacementCatalog"/>）；
+    /// 「选择部材名」窗口的<b>表示部材名 候补</b>（<c>MsifDevName</c>）也来自这张表
+    /// （<see cref="MemberNameReplacementCatalog.GetDisplayNames"/>，不会给出原部材名）；
+    /// <b>画面【保存】不置换</b>（用户填 / 选的是什么就登录什么，见 <c>PartBasicInfo.SetMemberNameFromInput</c>）。
     /// </para>
     ///
     /// <para>
@@ -34,6 +38,10 @@ namespace MSIFAITOOLS
         public MemberNameReplacementForm()
         {
             InitializeComponent();
+
+            // 按钮 / 列头等文字的中日切换（见 Services\UiLocalization.cs）
+            UiLocalization.Attach(this);
+
             LoadRows();
         }
 
@@ -56,8 +64,8 @@ namespace MSIFAITOOLS
 
                     if (!repository.TableExists())
                     {
-                        lblDatabase.Text = "连接：" + target +
-                            "（库里没有这张表，请确认 DB 名 / 表名）";
+                        UiLocalization.SetText(lblDatabase, "连接：" + target +
+                            "（库里没有这张表，请确认 DB 名 / 表名）");
                         lblDatabase.ForeColor = FailedColor;
 
                         return;
@@ -68,8 +76,8 @@ namespace MSIFAITOOLS
             }
             catch (Exception ex)
             {
-                lblDatabase.Text = "连接：" + target + "（连接失败：" + ex.Message +
-                    "，可点【连接设置】确认接続先 / ID / PASS）";
+                UiLocalization.SetText(lblDatabase, "连接：" + target + "（连接失败：" + ex.Message +
+                    "，可点【连接设置】确认接続先 / ID / PASS）");
                 lblDatabase.ForeColor = FailedColor;
 
                 return;
@@ -80,7 +88,7 @@ namespace MSIFAITOOLS
                 dgvMap.Rows.Add(row.Classification, row.Source, row.Target);
             }
 
-            lblDatabase.Text = "连接：" + target + "（有效 " + rows.Count + " 条）";
+            UiLocalization.SetText(lblDatabase, "连接：" + target + "（有效 " + rows.Count + " 条）");
             lblDatabase.ForeColor = NormalColor;
 
             // 画面显示的就是库里的最新内容 → 内存里的置换表也刷新成一致（分析时立即生效）

@@ -8,7 +8,10 @@ namespace MSIFAITOOLS.Services
     /// </summary>
     internal sealed class PartBasicInfo
     {
-        /// <summary>「部材名」的实际存储值（见 <see cref="MemberName"/>：赋值时按置换表置换）。</summary>
+        /// <summary>
+        /// 「部材名」的实际存储值（见 <see cref="MemberName"/>：<b>只有分析流程赋值时</b>才按置换表置换；
+        /// 画面输入 / 从库读取走 <see cref="SetMemberNameFromInput"/> / <see cref="SetMemberNameFromStore"/>，原样保留）。
+        /// </summary>
         private string _memberName = string.Empty;
 
         public PartBasicInfo(string drawingNo, int page, int number, string partName, string partDrawingNo,
@@ -73,7 +76,17 @@ namespace MSIFAITOOLS.Services
         /// <b>部材名置换</b>：setter 会把写入的值交给 <see cref="MemberNameReplacementCatalog.Replace"/>，
         /// 按维护画面（<see cref="MemberNameReplacementForm"/>）配好的「置换前 → 置换后」表替换
         /// （例：<c>鴨居</c> → <c>上枠</c>、<c>右鴨居</c> → <c>右上枠</c>；「その他」不置换）。
+        /// 置换表里的 <c>GenpinName</c> = <b>原部材名</b>（genpin 主档的叫法）、
+        /// <c>MsifDevName</c> = <b>表示部材名</b>（图面上的写法）—— 置换结果只在 genpin 侧使用，
+        /// 本工具的画面上显示 / 保存的是表示部材名（见 <see cref="MemberNamePickerForm"/>）。
         /// 置换表为空 / 数据库打不开时原样保留，所以不配置时行为与以前完全一样。
+        /// </para>
+        /// <para>
+        /// <b>只给「自动取得部材名的时点」用</b>：第 1 / 2 / 3 步分析
+        /// （<c>CmdPartAnalysisService</c> / <c>CmdCalloutPartSplitter</c> / <c>CmdInstructionPartCollector</c>）。
+        /// <b>画面【保存】不置换</b>：用户在「部材名」单元格里填 / 选的词原样登录，
+        /// 走 <see cref="SetMemberNameFromInput"/>（否则置换表里配了 <c>上ﾚｰﾙ → アルミ上</c> 时，
+        /// 画面输入的 <c>上ﾚｰﾙ</c> 一点【保存】就被悄悄改成 <c>アルミ上</c>）。
         /// </para>
         /// </summary>
         public string MemberName
@@ -88,19 +101,41 @@ namespace MSIFAITOOLS.Services
         /// <para>
         /// <b>为什么</b>：置换只在「取得部材名的那个点」做一次 —— 第 1 步按圈号取
         /// （<c>CmdPartAnalysisService.ApplyMemberNames</c>）、第 2 / 3 步按位置拆条
-        /// （<c>CmdCalloutPartSplitter.Clone</c> / <c>CmdInstructionPartCollector</c>）、
-        /// 以及【部材名面板】的候选项。库里存的已经是置换后的值；读取时再换一次的话，
+        /// （<c>CmdCalloutPartSplitter.Clone</c> / <c>CmdInstructionPartCollector</c>）。
+        /// 「选择部材名」窗口的候选<b>不再</b>置换（显示的是表示部材名 <c>MsifDevName</c> /
+        /// 部材不材 mapping 的 <c>BuzaiName</c>）。
+        /// 库里存的已经是置换后的值；读取时再换一次的话，
         /// 置换表里存在链式规则（<c>A → B</c> 且 <c>B → C</c>）时会连换两次（<c>A → C</c>），
         /// 第 2 / 3 步「读出来 → 改 → 整张表写回」（<c>PartBasicInfoRepository.Query</c> →
         /// <c>Save</c>）更会把置换结果一层层叠加。
         /// </para>
         /// <para>
-        /// 由 <see cref="PartBasicInfoRepository.Query"/> 调用；分析流程 / 画面上给部材名赋值
-        /// 一律用 <see cref="MemberName"/>（会置换）。
+        /// 由 <see cref="PartBasicInfoRepository.Query"/> 调用；分析流程给部材名赋值用
+        /// <see cref="MemberName"/>（会置换），画面输入用 <see cref="SetMemberNameFromInput"/>。
         /// </para>
         /// </summary>
         /// <param name="memberName">数据库里的部材名（<c>null</c> 视为空）。</param>
         internal void SetMemberNameFromStore(string memberName)
+        {
+            _memberName = memberName ?? string.Empty;
+        }
+
+        /// <summary>
+        /// 画面（部品基本信息表的「部材名」单元格 / 「选择部材名」窗口）里<b>填 / 选</b>的值
+        /// <b>原样</b>写入，<b>不</b>走 <see cref="MemberNameReplacementCatalog.Replace"/>。
+        /// <para>
+        /// <b>为什么</b>：置换表（<c>genpin.dbo.T_M_MergeName</c>）是给「从图纸 / <c>parts_info.json</c>
+        /// 自动取得的词」用的（见 <see cref="MemberName"/>）。用户在画面上写的是什么就该登录什么 ——
+        /// 例如表里配了 <c>上ﾚｰﾙ → アルミ上</c>，用户在「部材名」里填 <c>上ﾚｰﾙ</c> 点【保存】时
+        /// <b>不应该</b>被换成 <c>アルミ上</c>。
+        /// </para>
+        /// <para>
+        /// 由 <c>PartBasicInfoForm</c> 的保存处理调用（其余不置换的路径见
+        /// <see cref="SetMemberNameFromStore"/>）。
+        /// </para>
+        /// </summary>
+        /// <param name="memberName">画面上输入 / 选择的部材名（<c>null</c> 视为空；首尾空白由写库时去掉）。</param>
+        internal void SetMemberNameFromInput(string memberName)
         {
             _memberName = memberName ?? string.Empty;
         }

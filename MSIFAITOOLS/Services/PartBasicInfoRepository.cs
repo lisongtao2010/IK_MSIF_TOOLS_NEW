@@ -672,6 +672,12 @@ namespace MSIFAITOOLS.Services
         /// <summary>
         /// 把一条部品基本信息绑到 <see cref="InsertSql"/> 的参数上。
         /// 参数名 = 列名（顺序见 <see cref="ColumnNames"/>），新增列时只改这里 + <see cref="ColumnNames"/>。
+        /// <para>
+        /// 「部材名」「部品名」写库前统一转成<b>半角片假名</b>
+        /// （<see cref="JapaneseTextConverter.ToHalfWidthKatakana"/>）：全角 <c>上レール</c> 存成 <c>上ﾚｰﾙ</c>、
+        /// <c>カバー</c> 存成 <c>ｶﾊﾞｰ</c>。画面 / 保存 Excel 读的是库里的值，所以显示的也是半角。
+        /// 平假名 / 汉字 / 英数 / 标点不转换。
+        /// </para>
         /// </summary>
         private static void BindInsertParameters(SQLiteCommand command, PartBasicInfo part, string drawingNo,
             string loginTime)
@@ -679,9 +685,10 @@ namespace MSIFAITOOLS.Services
             command.Parameters["@図番"].Value = drawingNo;
             command.Parameters["@页码"].Value = part.Page;
             command.Parameters["@番号"].Value = part.Number;
-            command.Parameters["@部材名"].Value = ResolveMemberName(part.MemberName);
+            command.Parameters["@部材名"].Value =
+                JapaneseTextConverter.ToHalfWidthKatakana(ResolveMemberName(part.MemberName));
             command.Parameters["@部材名AI推荐"].Value = part.MemberNameAiSuggestion ?? string.Empty;
-            command.Parameters["@部品名"].Value = part.PartName;
+            command.Parameters["@部品名"].Value = JapaneseTextConverter.ToHalfWidthKatakana(part.PartName);
             command.Parameters["@区分"].Value = part.FrameKind;
             command.Parameters["@数量"].Value = part.Quantity;
             command.Parameters["@切断寸法"].Value = part.CutSize;
@@ -748,6 +755,7 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 登录一批部品基本信息（同一 図番 + 页码 + 番号 覆盖旧值），返回实际写入条数。
+        /// 「部材名」「部品名」写库前会转成半角片假名（见 <see cref="BindInsertParameters"/>）。
         /// </summary>
         /// <param name="drawingNo">図番（PDF 文件名去扩展名）。</param>
         /// <param name="parts">要写入的部品基本信息。</param>
@@ -990,10 +998,15 @@ namespace MSIFAITOOLS.Services
         /// 部品コード 在库里可能已被第 5 步正规化成 <c>MEA□429</c> 这种写法，AI 给的是 Excel 原文
         /// （<c>MEACC429</c>），所以条件里 部品コード 与 部品名 用 OR 同时匹配，任一命中即改。
         /// </para>
+        /// <para>
+        /// 库里的「部品名」登录时已转成<b>半角片假名</b>（见 <see cref="BindInsertParameters"/>），
+        /// 而 AI 给的是 Excel 原文（多为全角），所以这里的 <paramref name="partName"/> 也先按
+        /// <see cref="JapaneseTextConverter.ToHalfWidthKatakana"/> 转换一次再比较，免得对不上。
+        /// </para>
         /// </summary>
         /// <param name="sourceFilePath">行的「来源表格文件」值（该図番的 特注品.csv 完整路径）。</param>
         /// <param name="partCode">部品コード（Excel 原文，可为空）。</param>
-        /// <param name="partName">部品名（可为空）。</param>
+        /// <param name="partName">部品名（可为空；全角片假名会转成半角再比较）。</param>
         /// <param name="quantity">写进去的数量（空 / 空白时什么都不做）。</param>
         /// <returns>实际更新的行数。</returns>
         public int UpdateQuantityByPart(string sourceFilePath, string partCode, string partName, string quantity)
@@ -1004,7 +1017,9 @@ namespace MSIFAITOOLS.Services
             }
 
             string code = string.IsNullOrWhiteSpace(partCode) ? string.Empty : partCode.Trim();
-            string name = string.IsNullOrWhiteSpace(partName) ? string.Empty : partName.Trim();
+            string name = string.IsNullOrWhiteSpace(partName)
+                ? string.Empty
+                : JapaneseTextConverter.ToHalfWidthKatakana(partName.Trim());
 
             if (code.Length == 0 && name.Length == 0)
             {
@@ -1164,8 +1179,8 @@ namespace MSIFAITOOLS.Services
                             ReadText(reader, "切断寸法"),
                             ReadText(reader, "部品コード"));
 
-                        // 部材名：库里已经是置换后的值（置换在取得时做一次），这里原样读入 ——
-                        // 走 MemberName 的 setter 会再置换一次，链式规则（A→B、B→C）会被换两次。
+                        // 部材名：库里已经是置换后的值（置换只在分析自动取得时做一次；画面保存不置换），
+                        // 这里原样读入 —— 走 MemberName 的 setter 会再置换一次，链式规则（A→B、B→C）会被换两次。
                         part.SetMemberNameFromStore(ReadText(reader, "部材名"));
                         part.MemberNameAiSuggestion = ReadText(reader, MemberNameAiColumnName);
                         part.HeightMin = ReadText(reader, "H下限");

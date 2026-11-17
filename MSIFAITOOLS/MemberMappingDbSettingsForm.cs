@@ -65,8 +65,11 @@ namespace MSIFAITOOLS
 
             InitializeComponent();
 
+            // 按钮 / 标签 / 列头等文字的中日切换（见 Services\UiLocalization.cs）
+            UiLocalization.Attach(this);
+
             ApplyConnectionAppearance();
-            lblSettingsPath.Text = "保存位置：" + MemberMappingDbSettingsStore.SettingsFilePath;
+            UiLocalization.SetText(lblSettingsPath, "保存位置：" + MemberMappingDbSettingsStore.SettingsFilePath);
             LoadCurrentSettings();
         }
 
@@ -85,16 +88,18 @@ namespace MSIFAITOOLS
         {
             if (IsJp2)
             {
-                Text = "SQL Server 接続設定 ② · MSIF（部材不材 mapping）";
-                lblTitle.Text = "② MSIF · 数据库连接设置";
-                lblHint.Text = "部品基本信息【保存】时写 DL_BuhinBuzaiMapping（部材不材 mapping）。" +
-                    "保存后下次保存部品信息时生效。";
+                UiLocalization.SetText(this, "SQL Server 接続設定 ② · MSIF（部材不材 mapping）");
+                UiLocalization.SetText(lblTitle, "② MSIF · 数据库连接设置");
+                UiLocalization.SetText(lblHint,
+                    "部品基本信息【保存】时写 DL_BuhinBuzaiMapping（部材不材 mapping）。" +
+                    "保存后下次保存部品信息时生效。");
                 return;
             }
 
-            Text = "SQL Server 接続設定 ① · genpin（部材名置换表）";
-            lblTitle.Text = "① genpin · 数据库连接设置";
-            lblHint.Text = "部材名置换表 T_M_MergeName / CMD 分析第 6 步 T_M_PartsMaster 用它。保存后立即生效。";
+            UiLocalization.SetText(this, "SQL Server 接続設定 ① · genpin（部材名置换表）");
+            UiLocalization.SetText(lblTitle, "① genpin · 数据库连接设置");
+            UiLocalization.SetText(lblHint,
+                "部材名置换表 T_M_MergeName / CMD 分析第 6 步 T_M_PartsMaster 用它。保存后立即生效。");
         }
 
         /// <summary>用当前生效的配置（环境变量 → 用户配置 → App.config → 默认值）填充控件。</summary>
@@ -192,8 +197,15 @@ namespace MSIFAITOOLS
             }
 
             ShowStatus(message, success ? Color.FromArgb(46, 125, 50) : FailedColor);
-            MessageBox.Show(this, message, success ? "连接测试" : "连接测试（失败）",
+            ShowMessage(message, success ? "连接测试" : "连接测试（失败）",
                 MessageBoxButtons.OK, success ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+
+        /// <summary>统一弹窗：标题 / 正文都按当前语言翻译（正文里的动态部分由对照表的模板匹配处理）。</summary>
+        private DialogResult ShowMessage(string message, string caption,
+            MessageBoxButtons buttons, MessageBoxIcon icon)
+        {
+            return MessageBox.Show(this, UiText.Translate(message), UiText.T(caption), buttons, icon);
         }
 
         /// <summary>
@@ -233,12 +245,12 @@ namespace MSIFAITOOLS
             if (!saved)
             {
                 ShowStatus("保存失败：" + saveError, FailedColor);
-                MessageBox.Show(this, "保存失败：" + saveError, "连接设置",
+                ShowMessage("保存失败：" + saveError, "连接设置",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
-            // connJP1 = 部材名置换表：让内存里的置换表立刻按新连接重读（分析 / 保存时马上用新规则）。
+            // connJP1 = 部材名置换表：让内存里的置换表立刻按新连接重读（分析时马上用新规则）。
             // connJP2 只在保存部品基本信息时用到（那时按 ResolveJp2() 现取），这里不需要预读。
             if (!IsJp2)
             {
@@ -277,7 +289,7 @@ namespace MSIFAITOOLS
             btnTest.Enabled = !busy;
             btnSave.Enabled = !busy;
             btnCancel.Enabled = !busy;
-            btnTest.Text = busy ? "连接中..." : "测试连接";
+            UiLocalization.SetText(btnTest, busy ? "连接中..." : "测试连接");
 
             if (!string.IsNullOrEmpty(status))
             {
@@ -289,7 +301,7 @@ namespace MSIFAITOOLS
         private void ShowStatus(string message, Color color)
         {
             lblStatus.ForeColor = color;
-            lblStatus.Text = message;
+            UiLocalization.SetText(lblStatus, message);
         }
 
         /// <summary>连接进行中不允许关闭窗口（避免回调访问已释放的控件）。</summary>

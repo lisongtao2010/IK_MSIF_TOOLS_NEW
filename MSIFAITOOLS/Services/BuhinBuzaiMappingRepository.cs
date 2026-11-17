@@ -127,6 +127,16 @@ namespace MSIFAITOOLS.Services
             UpdatedAtColumnName + "]) VALUES " +
             "(@BuhinName, @BuzaiName, NULLIF(@BuhinCd, N''), NULL, @UpdatedAt);";
 
+        /// <summary>
+        /// 整表读出（「选择部材名」窗口的推荐项用，<see cref="BuhinBuzaiMappingCatalog"/> 在
+        /// 画面打开 / 【保存】成功后调用）。只取三个名字列，
+        /// 按 <c>BuhinCd</c> → <c>BuhinName</c> → <c>BuzaiName</c> 排序（同一个部品CD 的部材名排在一起）。
+        /// </summary>
+        private const string SelectSql =
+            "SELECT [" + BuhinNameColumnName + "], [" + BuzaiNameColumnName + "], [" + BuhinCdColumnName +
+            "] FROM " + QualifiedTableName + " ORDER BY [" + BuhinCdColumnName + "], [" +
+            BuhinNameColumnName + "], [" + BuzaiNameColumnName + "];";
+
         private readonly SqlConnection _connection;
 
         private readonly int _commandTimeoutSeconds;
@@ -301,6 +311,61 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
+        /// 用当前生效的连接信息描述目标（日志 / 画面提示用），
+        /// 例：<c>SQL Server 10.103.126.209,1433 / DB MSIF / 表 DL_BuhinBuzaiMapping</c>。
+        /// </summary>
+        public static string DescribeTarget()
+        {
+            return ResolveTargetDescription(null);
+        }
+
+        /// <summary>用指定连接信息描述目标（<paramref name="settings"/> 为 <c>null</c> 时按 <see cref="MemberMappingDbSettingsStore.ResolveJp2"/>）。</summary>
+        /// <param name="settings">连接信息（可为 <c>null</c>）。</param>
+        public static string ResolveTargetDescription(MemberMappingDbSettings settings)
+        {
+            MemberMappingDbSettings resolved = settings ?? MemberMappingDbSettingsStore.ResolveJp2();
+
+            return resolved.DescribeTarget() + " / 表 " + TableName;
+        }
+
+        /// <summary>
+        /// 读出整张表（只读；「选择部材名」窗口的推荐项由 <see cref="BuhinBuzaiMappingCatalog"/> 缓存一份）。
+        /// <para>
+        /// 部品名 / 部材名 为空的行跳过（主键的一部分，写入时也不会出现）。
+        /// 同一个「部品CD」可能对应多个部材名、同一个「部品名」也可能对应多个部材名，全部原样返回。
+        /// </para>
+        /// 连不上 / 没有权限 / 表不存在时<b>抛异常</b>（调用方转成提示文字）。
+        /// </summary>
+        /// <returns>读到的行（按 <c>BuhinCd</c> → <c>BuhinName</c> → <c>BuzaiName</c> 排序）。</returns>
+        public List<BuhinBuzaiMappingEntry> Query()
+        {
+            List<BuhinBuzaiMappingEntry> entries = new List<BuhinBuzaiMappingEntry>();
+
+            using (SqlCommand command = new SqlCommand(SelectSql, _connection))
+            {
+                command.CommandTimeout = _commandTimeoutSeconds;
+
+                using (SqlDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string buhinName = GetText(reader, 0);
+                        string buzaiName = GetText(reader, 1);
+
+                        if (buhinName.Length == 0 || buzaiName.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        entries.Add(new BuhinBuzaiMappingEntry(buhinName, buzaiName, GetText(reader, 2)));
+                    }
+                }
+            }
+
+            return entries;
+        }
+
+        /// <summary>
         /// 部品基本信息画面【保存】时调用：把画面上这一批行的「部品名 / 部材名 / 部品コード」
         /// 登录 / 更新到部材不材 mapping 表（<see cref="TableName"/>）。
         /// <para>
@@ -318,10 +383,28 @@ namespace MSIFAITOOLS.Services
         /// <returns>给人看的提示；没有可登录的行时返回空串。</returns>
         public static string Register(IEnumerable<PartBasicInfo> parts)
         {
+            bool succeeded;
+
+            return Register(parts, out succeeded);
+        }
+
+        /// <summary>
+        /// 同上；<paramref name="succeeded"/> 告诉调用方这张表是否<b>真的更新成功</b>
+        /// （画面用它决定要不要重新读一次内存里的 <see cref="BuhinBuzaiMappingCatalog"/>）。
+        /// </summary>
+        /// <param name="parts">部品基本信息的行（可为 <c>null</c>）。</param>
+        /// <param name="succeeded">true = 已登录 / 更新（没有可登录的行也算成功）；false = 连接信息 / 写库失败。</param>
+        /// <returns>给人看的提示；没有可登录的行时返回空串。</returns>
+        public static string Register(IEnumerable<PartBasicInfo> parts, out bool succeeded)
+        {
+            succeeded = false;
+
             List<BuhinBuzaiMappingEntry> entries = CollectEntries(parts);
 
             if (entries.Count == 0)
             {
+                succeeded = true;
+
                 return string.Empty;
             }
 
@@ -361,6 +444,8 @@ namespace MSIFAITOOLS.Services
             {
                 return string.Format("部材不材 mapping 登录失败（{0}）：{1}", settings.DescribeTarget(), ex.Message);
             }
+
+            succeeded = true;
 
             return string.Format("部材不材 mapping（{0}）：新增 {1} 条 / 更新 {2} 条（本次确认 {3} 条）",
                 settings.DescribeTarget(), inserted, updated, entries.Count);
@@ -478,6 +563,12 @@ namespace MSIFAITOOLS.Services
             command.Parameters["@BuzaiName"].Value = buzaiName;
             command.Parameters["@BuhinCd"].Value = buhinCd;
             command.Parameters["@UpdatedAt"].Value = updatedAt;
+        }
+
+        /// <summary>取一列的文本（<c>null</c> / <c>DBNull</c> → 空串，去首尾空白）。</summary>
+        private static string GetText(SqlDataReader reader, int index)
+        {
+            return reader.IsDBNull(index) ? string.Empty : (reader.GetValue(index) ?? string.Empty).ToString().Trim();
         }
 
         /// <summary>去空白 + 按列长截断（列是 <c>nvarchar(100)</c> / <c>nvarchar(255)</c>，超长会整条写失败）。</summary>

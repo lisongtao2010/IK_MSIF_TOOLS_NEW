@@ -21,7 +21,7 @@ namespace MSIFAITOOLS.Services
     /// 之后置换不再连数据库；主画面（<see cref="PartBasicInfoForm"/>）打开时再调一次
     /// <see cref="EnsurePreloaded"/>（启动时没读成功的话用短超时补读一次）；
     /// 【部材名面板】的【重新载入】/【连接设置】保存后调 <see cref="Reload"/> 刷新。
-    /// <b>画面里查推荐项只走内存</b>（<see cref="GetTargets"/>），不会因为连不上库把界面卡住。
+    /// <b>画面里查推荐项只走内存</b>（<see cref="GetDisplayNames"/>），不会因为连不上库把界面卡住。
     /// </para>
     ///
     /// <para>
@@ -46,15 +46,34 @@ namespace MSIFAITOOLS.Services
         /// <summary>位置前缀（与按位置拆条时加的前缀一致：左右排列 → 右 / 左，上下排列 → 上 / 下）。</summary>
         private static readonly char[] PositionPrefixes = new char[] { '右', '左', '上', '下' };
 
-        /// <summary>当前生效的置换表（键 = 置换前，Ordinal；不可变，整表替换）。</summary>
+        /// <summary>
+        /// 当前生效的置换表（键 = 置换前经 <see cref="NormalizeLookupKey"/> 规整后的值，Ordinal；不可变，整表替换）。
+        /// </summary>
         private static Dictionary<string, string> _map = new Dictionary<string, string>(StringComparer.Ordinal);
 
         /// <summary>
         /// 置换前 → 全部「置换后」（1:N，去重、按 <c>GenpinName</c> 排序；不可变，整表替换）。
-        /// 「选择部材名」窗口的推荐项就查这张表（<see cref="GetTargets"/>）—— 只在内存里找，不连数据库。
+        /// 键与 <see cref="_map"/> 一样是规整后的值。<see cref="GetDisplayNames"/> 用它找出
+        /// 「这个写法属于哪个部材（原部材名）」，再从这个部材的全部表示名里取候补。
         /// </summary>
         private static Dictionary<string, List<string>> _targets =
             new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// 置换后 → 全部「置换前」（1:N；键 = 规整后的 <c>GenpinName</c>，值 = 表里的 <c>MsifDevName</c> 原文，
+        /// 去重、按文字排序；不可变，整表替换）。
+        /// 「选择部材名」窗口的<b>表示部材名</b>候补就是从这份里取的
+        /// （同一个部材在图面上有 <c>上ﾚｰﾙ</c> / <c>上ｱﾙﾐ</c> / <c>ｱﾙﾐ上</c> 等多种叫法）。
+        /// </summary>
+        private static Dictionary<string, List<string>> _sources =
+            new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// 置换前（规整后）→ 表里那一行的原文（<c>MsifDevName</c> 的写法；不可变，整表替换）。
+        /// 例：<c>上レール</c> 查表时返回表里的 <c>上ﾚｰﾙ</c>。
+        /// </summary>
+        private static Dictionary<string, string> _sourceText =
+            new Dictionary<string, string>(StringComparer.Ordinal);
 
         /// <summary>是否已经<b>成功</b>读过数据库（读进内存的是最新内容）。</summary>
         private static bool _loaded;
@@ -172,6 +191,7 @@ namespace MSIFAITOOLS.Services
         /// <summary>
         /// 按置换表替换一个「部材名」（可含 <c>|</c>，如 <c>鴨居|上レール</c>）；
         /// 置换表为空 / 没有命中 / 数据库打不开时原样返回。
+        /// 查表时不区分全角 / 半角片假名（见 <see cref="NormalizeLookupKey"/>）。
         /// </summary>
         /// <param name="memberName">原来的部材名（可为 <c>null</c> / 空）。</param>
         public static string Replace(string memberName)
@@ -214,34 +234,6 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 对一串部材名逐个走 <see cref="Replace"/>（例：【部材名面板】的候选项 ——
-        /// 从原值拆出来的项、部材部品マスタ 的部材名 一览）。
-        /// 返回<b>新</b>列表（去空白、去空、去重，保持原顺序）；<paramref name="memberNames"/> 为 <c>null</c> 时返回空列表。
-        /// </summary>
-        /// <param name="memberNames">原来的部材名（可含 <c>null</c> / 空项）。</param>
-        public static List<string> ReplaceMany(IEnumerable<string> memberNames)
-        {
-            List<string> replaced = new List<string>();
-
-            if (memberNames == null)
-            {
-                return replaced;
-            }
-
-            foreach (string memberName in memberNames)
-            {
-                string text = Replace(memberName).Trim();
-
-                if (text.Length > 0 && !replaced.Contains(text))
-                {
-                    replaced.Add(text);
-                }
-            }
-
-            return replaced;
-        }
-
-        /// <summary>
         /// 读 SQL Server 表 <c>T_M_MergeName</c>（只取 <c>DeleteFlg = 0</c> 的行）。
         /// 失败只记 <see cref="LastError"/>，置换表置空 → 不影响原值。
         /// </summary>
@@ -258,6 +250,9 @@ namespace MSIFAITOOLS.Services
             Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.Ordinal);
             Dictionary<string, List<string>> targets =
                 new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            Dictionary<string, List<string>> sources =
+                new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            Dictionary<string, string> sourceText = new Dictionary<string, string>(StringComparer.Ordinal);
             string target = MemberNameReplacementRepository.ResolveTargetDescription(effective);
             string error = string.Empty;
 
@@ -274,24 +269,49 @@ namespace MSIFAITOOLS.Services
                             continue;
                         }
 
-                        if (!map.ContainsKey(row.Source))
+                        string key = NormalizeLookupKey(row.Source);
+
+                        if (!map.ContainsKey(key))
                         {
-                            map[row.Source] = row.Target;
+                            map[key] = row.Target;
                         }
 
                         // 同一个置换前可能对应多个置换后：全部留在内存里（不连库也能列出来），
                         // 顺序与原来按 SQL「ORDER BY GenpinName」查出来的一致 → 统一按 GenpinName 排序。
                         List<string> found;
 
-                        if (!targets.TryGetValue(row.Source, out found))
+                        if (!targets.TryGetValue(key, out found))
                         {
                             found = new List<string>();
-                            targets.Add(row.Source, found);
+                            targets.Add(key, found);
                         }
 
                         if (!found.Contains(row.Target))
                         {
                             found.Add(row.Target);
+                        }
+
+                        // 反向也留一份：同一个置换后（GenpinName）可能有多个置换前
+                        // （MsifDevName = 图面上的不同叫法），「表示部材名」候补就从这里取
+                        // （见 GetDisplayNames）。
+                        string targetKey = NormalizeLookupKey(row.Target);
+                        List<string> variants;
+
+                        if (!sources.TryGetValue(targetKey, out variants))
+                        {
+                            variants = new List<string>();
+                            sources.Add(targetKey, variants);
+                        }
+
+                        if (!variants.Contains(row.Source))
+                        {
+                            variants.Add(row.Source);
+                        }
+
+                        // 表里那一行的写法（半角 / 全角、送假名 等以表为准）
+                        if (!sourceText.ContainsKey(key))
+                        {
+                            sourceText.Add(key, row.Source.Trim());
                         }
                     }
                 }
@@ -306,10 +326,17 @@ namespace MSIFAITOOLS.Services
                 found.Sort(StringComparer.Ordinal);
             }
 
+            foreach (List<string> found in sources.Values)
+            {
+                found.Sort(StringComparer.Ordinal);
+            }
+
             _targetDescription = target;
             _lastError = error;
             _map = map;
             _targets = targets;
+            _sources = sources;
+            _sourceText = sourceText;
             _loaded = error.Length == 0;
 
             return _loaded;
@@ -330,32 +357,100 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 置换前（<c>MsifDevName</c>）对应的全部「置换后」（<c>GenpinName</c>；去重、已排序）——
-        /// 「选择部材名」窗口的推荐项。<b>只查内存，不连数据库</b>（没预读成功时返回空列表）。
+        /// 「选择部材名」窗口的<b>表示部材名</b>（<c>MsifDevName</c>）候补（<b>只查内存，不连数据库</b>）。
+        /// <para>
+        /// 拿这一行的「部品名」当图面上的叫法去查：
+        /// ① 表里有这个写法（不分全角 / 半角）时，先用表里那一行的原文（<c>上レール</c> → <c>上ﾚｰﾙ</c>）；
+        /// ② 再列出<b>同一个部材</b>（<c>GenpinName</c> = 原部材名）在图面上的其它叫法
+        ///    （<c>上ﾚｰﾙ</c> / <c>上ｱﾙﾐ</c> / <c>ｱﾙﾐ上</c> …）；
+        /// ③ 「部品名」本身就是原部材名（<c>GenpinName</c>）时，直接列这个部材的全部叫法。
+        /// </para>
+        /// 面板上就<b>照这些写法显示 / 写入</b>（不再换成 <c>GenpinName</c>）：保存时也原样登录，
+        /// 原部材名 只在 genpin 侧使用。没预读成功 / 没命中时返回空列表。
         /// </summary>
-        /// <param name="source">置换前（精确匹配；前后空白会被去掉）。</param>
-        /// <returns>找到的置换后（复制出来的新列表，调用方可以随便改）；没有时为空列表。</returns>
-        public static IList<string> GetTargets(string source)
+        /// <param name="term">
+        /// 要查的词（一般是同一行的「部品名」；按 <see cref="NormalizeLookupKey"/> 匹配：
+        /// 半角 / 全角片假名视为同一写法，前后空白会被去掉）。
+        /// </param>
+        /// <returns>表示部材名（复制出来的新列表，调用方可以随便改）；没有时为空列表。</returns>
+        public static IList<string> GetDisplayNames(string term)
         {
-            string value = (source ?? string.Empty).Trim();
+            List<string> names = new List<string>();
+            string value = (term ?? string.Empty).Trim();
 
             if (value.Length == 0)
             {
-                return new List<string>();
+                return names;
             }
 
-            List<string> found;
+            EnsureLoaded();
 
-            if (_targets.TryGetValue(value, out found))
+            Dictionary<string, List<string>> targets = _targets;
+            Dictionary<string, List<string>> sources = _sources;
+            Dictionary<string, string> sourceText = _sourceText;
+
+            if (sources.Count == 0)
             {
-                return new List<string>(found);
+                return names;
             }
 
-            return new List<string>();
+            string key = NormalizeLookupKey(value);
+            string display;
+
+            // ① 表里有这个写法：先把表里的原文放第 1 个（例：部品名「上レール」→「上ﾚｰﾙ」）
+            if (sourceText.TryGetValue(key, out display))
+            {
+                names.Add(display);
+            }
+
+            // ② 同一个部材（GenpinName）在图面上的其它叫法
+            List<string> targetNames;
+
+            if (targets.TryGetValue(key, out targetNames))
+            {
+                for (int index = 0; index < targetNames.Count; index++)
+                {
+                    AddDisplayNames(names, sources, targetNames[index]);
+                }
+            }
+
+            // ③ 部品名 本身就是原部材名（GenpinName）时：直接列这个部材的全部叫法
+            if (names.Count == 0)
+            {
+                AddDisplayNames(names, sources, value);
+            }
+
+            return names;
+        }
+
+        /// <summary>
+        /// 把一个「原部材名」（<c>GenpinName</c>）对应的全部表示名（<c>MsifDevName</c>）加进列表（去重）。
+        /// </summary>
+        /// <param name="names">要加进去的列表（保持顺序）。</param>
+        /// <param name="sources">反向索引（规整后的 <c>GenpinName</c> → <c>MsifDevName</c> 一览）。</param>
+        /// <param name="genpinName">原部材名（<c>GenpinName</c>）。</param>
+        private static void AddDisplayNames(List<string> names,
+            Dictionary<string, List<string>> sources, string genpinName)
+        {
+            List<string> variants;
+
+            if (!sources.TryGetValue(NormalizeLookupKey(genpinName), out variants))
+            {
+                return;
+            }
+
+            for (int index = 0; index < variants.Count; index++)
+            {
+                if (!names.Contains(variants[index]))
+                {
+                    names.Add(variants[index]);
+                }
+            }
         }
 
         /// <summary>
         /// 单段置换：整段命中 → 直接用；带位置前缀（右 / 左 / 上 / 下）时剥掉前缀再查，命中后加回前缀。
+        /// 查表键统一走 <see cref="NormalizeLookupKey"/>（半角 / 全角片假名视为同一种写法）。
         /// </summary>
         private static string ReplaceToken(Dictionary<string, string> map, string token)
         {
@@ -369,7 +464,7 @@ namespace MSIFAITOOLS.Services
 
             string replaced;
 
-            if (map.TryGetValue(value, out replaced))
+            if (map.TryGetValue(NormalizeLookupKey(value), out replaced))
             {
                 return replaced;
             }
@@ -378,13 +473,27 @@ namespace MSIFAITOOLS.Services
             {
                 string rest = value.Substring(1).Trim();
 
-                if (rest.Length > 0 && map.TryGetValue(rest, out replaced))
+                if (rest.Length > 0 && map.TryGetValue(NormalizeLookupKey(rest), out replaced))
                 {
                     return value[0] + replaced;
                 }
             }
 
             return value;
+        }
+
+        /// <summary>
+        /// 置换表查找用的键：NFKC（半角片假名 → 全角片假名）+ 去掉首尾空白。
+        /// <para>
+        /// 置换表（<c>T_M_MergeName</c>）里多为全角写法，而部品基本信息表里的「部材名 / 部品名」
+        /// 登录时已转成半角片假名（见 <see cref="JapaneseTextConverter.ToHalfWidthKatakana"/>）。
+        /// 键统一成同一种写法，两种宽度都能命中（否则形如 <c>上ﾚｰﾙ</c> 的部品名查不到置换项，
+        /// 「选择部材名」窗口的推荐项会消失）。
+        /// </para>
+        /// </summary>
+        private static string NormalizeLookupKey(string value)
+        {
+            return JapaneseTextConverter.NormalizeWidth(value ?? string.Empty).Trim();
         }
 
         /// <summary>是否是位置前缀（右 / 左 / 上 / 下）。</summary>

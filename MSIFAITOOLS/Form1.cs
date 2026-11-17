@@ -46,9 +46,6 @@ namespace MSIFAITOOLS
         /// <summary>部品基本信息窗口（非模态，选中分类列表行后复用同一个窗口）。</summary>
         private PartBasicInfoForm _partInfoForm;
 
-        /// <summary>部材名置换表维护窗口（非模态，重复点击【部材名置换表】复用同一个窗口）。</summary>
-        private MemberNameReplacementForm _memberNameMapForm;
-
         /// <summary>填充分类表格期间抑制「选中即预览」，避免批量刷新时弹出预览窗口。</summary>
         private bool _suppressAutoPreview;
 
@@ -256,32 +253,6 @@ namespace MSIFAITOOLS
                 AppendLog("选择目录：" + fbd.SelectedPath, Color.FromArgb(180, 180, 180));
                 AppendLog("目录内 PDF 数量：" + count + " 个", Color.FromArgb(180, 180, 180));
             }
-        }
-
-        /// <summary>
-        /// 【部材名置换表】：打开维护画面（非模态，重复点击复用同一个窗口）。
-        /// 保存后 <see cref="MemberNameReplacementCatalog"/> 立即刷新，
-        /// 下一次【CMD 分析】/ 保存就按新规则置换部材名（例：鴨居 → 上枠）。
-        /// </summary>
-        private void BtnMemberNameMap_Click(object sender, EventArgs e)
-        {
-            if (_memberNameMapForm == null || _memberNameMapForm.IsDisposed)
-            {
-                _memberNameMapForm = new MemberNameReplacementForm();
-                _memberNameMapForm.Owner = this;
-            }
-
-            if (!_memberNameMapForm.Visible)
-            {
-                _memberNameMapForm.Show();
-            }
-
-            if (_memberNameMapForm.WindowState == FormWindowState.Minimized)
-            {
-                _memberNameMapForm.WindowState = FormWindowState.Normal;
-            }
-
-            _memberNameMapForm.Activate();
         }
 
         /// <summary>
@@ -768,21 +739,18 @@ namespace MSIFAITOOLS
         /// </summary>
         private async void BtnStart_Click(object sender, EventArgs e)
         {
-            // 单独执行：询问框选「否」= 直接使用现有分解结果（方便接着单独跑 CMD / AI 分析）
-            await RunSplitAsync(true, false);
+            // 单独执行：「是否重新分解」选「否」= 读入现有的分解结果（寄存信息），方便接着单独跑 CMD / AI 分析
+            await RunSplitAsync(true);
         }
 
         /// <summary>
-        /// 【开始分解】的执行结果：让【一括执行】区分「失败」与「用户取消」。
-        /// 用户取消（询问框选「否」）时不弹「执行停止」警告框，也不继续后面的步骤。
+        /// 【开始分解】的执行结果：【一括执行】据此决定要不要跑后面的步骤。
+        /// 「是否重新分解」选「否」= 读取现有的分解结果并继续，仍算 <c>Success</c>。
         /// </summary>
         private enum SplitRunOutcome
         {
-            /// <summary>分解成功，或按用户选择复用了已有的分解结果。</summary>
+            /// <summary>分解成功，或按用户选择读入了现有的分解结果（寄存信息）。</summary>
             Success,
-
-            /// <summary>用户在「是否重新分解」的询问框选择了「否」，本次执行中止。</summary>
-            Cancelled,
 
             /// <summary>前置检查不通过 / 执行异常 / 分解失败。</summary>
             Failed
@@ -795,18 +763,19 @@ namespace MSIFAITOOLS
         /// <paramref name="showCompletionDialog"/> = <c>false</c>：中间步骤不弹「完成 / 失败」框（日志里照样有），
         /// 由一括执行最后统一提示，避免连跑三个按钮时要连点三次 OK。
         /// </para>
+        /// <para>
+        /// 已存在全部分解结果时会询问「是否重新分解」：
+        /// 「是」= 重新分解并覆盖现有结果；
+        /// 「否」= 不再分解，直接读取现有的分解结果（寄存信息）并继续 ——
+        /// 【一括执行】接着按顺序跑【CMD 分析】→【AI 分析】，单独点【开始分解】时只把结果还原到画面上。
+        /// </para>
         /// </summary>
         /// <param name="showCompletionDialog">是否弹出结束 / 失败对话框。</param>
-        /// <param name="cancelWhenDeclining">
-        /// 询问「是否重新分解」时选「否」的处理方式：
-        /// <c>true</c> = 中止本次执行（【一括执行】用：不重新分解，后续【CMD 分析】/【AI 分析】也不执行）；
-        /// <c>false</c> = 直接使用现有分解结果继续（单独点【开始分解】时用）。
-        /// </param>
         /// <returns>
-        /// 分解结果可用返回 <c>Success</c>；用户选择「否」且要求中止返回 <c>Cancelled</c>；
+        /// 分解结果（含读取现有的分解结果）可用返回 <c>Success</c>；
         /// 前置检查失败 / 执行异常 / 分解失败返回 <c>Failed</c>。
         /// </returns>
-        private async Task<SplitRunOutcome> RunSplitAsync(bool showCompletionDialog, bool cancelWhenDeclining)
+        private async Task<SplitRunOutcome> RunSplitAsync(bool showCompletionDialog)
         {
             if (_isRunning)
             {
@@ -850,30 +819,26 @@ namespace MSIFAITOOLS
             // 已存在全部分解结果时，先询问是否重新分解（开发调试时避免每次都重新解析 PDF）
             if (PdfSplitService.CountCompletedOutputs(folder, pdfFiles, null) == pdfFiles.Length)
             {
-                // 一括执行时「否」= 停在这里（后面的 CMD 分析 / AI 分析也不执行）；
-                // 单独点【开始分解】时「否」= 直接使用现有结果，方便接着单独跑后面的步骤。
+                // 「否」= 不重新分解，直接读取现有的分解结果（寄存信息）继续：
+                // 一括执行接着按顺序跑【CMD 分析】→【AI 分析】；单独点【开始分解】时只把结果还原到画面。
                 DialogResult answer = ShowMessage(
-                    cancelWhenDeclining
+                    showCompletionDialog
                         ? UiText.F("该文件夹中已存在全部分解结果（{0} 个 PDF 的 xy / table / plu txt 文件齐全）。\n\n" +
                                    "是否重新分解？\n\n" +
                                    "「是」= 重新分解并覆盖现有结果\n" +
-                                   "「否」= 中止本次一括执行（不重新分解，后续【CMD 分析】/【AI 分析】也不执行）", pdfFiles.Length)
+                                   "「否」= 直接读取现有分解结果（可接着点击【AI 分析】/【CMD 分析】）", pdfFiles.Length)
                         : UiText.F("该文件夹中已存在全部分解结果（{0} 个 PDF 的 xy / table / plu txt 文件齐全）。\n\n" +
                                    "是否重新分解？\n\n" +
                                    "「是」= 重新分解并覆盖现有结果\n" +
-                                   "「否」= 直接使用现有结果（可接着点击【AI 分析】/【CMD 分析】）", pdfFiles.Length),
+                                   "「否」= 不重新分解，读取现有的分解结果（寄存信息），并按顺序继续【CMD 分析】→【AI 分析】",
+                            pdfFiles.Length),
                     "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2);
 
                 if (answer != DialogResult.Yes)
                 {
-                    if (cancelWhenDeclining)
-                    {
-                        // 只回「被取消」，日志 / 状态栏 / 进度由【一括执行】统一记录（避免重复输出两行）
-                        return SplitRunOutcome.Cancelled;
-                    }
-
-                    UseExistingSplitResult(folder, pdfFiles);
+                    // 读取「寄存信息」= 已经在输出目录里的分解结果 + 分类清单，然后继续后面的步骤
+                    UseExistingSplitResult(folder, pdfFiles, !showCompletionDialog);
                     return SplitRunOutcome.Success;
                 }
             }
@@ -1026,12 +991,17 @@ namespace MSIFAITOOLS
 
 
         /// <summary>
-        /// 复用已有的分解结果（用户对「是否重新分解」选择「否」时调用）：
-        /// 不重新分解，直接还原输出目录与分类列表，使用户可以接着执行【AI 分析】/【CMD 分析】。
+        /// 读取已有的分解结果（寄存信息，用户对「是否重新分解」选择「否」时调用）：
+        /// 不重新分解，直接还原输出目录与分类列表；一括执行会接着跑后面的步骤，
+        /// 单独点【开始分解】时用户也可以自己接着执行【AI 分析】/【CMD 分析】。
         /// </summary>
         /// <param name="folder">PDF 所在文件夹。</param>
         /// <param name="pdfFiles">该文件夹中的 PDF 文件名（含扩展名）。</param>
-        private void UseExistingSplitResult(string folder, string[] pdfFiles)
+        /// <param name="batchRun">
+        /// 是否为一括执行：<c>true</c> = 读完后接着自动执行【CMD 分析】→【AI 分析】；
+        /// <c>false</c> = 只把结果还原到画面（单独点【开始分解】时用）。
+        /// </param>
+        private void UseExistingSplitResult(string folder, string[] pdfFiles, bool batchRun)
         {
             string outputRoot = PdfSplitService.GetOutputRoot(folder);
             string classifyDir = PdfSplitService.GetClassifyDirectory(outputRoot);
@@ -1072,10 +1042,16 @@ namespace MSIFAITOOLS
                     Color.FromArgb(255, 200, 120));
             }
 
-            AppendLog("现有结果已就绪，可直接点击【AI 分析】或【CMD 分析】。", Color.FromArgb(150, 220, 150));
+            AppendLog(batchRun
+                    ? "现有的分解结果（寄存信息）已读取，一括执行继续：【CMD 分析】→【AI 分析】。"
+                    : "现有结果已就绪，可直接点击【AI 分析】或【CMD 分析】。",
+                Color.FromArgb(150, 220, 150));
 
-            SetStatus("已使用现有分解结果（" + pdfFiles.Length + " 个 PDF）", Color.FromArgb(46, 125, 50));
-            SetProgressText("使用现有分解结果");
+            SetStatus(batchRun
+                    ? "已读取现有分解结果（" + pdfFiles.Length + " 个 PDF），继续 CMD 分析"
+                    : "已使用现有分解结果（" + pdfFiles.Length + " 个 PDF）",
+                Color.FromArgb(46, 125, 50));
+            SetProgressText(batchRun ? "读取现有分解结果" : "使用现有分解结果");
             progressBar.Style = ProgressBarStyle.Continuous;
             progressBar.Value = 0;
         }
@@ -1544,8 +1520,9 @@ namespace MSIFAITOOLS
         /// </para>
         /// <para>
         /// 任何一步失败就停下，不再跑后面的步骤 —— 后面的步骤都依赖前一步的产物（分解结果 → CMD 入库 → AI 判定）。
-        /// 分解时「是否重新分解」的询问框仍然会弹（那是决定，不是提示）：选「否」= 中止整次一括执行，
-        /// 后面的【CMD 分析】/【AI 分析】都不执行（只在日志 / 状态栏留下「已取消」，不弹警告框）。
+        /// 分解时「是否重新分解」的询问框仍然会弹（那是决定，不是提示）：
+        /// 「是」= 重新分解并覆盖现有结果；
+        /// 「否」= 不重新分解，读取现有的分解结果（寄存信息）后继续跑【CMD 分析】→【AI 分析】。
         /// </para>
         /// </summary>
         private async void BtnRunAll_Click(object sender, EventArgs e)
@@ -1578,18 +1555,8 @@ namespace MSIFAITOOLS
                 Color.FromArgb(200, 170, 255));
             SetStatus("一括执行中：开始分解...", Color.FromArgb(230, 126, 34));
 
-            // ① 开始分解（不弹完成框；「是否重新分解」的询问框照常，选「否」= 中止整次一括执行）
-            SplitRunOutcome splitOutcome = await RunSplitAsync(false, true);
-
-            if (splitOutcome == SplitRunOutcome.Cancelled)
-            {
-                // 用户主动取消：不再跑后面的步骤，也不再弹「执行停止」的警告框（只留日志 / 状态栏）
-                AppendLog("一括执行已取消（询问框选择了「否」）：【CMD 分析】/【AI 分析】未执行。",
-                    Color.FromArgb(255, 200, 120));
-                SetStatus("一括执行已取消（后续步骤未执行）", Color.FromArgb(90, 90, 90));
-                SetProgressText("一括执行已取消");
-                return;
-            }
+            // ① 开始分解（不弹完成框；「是否重新分解」的询问框照常，选「否」= 读取现有的分解结果后继续）
+            SplitRunOutcome splitOutcome = await RunSplitAsync(false);
 
             if (splitOutcome != SplitRunOutcome.Success)
             {

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
+using MSIFAITOOLS.Services;
 
 namespace MSIFAITOOLS
 {
@@ -140,7 +141,7 @@ namespace MSIFAITOOLS
             ShowIcon = false;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            Text = "部品名 候補";
+            Text = UiText.T("部品名 候補");
 
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                 ControlStyles.OptimizedDoubleBuffer, true);
@@ -375,7 +376,7 @@ namespace MSIFAITOOLS
             }
 
             TextRenderer.DrawText(graphics,
-                "数字键 1-9 / 0 选择、Esc 关闭（不会离开单元格）", _hintFont,
+                UiText.T("数字键 1-9 / 0 选择、Esc 关闭（不会离开单元格）"), _hintFont,
                 new Rectangle(PaddingX, Height - FooterHeight - 1, Width - PaddingX * 2, FooterHeight),
                 HintColor,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.Left |

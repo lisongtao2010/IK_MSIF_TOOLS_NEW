@@ -4,8 +4,11 @@
 > 源文件：`PartBasicInfoForm.cs`、`PartBasicInfoForm.Designer.cs`、
 > `PartBasicInfoForm.PartNameCandidates.cs`、`PartNameCandidatePopup.cs`、
 > `MemberNamePickerForm.cs`、`MemberNamePickerForm.Style.cs`、`MemberNamePickerForm.Designer.cs`
-> 相关：`WindowLayoutHelper.cs`（窗口摆放）、`PdfPreviewForm.cs`（PDF 预览）
-> 更新日期：2026-11-16
+> 相关：`WindowLayoutHelper.cs`（窗口摆放）、`PdfPreviewForm.cs`（PDF 预览）、
+> `Services\BuhinBuzaiMappingCatalog.cs`（部材不材 mapping 的内存缓存：部品CD / 部品名 → 部材名）、
+> `Services\MemberNameReplacementCatalog.cs`（置换表的内存缓存：表示部材名 / 置换）、
+> `Services\JapaneseTextConverter.cs`（登录时的全角片假名 → 半角片假名 转换）
+> 更新日期：2026-11-17
 
 ---
 
@@ -73,22 +76,35 @@
   编辑结束以后再单击「部材名」单元格，面板重新显示（`ShowMemberNamePicker` 里 `!Visible` → `Show(this)`）。
   其它列（部品名 / 数量 / 备注…）进入编辑时面板不受影响。
 - **数据只在内存里查**：主画面打开时（`PartBasicInfoForm.OnLoad` → `PreloadMemberNamePickerData`）一次性读好
-  ① 置换表（SQL Server `genpin.dbo.T_M_MergeName`，`MemberNameReplacementCatalog`；程序启动时已预读，没读成功时这里补读一次）和
-  ② 部材部品マスタ（SQLite「部材部品」表，`MemberPartCatalog`）。之后点「部材名」只是内存查找，**不再连数据库 / 读盘**，窗口瞬间打开。
-- 候补顺序：① 这一行「部品名」在置换表里对应的置换后（`MemberNameReplacementCatalog.GetTargets`）→
-  ② 这一格现在的值（拆开 `|`，方便改回原值）→ ③ 部材部品マスタ 的部材名 一览。
-- 置换表没读进内存时（服务器连不上）只是没有第 ① 项，状态行提示「置换表连不上，没有推荐项」，其余候补照常可用。
+  ① 部材不材 mapping（SQL Server `MSIF.dbo.DL_BuhinBuzaiMapping`，`BuhinBuzaiMappingCatalog`：部品CD / 部品名 → 部材名）、
+  ② 置换表（SQL Server `genpin.dbo.T_M_MergeName`，`MemberNameReplacementCatalog`；程序启动时已预读，没读成功时这里补读一次）和
+  ③ 部材部品マスタ（SQLite「部材部品」表，`MemberPartCatalog`）。之后点「部材名」只是内存查找，**不再连数据库 / 读盘**，窗口瞬间打开。
+- **候补顺序**（数字越小越靠前；打开窗口时按 `1` 就是第 ① 项）：
+
+  | 优先度 | 来源 | 说明 |
+  |--------|------|------|
+  | ① | 部材不材 mapping 的 `BuzaiName`，**部品CD（`BuhinCd`）与该行「部品コード」一致** | 这条部品实际用过的部材名，最可信（`GetBuzaiNamesByBuhinCd`） |
+  | ② | 同一张表的 `BuzaiName`，**部品名（`BuhinName`）与该行「部品名」一致** | 部品CD 还没登记的部品的退路（`GetBuzaiNamesByBuhinName`） |
+  | ③ | 置换表的**表示部材名 `MsifDevName`**（该行「部品名」在表里的写法 + 同一个部材的其它叫法） | 面板显示 / 写进单元格的就是这个写法，**不会**换成原部材名 `GenpinName`（`GetDisplayNames`） |
+  | ④ | 这一格现在的值（拆开 `\|`，方便改回原值） | |
+  | ⑤ | 部材部品マスタ 的部材名 一览 | |
+
+  例：某行「部品コード = `MDQ703`、部品名 = `ジョイント金具`」时，候选是
+  `Ｖレール / 下枠 / 上枠`（①，表里这个部品CD 用过的 3 个部材名）→ `ｼﾞｮｲﾝﾄ金具`（③）→ 这一格现在的值 → 部材部品マスタ 一览。
+- 部材不材 mapping / 置换表没读进内存时（服务器连不上）只是少那几段推荐项，
+  状态行提示「部材不材 mapping 连不上，没有以前用过的部材名」/「置换表连不上，没有表示部材名」，其余候补照常可用。
 - 顶部输入框打字过滤（`↑` / `↓` 换项），列表里没有的名字打在输入框里按 `Enter` 直接写入；
   输入框为空时按 `Enter` 会先确认是否清空这一格。想打数字当关键字时按住 `Ctrl`。
 - **每页 10 项 + 分页**：数字键只有 `1`～`9` 和 `0`，所以一览一次只显示 10 项，编号每页都从 `1` 重新开始
   （第 10 项是 `0`），第 11 项以后翻页。翻页方式：`PageUp` / `PageDown`、`↑` 在页首再按一次（= 上一页最后一项）、
   `↓` 在页尾再按一次（= 下一页第 1 项）、鼠标滚轮、底部 `‹ 1/3 ›` 按钮（到第一页 / 最后一页时按钮变灰）。
-  过滤条件一变就回到第 1 页，所以按 `1` 永远是当前页第 1 项（打开窗口时就是置换表的推荐项）。
+  过滤条件一变就回到第 1 页，所以按 `1` 永远是当前页第 1 项（打开窗口时就是这一行的推荐项，见上面的候补顺序）。
 - **写完自动跳到下一行**：单击候选项 / 按编号键 / `Enter` 写入之后，表格的选择自动移到**下一行的「部材名」**，
-  窗口的写入目标和「1 号推荐项」也跟着换成那一行（按那一行的「部品名」从置换表取），
+  窗口的写入目标和「1 号推荐项」也跟着换成那一行（按那一行的「部品コード / 部品名」从内存里取），
   所以可以一路按 `1` 往下填（`MoveToNextRowMemberNameCell`）。到最后一行为止：不循环、也不自动追加行。
   值没变（点了和这一格一样的内容）时不会产生「有未保存的修改」，但选择照样往下走。
-- 保存成功后新登录的「部材名 + 部品名」规则会立刻重新读进内存（`RefreshMemberNameCatalog`），不用重开画面。
+- 保存成功后新登录的「部材名 + 部品名」规则会立刻重新读进内存（`RefreshMemberNameCatalog`），
+  部材不材 mapping 更新成功时也会重新读一次（`BuhinBuzaiMappingCatalog.Reload`），不用重开画面。
 
 ### 3.1 外观（贴近 Google 日语输入法的候补面板，`MemberNamePickerForm.Style.cs`）
 
@@ -136,3 +152,56 @@
 | `Ctrl + S` | 保存 |
 | `Delete` | 未进入编辑时删除选中行（编辑中只删单元格文字） |
 | `Enter` | 「选择部材名」窗口里写入输入内容 |
+
+---
+
+## 6. 登录时的写法转换（部材名 / 部品名 → 半角片假名）
+
+**保存（登录到「部品基本信息」表）时**，`部材名` 与 `部品名` 会先做一次
+**全角片假名 → 半角片假名** 的转换再写库（`Services\JapaneseTextConverter.cs` 的
+`ToHalfWidthKatakana`，由 `PartBasicInfoRepository` 在绑定 SQL 参数时调用，
+`Save` / 各分析步骤的写库都走同一处）：
+
+| 输入（全角） | 存进库里的值（半角） |
+|--------------|----------------------|
+| `上レール` | `上ﾚｰﾙ` |
+| `カバー` | `ｶﾊﾞｰ` |
+| `ガラス` | `ｶﾞﾗｽ`（濁音 = 半角清音 + `ﾞ`） |
+| `パネル` | `ﾊﾟﾈﾙ`（半濁音 = 半角清音 + `ﾟ`） |
+| `鴨居` / `ひらがな` / `ABC-123` | 原样（只转片假名） |
+
+- 转的是**写库的值**：保存后重新载入画面 / 【保存 Excel】看到的就是半角写法；
+  单元格里输入的全角写法不会被即时改写，保存一次之后才变。
+- 长音 `ー` → `ｰ`、中点 `・` → `･`；`「」。、` 等标点、平假名、汉字、英数不动。
+- 反过来**比较时不分全角 / 半角**：库里的半角值与 PDF / Excel 原文（多为全角）比对时，
+  两边都先做 NFKC 归一化（`JapaneseTextConverter.NormalizeWidth`），
+  所以「选择部材名」窗口的推荐项（置换表 `T_M_MergeName` 的查找）、
+  【CMD 分析】第 3 步要領図行与アッセンブリ図行的合并、AI 特注品的数量设定仍然能对上。
+
+---
+
+## 7. 点【保存】时**不**做「部材名」置换
+
+部材名置换表（SQL Server `genpin.dbo.T_M_MergeName`，`MemberNameReplacementCatalog`）**只用于两处**：
+
+- 【CMD 分析】第 1 / 2 / 3 步**自动取得**部材名的那一刻（`PartBasicInfo.MemberName` 的 setter）；
+- 「选择部材名」窗口的**表示部材名 候补**（`GetDisplayNames`：按这一行的「部品名」查出 `MsifDevName`
+  = 图面上的写法，排在推荐项的第 ③ 段）。**不再**把置换后（`GenpinName` = 原部材名）列进候选。
+
+> 面板里最靠前的推荐项来自另一张表：部材不材 mapping（SQL Server `MSIF.dbo.DL_BuhinBuzaiMapping`，
+> 第 3 节的 ① ②）。那张表由本工具在【保存】时写入（「部品名 + 部材名 + 部品コード」），
+> 所以「以前用什么部材名，下次就推荐什么」。
+
+**点【保存】时按单元格里的原值登录**（`PartBasicInfoForm` 保存处调
+`PartBasicInfo.SetMemberNameFromInput`，不查置换表）：
+
+| 置换表里的行 | 「部材名」单元格里填 | 保存后库里 / 画面显示 |
+|--------------|--------------------|----------------------|
+| `上ﾚｰﾙ → アルミ上` | `上ﾚｰﾙ` | `上ﾚｰﾙ`（**不会**被悄悄换成 `ｱﾙﾐ上`） |
+| `上ﾚｰﾙ → アルミ上` | `アルミ上` | `ｱﾙﾐ上`（只是第 6 节的半角转换） |
+
+- 分析自动填进来的值已经是置换后的词，保存时原样写回，所以链式规则（`A→B`、`B→C`）也只会换一次。
+- 想用**原部材名**（`GenpinName`，例 `アルミ上`）→ 在「选择部材名」窗口的输入框里直接打（列表里没有的话按 `Enter` 写入）。
+  面板的候选（部材不材 mapping 的 `BuzaiName` / 表示部材名 `MsifDevName`）都是「表示」侧的写法，
+  不会自动给出原部材名。
+

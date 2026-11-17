@@ -1836,8 +1836,14 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 部品名比较用的规整：去掉全部空白（含全角空格）、全角 ASCII 转半角、英文转大写。
+        /// 部品名比较用的规整：NFKC（半角片假名 → 全角片假名、全角 ASCII → 半角）、
+        /// 去掉全部空白（含全角空格）、英文转大写。
         /// 例：<c>部品セット（フラットレール）</c> 与 <c>部品セット(フラットレール)</c> 视为同名。
+        /// <para>
+        /// 库里的「部品名」登录时已转成半角片假名（见 <see cref="JapaneseTextConverter.ToHalfWidthKatakana"/>），
+        /// PDF / Excel 原文多为全角，所以 NFKC 不能省：<c>上ﾚｰﾙ</c> 与 <c>上レール</c> 要当成同一个名字
+        /// （第 3 步把要領図行与アッセンブリ図行合并时靠这里比对）。
+        /// </para>
         /// </summary>
         private static string NormalizePartName(string value)
         {
@@ -1846,9 +1852,12 @@ namespace MSIFAITOOLS.Services
                 return string.Empty;
             }
 
-            StringBuilder builder = new StringBuilder(value.Length);
+            // NFKC：半角片假名 → 全角片假名（全角 ASCII → 半角也一并处理掉）
+            string normalized = JapaneseTextConverter.NormalizeWidth(value);
 
-            foreach (char c in value)
+            StringBuilder builder = new StringBuilder(normalized.Length);
+
+            foreach (char c in normalized)
             {
                 if (char.IsWhiteSpace(c))
                 {
