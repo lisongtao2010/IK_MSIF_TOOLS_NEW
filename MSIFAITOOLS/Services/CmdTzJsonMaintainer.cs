@@ -43,7 +43,7 @@ namespace MSIFAITOOLS.Services
         /// <summary>实际追加进 特注品.json 的条目数。</summary>
         public int AddedRowCount { get; set; }
 
-        /// <summary>AI 给了、但和已有条目重复（品種 + 部品名 + 部品コード 相同）而没写的条数。</summary>
+        /// <summary>AI 给了、但和已有条目重复（品種 + 部品名 + 枠区分 + 部品コード + 追加対応特注寸法 相同）而没写的条数。</summary>
         public int SkippedDuplicateCount { get; set; }
 
         /// <summary>维护前 特注品.json 里已有的条目数。</summary>
@@ -136,8 +136,11 @@ namespace MSIFAITOOLS.Services
     ///   <item>能在规则解析结果里对上的条目，字段一律用<b>部品表原文</b>（AI 只决定「哪一行要追加」）；</item>
     ///   <item>规则没解析出来的条目（Excel 排版认不出），字段用 <b>AI 从整表原文里读到的原文</b>，
     ///         并且至少要给出「部品名」或「部品コード」，全空的条目丢弃；</item>
-    ///   <item>和已有条目重复（品種 + 部品名 + 部品コード 相同）的条目<b>不重复写</b>；</item>
+    ///   <item>和已有条目重复（品種 + 部品名 + 枠区分 + 部品コード + 追加対応特注寸法 <b>全同</b>）的条目<b>不重复写</b>；
+    ///         只比前三项会把同一部品在多个 特注 W 範囲 的行当成重复丢掉（<c>I400Z10002</c> 的 <c>MZB976</c> 就是这种）；</item>
     ///   <item>写着「追加不要 / 追加しない」这类字样的行不送 AI 也不写（<see cref="CmdTzPartCollector.ContainsNoNeedMark"/>）；</item>
+    ///   <item>写回时同步顶层计数器：<c>item_count</c> 改成实际条数、<c>file_count</c> 只往上调
+    ///         —— 不同步就会留下「<c>item_count: 23</c> 但 <c>items</c> 37 条」这种旧值（见 <see cref="SyncCounters"/>）；</item>
     ///   <item>一条都没追加时<b>不写文件</b>（旧 特注品.json 保持不动）；JSON 解析失败时整步跳过，不覆盖；</item>
     ///   <item>单个文件读不动 / AI 调用失败只跳过这一个文件，不打断整批。</item>
     /// </list>
@@ -161,6 +164,15 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>特注品.json 顶层存放明细的键（与 <see cref="CmdTzPartCollector"/> 一致）。</summary>
         public const string ItemKey = "items";
+
+        /// <summary>
+        /// 特注品.json 顶层的明细条数键（由 <c>CadPartSplitter\TzJsonBuilder</c> 写出；
+        /// 存在就同步 —— 不同步会留下「item_count 23 / items 实际 37 条」这种旧值）。
+        /// </summary>
+        private const string ItemCountKey = "item_count";
+
+        /// <summary>特注品.json 顶层的来源 Excel 个数键（同上，存在就同步；只往上调）。</summary>
+        private const string FileCountKey = "file_count";
 
         /// <summary>本步骤写进去的条目在 <c>source</c> 字段上的值（<c>rule</c> = 规则判出来的）。</summary>
         public const string SourceAi = "ai";
@@ -342,7 +354,8 @@ namespace MSIFAITOOLS.Services
                 if (map != null)
                 {
                     existingKeys[BuildKey(ReadText(map, FieldKeys[0]), ReadText(map, FieldKeys[1]),
-                        ReadText(map, FieldKeys[3]))] = true;
+                        ReadText(map, FieldKeys[2]), ReadText(map, FieldKeys[3]),
+                        ReadText(map, FieldKeys[4]))] = true;
                 }
             }
 
@@ -574,7 +587,8 @@ namespace MSIFAITOOLS.Services
 
                 foreach (TzRow row in accepted)
                 {
-                    string key = BuildKey(row.Variety, row.PartName, row.PartCode);
+                    string key = BuildKey(row.Variety, row.PartName, row.FrameKind, row.PartCode,
+                        row.SpecialSize);
 
                     if (existingKeys.ContainsKey(key))
                     {
@@ -631,6 +645,9 @@ namespace MSIFAITOOLS.Services
 
             root[ItemKey] = items;
 
+            // ── 顶层计数器同步（TzJsonBuilder 写的 item_count / file_count）──
+            SyncCounters(root, items, onLog);
+
             try
             {
                 Directory.CreateDirectory(classifyDirectory);
@@ -652,6 +669,92 @@ namespace MSIFAITOOLS.Services
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 写回前同步顶层的计数器 <c>item_count</c> / <c>file_count</c>
+        /// （键由 <c>CadPartSplitter\TzJsonBuilder</c> 写出，
+        /// <see cref="CmdSpecialProductCsvExporter"/> 也按同一口径维护）。
+        /// <para>
+        /// 不同步就会留下「<c>item_count: 23</c>，<c>items</c> 实际 37 条」这种旧值：
+        /// 第 0 步只替换 <see cref="ItemKey"/>，计数器是别的步骤写的，不跟着改就永远是旧数。
+        /// </para>
+        /// <para>
+        /// <c>file_count</c> <b>只往上调</b>：这里看不到「这次扫到几个 Excel」，只能数
+        /// <c>items</c> 里出现过几个 <c>file</c>；改小会把「扫到了但一条明细都没有」的文件算丢。
+        /// </para>
+        /// </summary>
+        private static void SyncCounters(IDictionary<string, object> root, IEnumerable items,
+            Action<LogKind, string> onLog)
+        {
+            if (root == null || items == null)
+            {
+                return;
+            }
+
+            int count = 0;
+            Dictionary<string, bool> files = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (object item in items)
+            {
+                count++;
+
+                Dictionary<string, object> map = item as Dictionary<string, object>;
+
+                if (map == null)
+                {
+                    continue;
+                }
+
+                string file = ReadRawText(map, FileKey);
+
+                if (!string.IsNullOrWhiteSpace(file))
+                {
+                    files[file] = true;
+                }
+            }
+
+            int oldItemCount = ReadCounter(root, ItemCountKey);
+            int oldFileCount = ReadCounter(root, FileCountKey);
+            List<string> changes = new List<string>();
+
+            if (root.ContainsKey(ItemCountKey) && oldItemCount != count)
+            {
+                root[ItemCountKey] = count;
+                changes.Add(string.Format("item_count {0} → {1}", oldItemCount, count));
+            }
+
+            if (root.ContainsKey(FileCountKey) && files.Count > oldFileCount)
+            {
+                root[FileCountKey] = files.Count;
+                changes.Add(string.Format("file_count {0} → {1}", oldFileCount, files.Count));
+            }
+
+            if (changes.Count > 0)
+            {
+                PartAnalysisService.ReportLog(onLog, LogKind.Info,
+                    "  计数器同步：" + string.Join("，", changes.ToArray()));
+            }
+        }
+
+        /// <summary>读顶层计数器的整数值（没有 / 读不动时返回 0）。</summary>
+        private static int ReadCounter(IDictionary<string, object> root, string key)
+        {
+            object raw;
+
+            if (root == null || !root.TryGetValue(key, out raw) || raw == null)
+            {
+                return 0;
+            }
+
+            try
+            {
+                return Convert.ToInt32(raw, CultureInfo.InvariantCulture);
+            }
+            catch (Exception)
+            {
+                return 0;
+            }
         }
 
         /// <summary>
@@ -1248,14 +1351,25 @@ namespace MSIFAITOOLS.Services
             return accepted;
         }
 
-        /// <summary>AI 直接给出的条目里去重（品種 + 部品名 + 部品コード 相同视为同一条）。</summary>
+        /// <summary>
+        /// AI 直接给出的条目里去重：品種 + 部品名 + 枠区分 + 部品コード + 追加対応特注寸法
+        /// 全部相同才算同一条（与 <see cref="BuildKey"/> 同口径）。
+        /// <para>
+        /// 不能用「品種 + 部品名 + 部品コード」去重：同一部品在同一 品種 下会按特注 W 范围
+        /// 出现多次（例如 I400Z10002 的 MZB976：<c>1025≦W＜1325</c> 与 <c>1325≦W≦1408</c>），
+        /// 那样会在 AI 条目落地时就把后面的区间当成重复丢掉。
+        /// </para>
+        /// </summary>
         private static bool ContainsSameAiRow(IList<TzRow> rows, TzRow candidate)
         {
+            string key = BuildKey(candidate.Variety, candidate.PartName, candidate.FrameKind,
+                candidate.PartCode, candidate.SpecialSize);
+
             foreach (TzRow row in rows)
             {
-                if (row.FromAi && EqualsKey(row.Variety, candidate.Variety) &&
-                    EqualsKey(row.PartName, candidate.PartName) &&
-                    EqualsKey(row.PartCode, candidate.PartCode))
+                if (row.FromAi && string.Equals(
+                    BuildKey(row.Variety, row.PartName, row.FrameKind, row.PartCode, row.SpecialSize),
+                    key, StringComparison.Ordinal))
                 {
                     return true;
                 }
@@ -1336,11 +1450,22 @@ namespace MSIFAITOOLS.Services
             return entry;
         }
 
-        /// <summary>去重用的键：品種 + 部品名 + 部品コード（去空白 + 忽略大小写）。</summary>
-        private static string BuildKey(string variety, string partName, string partCode)
+        /// <summary>
+        /// 去重用的键：品種 + 部品名 + 枠区分 + 部品コード + 追加対応特注寸法（去空白 + 忽略大小写）。
+        /// <para>
+        /// <b>为什么把「枠区分 / 追加対応特注寸法」也算进键里</b>：同一部品在同一 品種 下
+        /// 可能对应多个特注尺寸区间（例如 I400Z10002 的 MZB976：<c>1025≦W＜1325</c> 与
+        /// <c>1325≦W≦1408</c>），只按 品種 + 部品名 + 部品コード 去重会把后面的区间当成重复丢掉。
+        /// 这与 <c>TzJsonBuilder</c> 的条目键（表名 + 行号 + 品種 + 追加対応特注寸法）口径一致：
+        /// 同一部品的不同尺寸区间要各留一条。
+        /// </para>
+        /// </summary>
+        private static string BuildKey(string variety, string partName, string frameKind,
+            string partCode, string specialSize)
         {
             return NormalizeKey(variety) + "\u0001" + NormalizeKey(partName) + "\u0001" +
-                NormalizeKey(partCode);
+                NormalizeKey(frameKind) + "\u0001" + NormalizeKey(partCode) + "\u0001" +
+                NormalizeKey(specialSize);
         }
 
         /// <summary>键的归一化：去掉所有空白（含全角空格），转大写。</summary>

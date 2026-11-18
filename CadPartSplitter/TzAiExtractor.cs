@@ -248,6 +248,7 @@ namespace CadPartSplitter
                 string partName = ResolveField(grid, row, line, item.PartName, stats, false);
                 string frameKind = ResolveField(grid, row, line, item.FrameKind, stats, true);
                 string partCode = ResolveField(grid, row, line, item.PartCode, stats, false);
+                string quantity = ResolveField(grid, row, line, item.Quantity, stats, false);
                 string specialSize = ResolveField(grid, row, line, item.SpecialSize, stats, false);
 
                 // 五个字段全空（AI 只给了一行行号）→ 这不是明细
@@ -277,6 +278,7 @@ namespace CadPartSplitter
                     PartName = partName,
                     FrameKind = frameKind,
                     PartCode = partCode,
+                    Quantity = quantity,
                     SpecialSize = specialSize,
                     Source = SourceAi
                 });

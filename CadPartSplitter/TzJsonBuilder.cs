@@ -38,6 +38,9 @@ namespace CadPartSplitter
         /// <summary>部品コード。</summary>
         public string PartCode { get; set; }
 
+        /// <summary>員数（数量）。原表没有这一列时为空串。</summary>
+        public string Quantity { get; set; }
+
         /// <summary>追加対応特注寸法。</summary>
         public string SpecialSize { get; set; }
 
@@ -45,7 +48,7 @@ namespace CadPartSplitter
         /// 这条明细是谁判出来的：<c>rule</c> = <c>TzJsonBuilder</c> 的规则（5 列标题 / 分块版式）、
         /// <c>adaptive</c> = 自适应版式（表头是同义列名时按「列角色」认）、
         /// <c>ai</c> = AI 判定补足（见 <see cref="TzAiExtractor"/>）。
-        /// 下游只按那五个字段取数，不认识这个字段也没有影响。
+        /// 下游只按那些字段取数，不认识这个字段也没有影响。
         /// </summary>
         public string Source { get; set; }
     }
@@ -59,7 +62,8 @@ namespace CadPartSplitter
     ///   <item>扫「图纸文件夹」里的所有 Excel（<c>.xls</c> / <c>.xlsx</c> / <c>.xlsm</c>，
     ///         <c>~$</c> 临时文件与 <c>AiAppData</c> 里的产物跳过）；</item>
     ///   <item>每个工作簿读「カメラ」sheet 的部品表，取出这五列
-    ///         <c>品種 / 部品名 / 枠区分 / 部品コード / 追加対応特注寸法</c>，
+    ///         <c>品種 / 部品名 / 枠区分 / 部品コード / 追加対応特注寸法</c>；
+    ///         原表另有 <c>員数 / 数量 / 入数 / 個数</c> 列时一并取 <c>員数</c>（没有就留空），
     ///         汇总成一份 <c>&lt;输出根目录&gt;\classify\特注品.json</c>
     ///         （与 <c>PdfInfoList.txt</c> 同目录，整批共用一份）。</item>
     /// </list>
@@ -130,10 +134,34 @@ namespace CadPartSplitter
         /// <summary>追加対応特注寸法列。</summary>
         public const string SpecialSizeKeyword = "追加対応特注寸法";
 
-        /// <summary>要抽出来的五列，顺序即 JSON 里的字段顺序（下游按列名取数）。</summary>
+        /// <summary>
+        /// 員数（数量）列。原表有这一列就一并取出来，没有也不影响那五列；
+        /// 与 <c>MSIFAITOOLS</c> 的特注品 CSV 用同一个字段名（下游按「員数」取数）。
+        /// </summary>
+        public const string QuantityKeyword = "員数";
+
+        /// <summary>
+        /// 表头里认哪些写法算「員数」列（与 <c>CmdSpecialProductCsvExporter</c> 的
+        /// <c>QuantityHeaders</c> 同一套，另加 個数）。
+        /// </summary>
+        private static readonly string[] QuantityAliases =
+        {
+            QuantityKeyword, "员数", "数量", "入数", "個数"
+        };
+
+        /// <summary>要抽出来的五列，顺序即表头认列的匹配顺序。</summary>
         private static readonly string[] ColumnNames =
         {
             VarietyKeyword, PartNameKeyword, FrameKeyword, PartCodeKeyword, SpecialSizeKeyword
+        };
+
+        /// <summary>
+        /// 写进 <c>特注品.json</c> 的 <c>columns</c> 与每条明细的字段顺序：
+        /// 五列 + 可选的 <c>員数</c>（与 MSIFAITOOLS 的特注品 CSV 列序一致）。
+        /// </summary>
+        private static readonly string[] OutputColumnNames =
+        {
+            VarietyKeyword, PartNameKeyword, FrameKeyword, PartCodeKeyword, QuantityKeyword, SpecialSizeKeyword
         };
 
         /// <summary>特注品.json 里 <c>source</c> 字段：规则（5 列标题 / 分块版式）判出来的明细。</summary>
@@ -230,7 +258,7 @@ namespace CadPartSplitter
 
             o.Log("[INFO] 特注品.json：扫到 " + files.Count + " 个 Excel（" + Path.GetFullPath(excelFolder)
                   + (recursive ? "，含子文件夹" : "，仅当前文件夹") + "），读 "
-                  + string.Join(" / ", ColumnNames) + " 五列。");
+                  + string.Join(" / ", ColumnNames) + " 五列（有員数 / 数量列时一并取）。");
 
             // AI 判定与补足（默认关闭，--tz-ai 打开）：
             // 没配密钥 / 接口不可用只记日志、不打断 特注品.json —— AI 是补足，不是前置条件。
@@ -884,6 +912,9 @@ namespace CadPartSplitter
                 int cursor = row + headerRows;
                 string lastVariety = string.Empty;
 
+                // 員数 是可选的第六列：表头里有「員数 / 数量 / 入数 / 個数」就取，没有就留空
+                int quantityColumn = FindQuantityColumn(grid, row, headerRows, columns);
+
                 while (cursor < grid.Count)
                 {
                     string[] line = grid[cursor];
@@ -925,6 +956,7 @@ namespace CadPartSplitter
                         PartName      = partName,
                         FrameKind     = Cell(line, columns[2]),
                         PartCode      = partCode,
+                        Quantity      = Cell(line, quantityColumn),
                         SpecialSize   = Cell(line, columns[4]),
                         Source        = SourceRule
                     });
@@ -1003,7 +1035,10 @@ namespace CadPartSplitter
 
                 if (TryFindVarietyGroups(line, out groups))
                 {
-                    row = CollectVarietyRows(grid, row + 1, groups, fileName, drawingNumber,
+                    // 見出し行に「員数」列があれば、その組の明細から拾う（無ければ全部空）
+                    int[] quantityColumns = FindGroupQuantityColumns(line, groups);
+
+                    row = CollectVarietyRows(grid, row + 1, groups, quantityColumns, fileName, drawingNumber,
                                              sheetName, frameKind, partName, partCode, output);
                     continue;
                 }
@@ -1021,11 +1056,14 @@ namespace CadPartSplitter
         /// <summary>
         /// 从「品種 / 追加対応特注寸法」見出し行的下一行起收明细，返回「下一处该继续扫的行号」。
         /// 一行里并排 2 组时（<paramref name="groups"/> 是各组「品種」的列下标）逐组展开成一条明细。
+        /// <paramref name="quantityColumns"/> 与 <paramref name="groups"/> 一一对应：
+        /// 各组自己的「員数」列下标（-1 = 没有），该格不进 追加対応特注寸法。
         /// </summary>
         private static int CollectVarietyRows(
             List<string[]> grid,
             int startRow,
             int[] groups,
+            int[] quantityColumns,
             string fileName,
             string drawingNumber,
             string sheetName,
@@ -1070,6 +1108,9 @@ namespace CadPartSplitter
 
                     int from = groups[g] + 1;
                     int to = (g + 1 < groups.Length) ? groups[g + 1] : line.Length;
+                    int quantityColumn = (quantityColumns != null && g < quantityColumns.Length)
+                        ? quantityColumns[g]
+                        : -1;
 
                     output.Add(new TzEntry
                     {
@@ -1081,7 +1122,8 @@ namespace CadPartSplitter
                         PartName      = partName,
                         FrameKind     = frameKind,
                         PartCode      = partCode,
-                        SpecialSize   = JoinCells(line, from, to),
+                        Quantity      = Cell(line, quantityColumn),
+                        SpecialSize   = JoinCells(line, from, to, quantityColumn),
                         Source        = SourceRule
                     });
 
@@ -1209,6 +1251,9 @@ namespace CadPartSplitter
                 int cursor = row + headerRows;
                 string lastVariety = string.Empty;
 
+                // 員数 是可选的第六列：表头里有「員数 / 数量 / 入数 / 個数」就取，没有就留空
+                int quantityColumn = FindQuantityColumn(grid, row, headerRows, columns);
+
                 while (cursor < grid.Count)
                 {
                     string[] line = grid[cursor];
@@ -1269,6 +1314,7 @@ namespace CadPartSplitter
                         PartName      = partName,
                         FrameKind     = Cell(line, columns[RoleFrame]),
                         PartCode      = partCode,
+                        Quantity      = Cell(line, quantityColumn),
                         SpecialSize   = specialSize,
                         Source        = SourceAdaptive
                     });
@@ -1700,10 +1746,22 @@ namespace CadPartSplitter
         /// <summary>把一行的 <paramref name="from"/>〜<paramref name="to"/>-1 格拼成一个字符串（空格分隔、跳过空格子）。</summary>
         private static string JoinCells(string[] line, int from, int to)
         {
+            return JoinCells(line, from, to, -1);
+        }
+
+        /// <summary>
+        /// 同上，但跳过 <paramref name="exclude"/> 这一列（分块版式里「員数」夹在特注寸法中间时，
+        /// 不能把数量也拼进 追加対応特注寸法）。
+        /// </summary>
+        private static string JoinCells(string[] line, int from, int to, int exclude)
+        {
             var parts = new List<string>();
 
             for (int c = from; c < to; c++)
             {
+                if (c == exclude)
+                    continue;
+
                 string cell = Cell(line, c);
 
                 if (cell.Length > 0)
@@ -1711,6 +1769,118 @@ namespace CadPartSplitter
             }
 
             return string.Join(" ", parts.ToArray());
+        }
+
+        /// <summary>
+        /// 在表头（<paramref name="height"/> 行）里找可选的「員数」列：先按整格等于
+        /// <see cref="QuantityAliases"/> 里的写法找，再放宽到以它开头（<c>員数（個）</c> 这种）；
+        /// 已经属于那五列的格子（<paramref name="usedColumns"/>）不会被当成 員数。
+        /// 找不到返回 -1。
+        /// </summary>
+        private static int FindQuantityColumn(List<string[]> grid, int startRow, int height, int[] usedColumns)
+        {
+            for (int pass = 0; pass <= 1; pass++)
+            {
+                for (int h = 0; h < height; h++)
+                {
+                    int row = startRow + h;
+
+                    if (row < 0 || row >= grid.Count)
+                        continue;
+
+                    string[] line = grid[row];
+
+                    if (line == null)
+                        continue;
+
+                    for (int c = 0; c < line.Length; c++)
+                    {
+                        if (IsUsedColumn(usedColumns, c))
+                            continue;
+
+                        if (MatchesQuantityAlias(CsvFile.Normalize(line[c]), pass))
+                            return c;
+                    }
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// 分块版式的見出し行里找各组的「員数」列：返回与 <paramref name="groups"/> 等长的数组，
+        /// 每项是该组范围内（自家「品種」右侧到下一组「品種」之前）的員数列下标，-1 = 没有。
+        /// </summary>
+        private static int[] FindGroupQuantityColumns(string[] line, int[] groups)
+        {
+            var found = new int[groups.Length];
+
+            for (int i = 0; i < found.Length; i++)
+                found[i] = -1;
+
+            if (line == null)
+                return found;
+
+            for (int pass = 0; pass <= 1; pass++)
+            {
+                for (int c = 0; c < line.Length; c++)
+                {
+                    if (!MatchesQuantityAlias(CsvFile.Normalize(line[c]), pass))
+                        continue;
+
+                    for (int g = 0; g < groups.Length; g++)
+                    {
+                        int from = groups[g] + 1;
+                        int to = (g + 1 < groups.Length) ? groups[g + 1] : line.Length;
+
+                        if (c >= from && c < to && found[g] < 0)
+                        {
+                            found[g] = c;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>这一格是不是「員数」列名：pass 0 = 整格相等，pass 1 = 以别名开头（且不止别名本身）。</summary>
+        private static bool MatchesQuantityAlias(string normalizedCell, int pass)
+        {
+            if (normalizedCell.Length == 0)
+                return false;
+
+            for (int i = 0; i < QuantityAliases.Length; i++)
+            {
+                string alias = QuantityAliases[i];
+
+                if (string.Equals(normalizedCell, alias, StringComparison.Ordinal))
+                    return true;
+
+                if (pass == 1 && normalizedCell.Length > alias.Length
+                    && normalizedCell.StartsWith(alias, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>这一列是否已经被那五列占用。</summary>
+        private static bool IsUsedColumn(int[] usedColumns, int column)
+        {
+            if (usedColumns == null)
+                return false;
+
+            for (int i = 0; i < usedColumns.Length; i++)
+            {
+                if (usedColumns[i] == column)
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -2091,7 +2261,7 @@ namespace CadPartSplitter
 
         /// <summary>
         /// 写出 特注品.json：UTF-8 不带 BOM（与 <c>parts_info.json</c> 一致），CRLF 缩进两格，
-        /// 一条明细一个对象，五个列名直接当字段名（下游按列名取数）。
+        /// 一条明细一个对象，列名直接当字段名（下游按列名取数；<c>員数</c> 原表没有这一列时为空串）。
         /// </summary>
         private static void WriteJson(string path, string sourceFolder, int fileCount, List<TzEntry> items)
         {
@@ -2104,10 +2274,10 @@ namespace CadPartSplitter
             sb.AppendLine("  \"item_count\": " + items.Count.ToString(CultureInfo.InvariantCulture) + ",");
             sb.AppendLine("  \"columns\": [");
 
-            for (int i = 0; i < ColumnNames.Length; i++)
+            for (int i = 0; i < OutputColumnNames.Length; i++)
             {
-                sb.AppendLine("    \"" + EscapeJson(ColumnNames[i]) + "\""
-                              + (i < ColumnNames.Length - 1 ? "," : string.Empty));
+                sb.AppendLine("    \"" + EscapeJson(OutputColumnNames[i]) + "\""
+                              + (i < OutputColumnNames.Length - 1 ? "," : string.Empty));
             }
 
             sb.AppendLine("  ],");
@@ -2129,6 +2299,7 @@ namespace CadPartSplitter
                 sb.AppendLine("      \"" + EscapeJson(PartNameKeyword) + "\": \"" + EscapeJson(e.PartName) + "\",");
                 sb.AppendLine("      \"" + EscapeJson(FrameKeyword) + "\": \"" + EscapeJson(e.FrameKind) + "\",");
                 sb.AppendLine("      \"" + EscapeJson(PartCodeKeyword) + "\": \"" + EscapeJson(e.PartCode) + "\",");
+                sb.AppendLine("      \"" + EscapeJson(QuantityKeyword) + "\": \"" + EscapeJson(e.Quantity) + "\",");
                 sb.AppendLine("      \"" + EscapeJson(SpecialSizeKeyword) + "\": \"" + EscapeJson(e.SpecialSize) + "\"");
                 sb.AppendLine("    }" + (i < items.Count - 1 ? "," : string.Empty));
             }

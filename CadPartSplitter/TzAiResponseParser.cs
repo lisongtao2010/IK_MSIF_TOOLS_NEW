@@ -24,13 +24,16 @@ namespace CadPartSplitter
         /// <summary>部品コード。</summary>
         public string PartCode { get; set; }
 
+        /// <summary>員数（数量）。原表没有这一列时为空。</summary>
+        public string Quantity { get; set; }
+
         /// <summary>追加対応特注寸法。</summary>
         public string SpecialSize { get; set; }
     }
 
     /// <summary>
     /// 解析 AI 返回的「Excel 部品表明细」JSON。
-    /// 期望格式：<c>{"items":[{"row":12,"品種":"…","部品名":"…","枠区分":"…","部品コード":"…","追加対応特注寸法":"…"}],"notes":"…"}</c>
+    /// 期望格式：<c>{"items":[{"row":12,"品種":"…","部品名":"…","枠区分":"…","部品コード":"…","員数":"…","追加対応特注寸法":"…"}],"notes":"…"}</c>
     /// 同时兼容顶层直接是数组、以及字段名使用英文别名的情形（与 <c>MSIFAITOOLS</c> 的
     /// <c>AiPartResponseParser</c> 同思路：容忍模型夹带 Markdown 代码块与解释文字）。
     /// </summary>
@@ -49,6 +52,9 @@ namespace CadPartSplitter
 
         private static readonly string[] PartCodeKeys =
             { "部品コード", "コード", "partCode", "part_code", "code" };
+
+        private static readonly string[] QuantityKeys =
+            { "員数", "员数", "数量", "個数", "入数", "qty", "quantity" };
 
         private static readonly string[] SpecialSizeKeys =
         {
@@ -234,6 +240,7 @@ namespace CadPartSplitter
                 item.PartName = ReadString(map, PartNameKeys);
                 item.FrameKind = ReadString(map, FrameKindKeys);
                 item.PartCode = ReadString(map, PartCodeKeys);
+                item.Quantity = ReadString(map, QuantityKeys);
                 item.SpecialSize = ReadString(map, SpecialSizeKeys);
 
                 items.Add(item);

@@ -619,7 +619,8 @@ namespace CadPartSplitter
             {
                 // 流水线第一步：图纸所在文件夹里的 Excel 部品表 → classify\特注品.json
                 // （与 classify\PdfInfoList.txt 同目录；读「カメラ」sheet 的
-                //  品種 / 部品名 / 枠区分 / 部品コード / 追加対応特注寸法 五列）
+                //  品種 / 部品名 / 枠区分 / 部品コード / 追加対応特注寸法 五列，
+                //  有員数 / 数量列时一并取 員数）
                 // 放在分割之前：Excel 与分割结果无关，先扫一遍让下游一开始就有 特注品.json。
                 if (opts.BuildTzJson)
                 {
