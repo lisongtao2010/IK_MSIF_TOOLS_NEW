@@ -93,7 +93,8 @@ namespace MSIFAITOOLS.Services
             if (!options.IsConfigured)
             {
                 throw new InvalidOperationException(
-                    "未配置 AI 接口密钥：请在程序内【AI 设置】中填写 API Key（特注品 AI 补足需要联网）。");
+                    "未配置 AI 调用方式：请在程序内【AI 设置】中填写 API Key，" +
+                    "或把「调用方式」切换为「本地 Claude Code CLI」（特注品 AI 补足需要 AI 可用）。");
             }
 
             _client = new ChatCompletionClient(options);

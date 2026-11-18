@@ -19,8 +19,16 @@ namespace MSIFAITOOLS.Services
     }
 
     /// <summary>
-    /// OpenAI 兼容的 /chat/completions 客户端（只依赖 .NET Framework 自带的 HttpClient）。
-    /// 请求体手工拼装、响应体用 JavaScriptSerializer 解析，避免额外 NuGet 依赖。
+    /// AI 调用客户端：按 <see cref="AiApiOptions.Provider"/> 分派到两种后端之一。
+    /// <list type="bullet">
+    ///   <item><b>云端接口</b>（默认）：OpenAI 兼容的 <c>/chat/completions</c>，只依赖 .NET Framework 自带的
+    ///         HttpClient；请求体手工拼装、响应体用 JavaScriptSerializer 解析，避免额外 NuGet 依赖。</item>
+    ///   <item><b>本机 Claude Code CLI</b>：把同样的系统 / 用户提示词交给本机的 <c>claude -p</c>
+    ///         （见 <see cref="ClaudeCodeCliClient"/>），不需要 API Key，适合本机已登录 Claude Code
+    ///         （含 Google Cloud 等第三方认证）的现场。</item>
+    /// </list>
+    /// 上层调用方（AI 分析 / CMD 分析各步骤）只看到本类的 <see cref="Complete"/>，
+    /// 切换调用方式不需要改动它们的代码。
     /// </summary>
     internal sealed class ChatCompletionClient
     {
@@ -31,6 +39,21 @@ namespace MSIFAITOOLS.Services
 
         private readonly AiApiOptions _options;
 
+        /// <summary>累计用量时加锁（AI 调用可能来自不同线程，例如后台分析与【AI 设置】的测试）。</summary>
+        private static readonly object UsageLock = new object();
+
+        /// <summary>本次运行（进程内）所有 AI 调用的累计 token 用量。</summary>
+        private static readonly AiTokenUsage SessionUsage = new AiTokenUsage();
+
+        /// <summary>
+        /// 每次 <see cref="Complete"/> 成功后触发，把本次与累计 token 用量交给上层
+        /// （主画面订阅后写进【运行日志】；没有订阅者时不影响调用）。
+        /// </summary>
+        public static event EventHandler<AiUsageEventArgs> UsageReported;
+
+        /// <summary>本实例最近一次成功调用拿到的 token 用量（接口没返回 usage 时为 null）。</summary>
+        public AiTokenUsage LastUsage { get; private set; }
+
         public ChatCompletionClient(AiApiOptions options)
         {
             if (options == null)
@@ -38,14 +61,22 @@ namespace MSIFAITOOLS.Services
                 throw new ArgumentNullException(nameof(options));
             }
 
+            _options = options;
+
+            if (options.IsClaudeCodeCli)
+            {
+                // 本机 CLI 不需要 API Key；可执行文件路径在第一次调用时解析，
+                // 这样「先保存设置、后安装 / 登录 Claude Code」也能正常保存。
+                return;
+            }
+
             if (!options.IsConfigured)
             {
                 throw new InvalidOperationException(
                     "未配置 AI 接口密钥：请在程序内【AI 设置】中填写 API Key" +
-                    "（也可使用 App.config 的 AiApiKey 或环境变量 MSIF_AI_API_KEY）。");
+                    "（也可使用 App.config 的 AiApiKey 或环境变量 MSIF_AI_API_KEY；" +
+                    "或把调用方式切换为「本地 Claude Code CLI」）。");
             }
-
-            _options = options;
         }
 
         /// <summary>
@@ -56,6 +87,19 @@ namespace MSIFAITOOLS.Services
         /// <param name="userPrompt">用户提示词。</param>
         public string Complete(string systemPrompt, string userPrompt)
         {
+            if (_options.IsClaudeCodeCli)
+            {
+                // 本机 Claude Code CLI：一次性把提示词交给 claude -p（详见 ClaudeCodeCliClient）
+                AiTokenUsage cliUsage;
+                string cliReply = ClaudeCodeCliClient.Complete(_options.ClaudeCliPath, _options.ClaudeModel,
+                    _options.ClaudeCliEnvironment, systemPrompt, userPrompt, _options.TimeoutSeconds,
+                    out cliUsage);
+
+                ReportUsage(cliUsage);
+
+                return cliReply;
+            }
+
             string requestBody = BuildRequestBody(systemPrompt, userPrompt);
             Exception lastError = null;
 
@@ -63,7 +107,13 @@ namespace MSIFAITOOLS.Services
             {
                 try
                 {
-                    return SendOnce(requestBody);
+                    AiTokenUsage usage;
+                    string content = SendOnce(requestBody, out usage);
+
+                    // 每次成功调用都把 token 用量报给上层（主画面 →【运行日志】）
+                    ReportUsage(usage);
+
+                    return content;
                 }
                 catch (AiTransientException ex)
                 {
@@ -80,9 +130,11 @@ namespace MSIFAITOOLS.Services
                 "AI 接口调用失败：" + (lastError == null ? "未知原因" : lastError.Message), lastError);
         }
 
-        /// <summary>真正发起 HTTP 请求并解析回复。</summary>
-        private string SendOnce(string requestBody)
+        /// <summary>真正发起 HTTP 请求并解析回复（同时取出 token 用量）。</summary>
+        private string SendOnce(string requestBody, out AiTokenUsage usage)
         {
+            usage = null;
+
             byte[] payload = Encoding.UTF8.GetBytes(requestBody);
 
             using (HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, _options.Endpoint))
@@ -126,7 +178,12 @@ namespace MSIFAITOOLS.Services
                     }
                 }
 
-                return ExtractContent(responseText);
+                // 同一个响应里既取正文，也取 token 用量（接口没返回 usage 时 usage = null）
+                Dictionary<string, object> root = ParseResponse(responseText);
+
+                usage = ExtractUsage(root);
+
+                return ExtractContent(root, responseText);
             }
         }
 
@@ -146,8 +203,8 @@ namespace MSIFAITOOLS.Services
             return builder.ToString();
         }
 
-        /// <summary>从响应 JSON 中取出 choices[0].message.content。</summary>
-        private static string ExtractContent(string responseText)
+        /// <summary>把响应文本解析成 JSON 对象（失败时抛出带截断原文的异常）。</summary>
+        private static Dictionary<string, object> ParseResponse(string responseText)
         {
             object parsed;
 
@@ -170,6 +227,12 @@ namespace MSIFAITOOLS.Services
                 throw new InvalidOperationException("AI 接口返回格式异常：" + Shorten(responseText));
             }
 
+            return root;
+        }
+
+        /// <summary>从响应 JSON 中取出 choices[0].message.content。</summary>
+        private static string ExtractContent(Dictionary<string, object> root, string responseText)
+        {
             object choicesValue;
 
             if (!root.TryGetValue("choices", out choicesValue))
@@ -203,6 +266,125 @@ namespace MSIFAITOOLS.Services
             }
 
             return Convert.ToString(contentValue, CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// 从响应 JSON 的 <c>usage</c> 里取 token 用量；没有 usage 或全为 0 时返回 null。
+        /// <para>
+        /// 兼容 OpenAI 兼容接口的常见写法：<c>prompt_tokens</c> / <c>completion_tokens</c> /
+        /// <c>total_tokens</c>，明细 <c>prompt_tokens_details.cached_tokens</c>、
+        /// <c>completion_tokens_details.reasoning_tokens</c>（缺了就按 0 处理）。
+        /// </para>
+        /// </summary>
+        private static AiTokenUsage ExtractUsage(Dictionary<string, object> root)
+        {
+            Dictionary<string, object> usageNode = ReadDictionary(root, "usage");
+
+            if (usageNode == null)
+            {
+                return null;
+            }
+
+            AiTokenUsage usage = new AiTokenUsage();
+            usage.PromptTokens = ReadInt(usageNode, "prompt_tokens");
+            usage.CompletionTokens = ReadInt(usageNode, "completion_tokens");
+            usage.TotalTokens = ReadInt(usageNode, "total_tokens");
+
+            if (usage.TotalTokens <= 0)
+            {
+                usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens;
+            }
+
+            Dictionary<string, object> promptDetails = ReadDictionary(usageNode, "prompt_tokens_details");
+
+            if (promptDetails != null)
+            {
+                usage.CachedTokens = ReadInt(promptDetails, "cached_tokens");
+            }
+
+            Dictionary<string, object> completionDetails = ReadDictionary(usageNode, "completion_tokens_details");
+
+            if (completionDetails != null)
+            {
+                usage.ReasoningTokens = ReadInt(completionDetails, "reasoning_tokens");
+            }
+
+            return usage.IsAvailable ? usage : null;
+        }
+
+        /// <summary>取 JSON 对象里的子对象（不存在 / 类型不对时返回 null）。</summary>
+        private static Dictionary<string, object> ReadDictionary(Dictionary<string, object> node, string key)
+        {
+            object value;
+
+            if (node == null || string.IsNullOrEmpty(key) || !node.TryGetValue(key, out value))
+            {
+                return null;
+            }
+
+            return value as Dictionary<string, object>;
+        }
+
+        /// <summary>取 JSON 对象里的整数值（缺失 / 非数字时返回 0）。</summary>
+        private static int ReadInt(Dictionary<string, object> node, string key)
+        {
+            object value;
+
+            if (node == null || string.IsNullOrEmpty(key) || !node.TryGetValue(key, out value) || value == null)
+            {
+                return 0;
+            }
+
+            try
+            {
+                return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            }
+            catch (Exception)
+            {
+                // 个别接口会把数字写成字符串 / 小数，取不到就算 0，不影响正文
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 记录本次用量（实例 <see cref="LastUsage"/> + 进程内累计），并通知
+        /// <see cref="UsageReported"/> 的订阅者。订阅者（日志）出错不影响 AI 结果。
+        /// </summary>
+        private void ReportUsage(AiTokenUsage usage)
+        {
+            LastUsage = usage;
+
+            AiTokenUsage sessionCopy;
+
+            lock (UsageLock)
+            {
+                if (usage != null)
+                {
+                    SessionUsage.Add(usage);
+                }
+
+                sessionCopy = SessionUsage.Copy();
+            }
+
+            EventHandler<AiUsageEventArgs> handler = UsageReported;
+
+            if (handler == null)
+            {
+                return;
+            }
+
+            string model = _options.IsClaudeCodeCli
+                ? (string.IsNullOrEmpty(_options.ClaudeModel) ? "本机默认模型" : _options.ClaudeModel)
+                : _options.Model;
+
+            try
+            {
+                handler(this, new AiUsageEventArgs(_options.ProviderDisplayName, model, usage, sessionCopy));
+            }
+            catch (Exception)
+            {
+                // 日志 / 界面回调异常不能把正常的 AI 结果变成失败
+            }
         }
 
         /// <summary>把文本转成 JSON 字符串字面量内容（不含首尾引号，含内部的转义）。</summary>

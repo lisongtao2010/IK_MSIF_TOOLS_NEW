@@ -21,6 +21,18 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>单次请求超时（秒）。</summary>
         public int TimeoutSeconds { get; set; }
+
+        /// <summary>调用方式：<c>api</c>（云端 OpenAI 兼容接口）或 <c>claude-cli</c>（本机 Claude Code CLI）。</summary>
+        public string Provider { get; set; }
+
+        /// <summary>本机 Claude Code 的可执行文件路径（留空 = 自动查找）。</summary>
+        public string ClaudeCliPath { get; set; }
+
+        /// <summary>本机 Claude Code 的模型名（留空 = 本机默认模型）。</summary>
+        public string ClaudeModel { get; set; }
+
+        /// <summary>本机 Claude Code 的追加环境变量（KEY=VALUE，用 ; 分隔）。</summary>
+        public string ClaudeCliEnvironment { get; set; }
     }
 
     /// <summary>
@@ -93,7 +105,11 @@ namespace MSIFAITOOLS.Services
                     BaseUrl = GetText(data, "BaseUrl"),
                     ApiKey = Unprotect(GetText(data, "ApiKey")),
                     Model = GetText(data, "Model"),
-                    TimeoutSeconds = GetInt(data, "TimeoutSeconds")
+                    TimeoutSeconds = GetInt(data, "TimeoutSeconds"),
+                    Provider = GetText(data, "Provider"),
+                    ClaudeCliPath = GetText(data, "ClaudeCliPath"),
+                    ClaudeModel = GetText(data, "ClaudeModel"),
+                    ClaudeCliEnvironment = GetText(data, "ClaudeCliEnvironment")
                 };
             }
             catch (Exception ex)
@@ -123,6 +139,10 @@ namespace MSIFAITOOLS.Services
                 data["ApiKey"] = Protect(settings.ApiKey ?? string.Empty);
                 data["Model"] = settings.Model ?? string.Empty;
                 data["TimeoutSeconds"] = settings.TimeoutSeconds;
+                data["Provider"] = settings.Provider ?? string.Empty;
+                data["ClaudeCliPath"] = settings.ClaudeCliPath ?? string.Empty;
+                data["ClaudeModel"] = settings.ClaudeModel ?? string.Empty;
+                data["ClaudeCliEnvironment"] = settings.ClaudeCliEnvironment ?? string.Empty;
 
                 File.WriteAllText(SettingsFilePath, Serializer.Serialize(data), new UTF8Encoding(false));
                 return true;

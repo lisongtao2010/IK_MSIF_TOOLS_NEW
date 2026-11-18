@@ -1,13 +1,13 @@
 {
-  "source": "D:\\Github_lis2010\\rabowork\\202609_MSIF_TOOLS\\図面-20260918T025344Z-1-001\\アセンブリ図\\H453\\H453U10004要領図.pdf",
+  "source": "D:\\Github_lis2010\\IK_MSIF_TOOLS_NEW\\図面-20260918T025344Z-1-001\\アセンブリ図\\H453\\H453U10004要領図.pdf",
   "page": 1,
   "dpi": 300,
   "image": { "w": 2479, "h": 3508 },
   "table_start_x": 977,
   "word_count": 72,
-  "outside_word_count": 17,
+  "outside_word_count": 16,
   "table_word_count": 13,
-  "other_word_count": 4,
+  "other_word_count": 3,
   "tables": [
     {
       "name": "table_1",
@@ -80,9 +80,6 @@
     { "text": "（2）枠下側方向にスライドさせてねじを締めて固定する。",
       "pixel": { "x": 256, "y": 1345, "w": 1045, "h": 37 },
       "pdf_mm": { "x": 21.67, "y": 113.88, "w": 88.48, "h": 3.13 } },
-    { "text": "上側",
-      "pixel": { "x": 473, "y": 1953, "w": 89, "h": 36 },
-      "pdf_mm": { "x": 40.05, "y": 165.35, "w": 7.54, "h": 3.05 } },
     { "text": "（3）金具位置の確認をする。",
       "pixel": { "x": 266, "y": 2050, "w": 530, "h": 37 },
       "pdf_mm": { "x": 22.52, "y": 173.57, "w": 44.87, "h": 3.13 } }

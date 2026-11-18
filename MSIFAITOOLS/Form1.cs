@@ -79,6 +79,10 @@ namespace MSIFAITOOLS
             InitializeComponent();
             InitializeClassifyGrid();
 
+            // AI 调用的 token 用量：ChatCompletionClient 每次成功调用后报告，这里写进【运行日志】
+            // （分析与【AI 设置】的测试连接都会经过它；AppendLog 内部会切到 UI 线程）
+            ChatCompletionClient.UsageReported += ChatCompletionClient_UsageReported;
+
             // 中日双语：按上次保存的语言（%APPDATA%\MSIFAITOOLS\ui-language.json）刷一遍全部文字。
             // 主按钮 / 第 0 ~ 6 步按钮的基础文字也在里面按语言设好（_startButtonText / _cmdButtonText …），
             // 所以这里不再直接取设计器里的中文。
@@ -2172,9 +2176,30 @@ namespace MSIFAITOOLS
             _previewForm = null;
         }
 
+        /// <summary>
+        /// AI 调用完成后把 token 用量写进【运行日志】：
+        /// 本次（输入 / 输出 / 合计，含思考 / 缓存 / 费用）+ 调用方式 / 模型 + 本次运行累计。
+        /// <para>
+        /// 由 <see cref="ChatCompletionClient.UsageReported"/> 触发，可能在后台线程；
+        /// <see cref="AppendLog(string, Color)"/> 内部会切回 UI 线程。
+        /// </para>
+        /// </summary>
+        private void ChatCompletionClient_UsageReported(object sender, AiUsageEventArgs e)
+        {
+            if (e == null)
+            {
+                return;
+            }
+
+            AppendLog(e.ToLogText(), Color.FromArgb(170, 200, 255));
+        }
+
         /// <summary>主窗口关闭时一并关闭预览窗口，释放 PDF 文件句柄。</summary>
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            // 取消 AI 用量事件的订阅（主画面是单实例，这里只是保持订阅关系对称）
+            ChatCompletionClient.UsageReported -= ChatCompletionClient_UsageReported;
+
             // Close() 会触发 FormClosed（事件里会清空字段），所以先取到局部变量
             PdfPreviewForm preview = _previewForm;
             PartBasicInfoForm partInfo = _partInfoForm;

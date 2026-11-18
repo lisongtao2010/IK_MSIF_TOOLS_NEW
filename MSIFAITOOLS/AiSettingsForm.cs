@@ -9,7 +9,10 @@ using MSIFAITOOLS.Services;
 namespace MSIFAITOOLS
 {
     /// <summary>
-    /// AI 接口设置的独立画面：服务端点（下拉）、模型（下拉 + 可手工输入）、API Key、超时。
+    /// AI 设置的独立画面：<b>调用方式</b>（云端 OpenAI 兼容接口 / 本机 Claude Code CLI）、
+    /// 服务端点（下拉）、模型（下拉 + 可手工输入）、API Key、超时；
+    /// 选择本机 Claude Code 时<b>不需要填 claude 路径</b>：默认「自动查找」（先 PATH，再常见安装位置），
+    /// 只有装在非常规位置时才勾掉自动、手工指定。
     /// 保存到 %APPDATA%\MSIFAITOOLS\ai-settings.json，保存后立即生效（无需重启程序）。
     /// </summary>
     public partial class AiSettingsForm : Form
@@ -25,6 +28,13 @@ namespace MSIFAITOOLS
             "deepseek-r1",
             "qwen2.5-72b-instruct",
             "gpt-4o-mini"
+        };
+
+        /// <summary>调用方式下拉列表的预设。</summary>
+        private static readonly ProviderPreset[] ProviderPresets =
+        {
+            new ProviderPreset("云端接口（OpenAI 兼容）", AiApiOptions.ProviderCompatibleApi),
+            new ProviderPreset("本地 Claude Code CLI", AiApiOptions.ProviderClaudeCodeCli)
         };
 
         /// <summary>服务端点下拉列表的预设（最后一项为“自定义”）。</summary>
@@ -71,6 +81,13 @@ namespace MSIFAITOOLS
 
                 FillEndpointPresets(current.BaseUrl);
                 FillModelPresets(current.Model);
+                FillProviderPresets(current.Provider);
+                // 路径留空 = 自动查找（一般情况），此时勾上「自动查找」并禁用路径框
+                chkClaudeAuto.Checked = current.ClaudeCliPath.Length == 0;
+                txtClaudePath.Text = current.ClaudeCliPath;
+                txtClaudeModel.Text = current.ClaudeModel;
+                txtClaudeEnv.Text = current.ClaudeCliEnvironment;
+                UpdateProviderUi();
 
                 if (!string.IsNullOrEmpty(AiApiOptions.LastSettingsError))
                 {
@@ -132,6 +149,182 @@ namespace MSIFAITOOLS
 
             cboModel.Text = string.IsNullOrWhiteSpace(model) ? AiApiOptions.DefaultModel : model;
         }
+
+        /// <summary>填充调用方式下拉列表，并选中当前配置的方式。</summary>
+        private void FillProviderPresets(string provider)
+        {
+            cboProvider.Items.Clear();
+
+            foreach (ProviderPreset preset in ProviderPresets)
+            {
+                cboProvider.Items.Add(preset);
+            }
+
+            string key = AiApiOptions.NormalizeProvider(provider);
+            int matchedIndex = 0;
+
+            for (int i = 0; i < ProviderPresets.Length; i++)
+            {
+                if (string.Equals(ProviderPresets[i].Key, key, StringComparison.Ordinal))
+                {
+                    matchedIndex = i;
+                }
+            }
+
+            cboProvider.SelectedIndex = matchedIndex;
+        }
+
+        /// <summary>当前下拉框选中的调用方式（api / claude-cli）。</summary>
+        private string SelectedProvider
+        {
+            get
+            {
+                ProviderPreset preset = cboProvider.SelectedItem as ProviderPreset;
+
+                return preset == null ? AiApiOptions.ProviderCompatibleApi : preset.Key;
+            }
+        }
+
+        /// <summary>按调用方式切换要显示的参数区（云端接口 / 本机 Claude Code CLI）。</summary>
+        private void UpdateProviderUi()
+        {
+            bool cli = string.Equals(SelectedProvider, AiApiOptions.ProviderClaudeCodeCli,
+                StringComparison.Ordinal);
+
+            grpConnection.Visible = !cli;
+            grpCli.Visible = cli;
+
+            UpdateClaudePathUi();
+            UpdateProviderNote();
+        }
+
+        /// <summary>切换调用方式时立刻切换参数区（不写配置）。</summary>
+        private void CboProvider_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_loading)
+            {
+                return;
+            }
+
+            UpdateProviderUi();
+        }
+
+        /// <summary>勾选 / 取消「自动查找」时切换路径框可用状态，并刷新提示。</summary>
+        private void ChkClaudeAuto_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_loading)
+            {
+                return;
+            }
+
+            UpdateClaudePathUi();
+            UpdateProviderNote();
+        }
+
+        /// <summary>
+        /// 路径框只在「不自动查找」时可编辑：默认自动查找（PATH → 常见安装位置），
+        /// 用户在本机 cmd 里能直接敲 claude 的话，这里什么都不用填。
+        /// </summary>
+        private void UpdateClaudePathUi()
+        {
+            bool manual = !chkClaudeAuto.Checked;
+
+            txtClaudePath.Enabled = manual && !_busy;
+            btnBrowseClaude.Enabled = manual && !_busy;
+        }
+
+        /// <summary>界面上的 claude 路径：勾选「自动查找」时视为空（= 自动）。</summary>
+        private string ClaudeCliPathFromUi
+        {
+            get { return chkClaudeAuto.Checked ? string.Empty : txtClaudePath.Text.Trim(); }
+        }
+
+        /// <summary>刷新「调用方式」下面的提示行：cli 模式显示实际找到的 claude 位置。</summary>
+        private void UpdateProviderNote()
+        {
+            if (!string.Equals(SelectedProvider, AiApiOptions.ProviderClaudeCodeCli, StringComparison.Ordinal))
+            {
+                UiLocalization.SetText(lblProviderNote, "云端接口：OpenAI 兼容的 /chat/completions。");
+                return;
+            }
+
+            string resolvedPath;
+            string error;
+
+            if (ClaudeCodeCliClient.TryResolveExecutable(ClaudeCliPathFromUi, out resolvedPath, out error))
+            {
+                UiLocalization.SetText(lblProviderNote, "本地 Claude Code：已找到 " + resolvedPath);
+            }
+            else
+            {
+                UiLocalization.SetText(lblProviderNote,
+                    "本地 Claude Code：未找到 claude（请先在终端确认能运行 claude）");
+            }
+        }
+
+        /// <summary>
+        /// 选择 claude.exe / claude.cmd 的位置（只有装在非常规位置时才需要；选完自动取消「自动查找」）。
+        /// </summary>
+        private void BtnBrowseClaude_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dialog = new OpenFileDialog())
+            {
+                dialog.Title = UiText.T("选择 Claude Code 程序（claude.exe / claude.cmd）");
+                dialog.Filter = "claude（claude.exe / claude.cmd）|claude.exe;claude.cmd;*.exe;*.cmd|所有文件 (*.*)|*.*";
+
+                string current = txtClaudePath.Text.Trim();
+
+                if (current.Length == 0)
+                {
+                    // 没填过时，从自动找到的位置开始找（找不到就保持系统默认目录）
+                    string resolvedPath;
+                    string resolveError;
+
+                    current = ClaudeCodeCliClient.TryResolveExecutable(string.Empty,
+                        out resolvedPath, out resolveError) ? resolvedPath : string.Empty;
+                }
+
+                try
+                {
+                    string directory = Path.GetDirectoryName(current);
+
+                    if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+                    {
+                        dialog.InitialDirectory = directory;
+                    }
+                }
+                catch (Exception)
+                {
+                    // 路径异常时用系统默认目录
+                }
+
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    // 手工指定了路径 → 自动取消「自动查找」，否则填的路径会被忽略
+                    chkClaudeAuto.Checked = false;
+                    txtClaudePath.Text = dialog.FileName;
+                    UpdateProviderNote();
+                }
+            }
+        }
+
+        /// <summary>校验「追加环境变量」的格式（KEY=VALUE，用 ; 分隔）。</summary>
+        private static bool TryValidateEnvironment(string text, out string error)
+        {
+            error = string.Empty;
+
+            try
+            {
+                ClaudeCodeCliClient.ParseEnvironment(text);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
 
         /// <summary>把配置中的超时限制在下拉框允许的范围内。</summary>
         private decimal ClampTimeout(int timeoutSeconds)
@@ -229,27 +422,45 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            // 测试连接使用较短超时，避免界面长时间无响应
-            AiApiOptions options = new AiApiOptions(settings.BaseUrl, settings.ApiKey, settings.Model,
-                Math.Min(settings.TimeoutSeconds, TestTimeoutSeconds), AiApiOptions.SourceUserSettings);
+            // 测试连接使用较短超时，避免界面长时间无响应；
+            // 本机 Claude Code CLI 首次启动 + 模型响应可能较慢，给到设置里的超时（最多 300 秒）
+            int testTimeoutSeconds =
+                string.Equals(settings.Provider, AiApiOptions.ProviderClaudeCodeCli, StringComparison.Ordinal)
+                    ? Math.Min(settings.TimeoutSeconds, 300)
+                    : Math.Min(settings.TimeoutSeconds, TestTimeoutSeconds);
 
-            SetBusy(true, "正在连接 " + options.Endpoint + " ...");
+            AiApiOptions options = new AiApiOptions(settings.BaseUrl, settings.ApiKey, settings.Model,
+                testTimeoutSeconds, AiApiOptions.SourceUserSettings,
+                settings.Provider, settings.ClaudeCliPath, settings.ClaudeModel,
+                settings.ClaudeCliEnvironment);
+
+            SetBusy(true, options.IsClaudeCodeCli
+                ? "正在调用本机 Claude Code CLI（首次启动可能较慢）..."
+                : "正在连接 " + options.Endpoint + " ...");
 
             try
             {
+                ChatCompletionClient client = new ChatCompletionClient(options);
+
                 // 用匿名方法（delegate）代替 Lambda 表达式：Task.Run 需要一个无参委托
                 Func<string> testWork = delegate
                 {
-                    ChatCompletionClient client = new ChatCompletionClient(options);
                     return client.Complete("你是接口连通性测试助手。",
                         "请只回复 OK 两个字符，不要输出任何其它内容。");
                 };
 
                 string reply = await Task.Run(testWork);
 
+                // 顺带显示这次测试消耗的 token（接口没返回用量时不显示）
+                string usageNote = client.LastUsage == null || !client.LastUsage.IsAvailable
+                    ? string.Empty
+                    : "（" + client.LastUsage.Describe() + "）";
+
                 SetBusy(false, string.Empty);
                 lblStatus.ForeColor = Color.FromArgb(46, 125, 50);
-                UiLocalization.SetText(lblStatus, "连接成功，模型返回：" + Shorten(reply, 60));
+                UiLocalization.SetText(lblStatus, (options.IsClaudeCodeCli
+                    ? "调用成功，Claude 返回：" + Shorten(reply, 60)
+                    : "连接成功，模型返回：" + Shorten(reply, 60)) + usageNote);
             }
             catch (Exception ex)
             {
@@ -279,9 +490,45 @@ namespace MSIFAITOOLS
         {
             error = string.Empty;
 
+            string provider = SelectedProvider;
+            bool cli = string.Equals(provider, AiApiOptions.ProviderClaudeCodeCli, StringComparison.Ordinal);
             string baseUrl = txtBaseUrl.Text.Trim();
             string apiKey = txtApiKey.Text.Trim();
             string model = cboModel.Text.Trim();
+            string claudeCliPath = ClaudeCliPathFromUi;
+            string claudeModel = txtClaudeModel.Text.Trim();
+            string claudeCliEnvironment = txtClaudeEnv.Text.Trim();
+
+            // 本机 Claude Code：不要求接口地址 / 密钥，只校验「路径能不能找到」与「环境变量格式」
+            if (cli)
+            {
+                if (claudeCliPath.Length > 0 && ClaudeCodeCliClient.FindOnPath(claudeCliPath).Length == 0)
+                {
+                    error = "找不到 claude 程序：" + claudeCliPath +
+                        "（请确认路径，或勾选「自动查找」让它按 PATH / 常见安装位置查找）";
+                    return null;
+                }
+
+                string environmentError;
+
+                if (!TryValidateEnvironment(claudeCliEnvironment, out environmentError))
+                {
+                    error = environmentError;
+                    return null;
+                }
+
+                return new AiSettings
+                {
+                    BaseUrl = baseUrl,
+                    ApiKey = apiKey,
+                    Model = model,
+                    TimeoutSeconds = (int)numTimeout.Value,
+                    Provider = AiApiOptions.ProviderClaudeCodeCli,
+                    ClaudeCliPath = claudeCliPath,
+                    ClaudeModel = claudeModel,
+                    ClaudeCliEnvironment = claudeCliEnvironment
+                };
+            }
 
             if (baseUrl.Length == 0)
             {
@@ -300,7 +547,7 @@ namespace MSIFAITOOLS
 
             if (apiKey.Length == 0)
             {
-                error = "请填写 API Key。";
+                error = "请填写 API Key（或把调用方式切换为「本地 Claude Code CLI」）。";
                 return null;
             }
 
@@ -315,7 +562,11 @@ namespace MSIFAITOOLS
                 BaseUrl = baseUrl,
                 ApiKey = apiKey,
                 Model = model,
-                TimeoutSeconds = (int)numTimeout.Value
+                TimeoutSeconds = (int)numTimeout.Value,
+                Provider = AiApiOptions.ProviderCompatibleApi,
+                ClaudeCliPath = claudeCliPath,
+                ClaudeModel = claudeModel,
+                ClaudeCliEnvironment = claudeCliEnvironment
             };
         }
 
@@ -338,6 +589,17 @@ namespace MSIFAITOOLS
             {
                 cboModel.Focus();
             }
+            else if (message.IndexOf("claude 程序", StringComparison.Ordinal) >= 0)
+            {
+                if (!chkClaudeAuto.Checked)
+                {
+                    txtClaudePath.Focus();
+                }
+            }
+            else if (message.IndexOf("环境变量", StringComparison.Ordinal) >= 0)
+            {
+                txtClaudeEnv.Focus();
+            }
         }
 
         /// <summary>统一弹窗：标题 / 正文都按当前语言翻译（正文里的动态部分由对照表的模板匹配处理）。</summary>
@@ -353,14 +615,24 @@ namespace MSIFAITOOLS
             _busy = busy;
             UseWaitCursor = busy;
 
+            cboProvider.Enabled = !busy;
             cboEndpointPreset.Enabled = !busy;
             txtBaseUrl.Enabled = !busy;
             cboModel.Enabled = !busy;
             txtApiKey.Enabled = !busy;
             chkShowKey.Enabled = !busy;
+            chkClaudeAuto.Enabled = !busy;
+            txtClaudePath.Enabled = !busy;
+            btnBrowseClaude.Enabled = !busy;
+            txtClaudeModel.Enabled = !busy;
+            txtClaudeEnv.Enabled = !busy;
             numTimeout.Enabled = !busy;
             btnTest.Enabled = !busy;
             btnSave.Enabled = !busy;
+
+            // 勾着「自动查找」时路径框保持禁用（上面统一按 busy 置位后再纠正一次）
+            UpdateClaudePathUi();
+
             UiLocalization.SetText(btnTest, busy ? "测试中..." : "测试连接");
 
             if (!string.IsNullOrEmpty(status))
@@ -397,6 +669,27 @@ namespace MSIFAITOOLS
             return singleLine.Length <= maxLength
                 ? singleLine
                 : singleLine.Substring(0, maxLength) + "...";
+        }
+
+        /// <summary>调用方式下拉列表项。</summary>
+        private sealed class ProviderPreset
+        {
+            public ProviderPreset(string name, string key)
+            {
+                Name = name;
+                Key = key;
+            }
+
+            /// <summary>下拉列表中显示的名称（中文原文，日语查对照表）。</summary>
+            public string Name { get; private set; }
+
+            /// <summary>配置里保存的值（api / claude-cli）。</summary>
+            public string Key { get; private set; }
+
+            public override string ToString()
+            {
+                return UiText.T(Name);
+            }
         }
 
         /// <summary>服务端点下拉列表项。</summary>

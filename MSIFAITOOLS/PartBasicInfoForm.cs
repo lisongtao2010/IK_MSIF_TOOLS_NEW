@@ -440,7 +440,10 @@ namespace MSIFAITOOLS
         /// 初始化部品明细表格的列（与 <see cref="PopulateParts"/> 的填充顺序一致）。
         /// 前 14 列是业务必需列，按「番号 / 部材名 / 部品名 / 区分 / 数量 / 切断寸法 / 部品コード /
         /// 参照元 / H下限 / H上限 / W下限 / W上限 / 使い分け / 特注」的顺序优先显示，其余为辅助列。
-        /// 除「No」「参照元」「数据来源」「登录时间」以外均可编辑；「校验状态」为下拉选择。
+        /// 除「No」「数据来源」「登录时间」以外均可编辑；「校验状态」为下拉选择。
+        /// 「参照元」画面上可以手工编辑，但<b>登录数据库时统一写成「図番」的前 10 位</b>
+        /// （见 <see cref="PartBasicInfoRepository.ReferenceTagLength"/> 与 <c>ResolveReferenceTag</c>），
+        /// 保存后画面重新载入会显示回「図番」的前 10 位。
         /// </summary>
         private void InitializePartsGrid()
         {
@@ -457,10 +460,17 @@ namespace MSIFAITOOLS
             AddColumn("colQuantity", "数量", 56, DataGridViewContentAlignment.MiddleCenter, false);
             AddColumn("colCutSize", "切断寸法", 100, DataGridViewContentAlignment.MiddleLeft, false);
             AddColumn("colPartCode", "部品コード", 102, DataGridViewContentAlignment.MiddleLeft, false);
-            // 参照元 = 该行的「図番」的前 10 位（写库时统一由 PartBasicInfoRepository.BindInsertParameters
-            // 按 ResolveReferenceTag 填；老数据库打开时也会把旧值改成同样的前 10 位），画面只读；
+            // 参照元 = 该行的「図番」的前 10 位：画面上允许手工编辑（对照图纸 / 导出 Excel 时方便），
+            // 但登录数据库时统一由 PartBasicInfoRepository.BindInsertParameters 按 ResolveReferenceTag
+            // 覆盖成「図番」的前 10 位（老数据库打开时也会把不等于该值的行改成同样的前 10 位），
+            // 所以点【保存】后画面重新载入会显示回「図番」的前 10 位；
             // 来源分类看后面的「数据来源」列
-            AddColumn("colSourceTag", "参照元", 92, DataGridViewContentAlignment.MiddleCenter);
+            AddColumn("colSourceTag", "参照元", 92, DataGridViewContentAlignment.MiddleCenter, false);
+            // 表头提示：说清楚「能改，但保存后会被 図番 前 10 位 覆盖」
+            dgvParts.Columns["colSourceTag"].HeaderCell.ToolTipText =
+                "参照元 = 这一行的「図番」的前 10 位（登录数据库时由程序统一写入）。\n" +
+                "画面上可以手工编辑（导出 Excel 用的是画面上的值），\n" +
+                "但点【保存】后会改回「図番」的前 10 位。";
             AddColumn("colHeightMin", "H下限", 64, DataGridViewContentAlignment.MiddleCenter, false);
             AddColumn("colHeightMax", "H上限", 64, DataGridViewContentAlignment.MiddleCenter, false);
             AddColumn("colWidthMin", "W下限", 64, DataGridViewContentAlignment.MiddleCenter, false);
@@ -492,7 +502,10 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>添加一个文本列。</summary>
-        /// <param name="readOnly">true = 只读（No、参照元、数据来源、登录时间等由程序维护的列）。</param>
+        /// <param name="readOnly">
+        /// true = 只读（No、数据来源、登录时间等由程序维护的列）；
+        /// 「参照元」虽然登录数据库时由程序覆盖成「図番」前 10 位，但画面上允许手工编辑，所以传 false。
+        /// </param>
         private void AddColumn(string name, string headerText, int width,
             DataGridViewContentAlignment alignment, bool readOnly = true)
         {
@@ -1036,6 +1049,8 @@ namespace MSIFAITOOLS
                 {
                     // 未修改的行沿用原来的来源与登录时间
                     part.SourceKind = origin.SourceKind ?? string.Empty;
+                    // 「参照元」不取画面上的值（画面上可以手工编辑，只影响「保存 Excel」导出）：
+                    // 登录数据库时由仓储统一按「図番」前 10 位覆盖，见 PartBasicInfoRepository.BindInsertParameters
                     part.SourceTag = origin.SourceTag ?? string.Empty;
                     part.SourceFile = origin.SourceFile ?? string.Empty;
                     part.PdfFile = string.IsNullOrEmpty(origin.PdfFile) ? _pdfPath : origin.PdfFile;
@@ -1959,7 +1974,7 @@ namespace MSIFAITOOLS
         /// <list type="bullet">
         ///   <item><b>右键</b>（<see cref="_rightClickInProgress"/>）→ 只弹右键菜单（插入行 / 删除行），不进入编辑；</item>
         ///   <item>「部材名」→ 打开「选择部材名」窗口（<see cref="ShowMemberNamePicker"/>），不进入普通编辑；</item>
-        ///   <item>只读列（No / 参照元 / 数据来源 / 登录时间）→ 只选中单元格；</item>
+        ///   <item>只读列（No / 数据来源 / 登录时间）→ 只选中单元格；</item>
         ///   <item>其它列 → 选中 + 进入编辑 + 全选（再打一个字就替换掉原来的值）。</item>
         /// </list>
         /// </summary>

@@ -5,7 +5,7 @@ using System.Globalization;
 namespace MSIFAITOOLS.Services
 {
     /// <summary>
-    /// AI（OpenAI 兼容接口）的连接配置。
+    /// AI 的连接配置：<b>调用方式</b>（云端 OpenAI 兼容接口 / 本机 Claude Code CLI）+ 各自的参数。
     /// 取值优先级：环境变量 → AI 设置画面保存的用户配置（%APPDATA%\MSIFAITOOLS\ai-settings.json）
     /// → App.config 的 appSettings → 内置默认值。
     /// </summary>
@@ -32,6 +32,37 @@ namespace MSIFAITOOLS.Services
         /// <summary>App.config 中的超时键名。</summary>
         public const string TimeoutSettingKey = "AiTimeoutSeconds";
 
+        /// <summary>调用方式：云端 OpenAI 兼容接口（默认）。</summary>
+        public const string ProviderCompatibleApi = "api";
+
+        /// <summary>调用方式：本机 Claude Code CLI（claude -p）。</summary>
+        public const string ProviderClaudeCodeCli = "claude-cli";
+
+        /// <summary>App.config 中的「调用方式」键名（api / claude-cli）。</summary>
+        public const string ProviderSettingKey = "AiProvider";
+
+        /// <summary>App.config 中的「本机 Claude Code 路径」键名。</summary>
+        public const string ClaudeCliPathSettingKey = "ClaudeCliPath";
+
+        /// <summary>App.config 中的「本机 Claude Code 模型」键名（留空 = 用本机默认模型）。</summary>
+        public const string ClaudeModelSettingKey = "ClaudeModel";
+
+        /// <summary>App.config 中的「本机 Claude Code 追加环境变量」键名（KEY=VALUE;…）。</summary>
+        public const string ClaudeCliEnvironmentSettingKey = "ClaudeCliEnvironment";
+
+        /// <summary>覆盖调用方式的环境变量。</summary>
+        public const string ProviderEnvironmentKey = "MSIF_AI_PROVIDER";
+
+        /// <summary>覆盖本机 Claude Code 路径的环境变量。</summary>
+        public const string ClaudeCliPathEnvironmentKey = "MSIF_CLAUDE_CLI_PATH";
+
+        /// <summary>覆盖本机 Claude Code 模型的环境变量。</summary>
+        public const string ClaudeModelEnvironmentKey = "MSIF_CLAUDE_MODEL";
+
+        /// <summary>覆盖本机 Claude Code 追加环境变量的环境变量。</summary>
+        public const string ClaudeCliEnvironmentEnvironmentKey = "MSIF_CLAUDE_CLI_ENV";
+
+
         /// <summary>覆盖接口地址的环境变量。</summary>
         public const string BaseUrlEnvironmentKey = "MSIF_AI_BASE_URL";
 
@@ -55,12 +86,25 @@ namespace MSIFAITOOLS.Services
 
         public AiApiOptions(string baseUrl, string apiKey, string model, int timeoutSeconds,
             string source = SourceDefault)
+            : this(baseUrl, apiKey, model, timeoutSeconds, source, null, null, null, null)
+        {
+        }
+
+        public AiApiOptions(string baseUrl, string apiKey, string model, int timeoutSeconds,
+            string source, string provider, string claudeCliPath, string claudeModel,
+            string claudeCliEnvironment)
         {
             BaseUrl = string.IsNullOrWhiteSpace(baseUrl) ? DefaultBaseUrl : baseUrl.Trim();
             ApiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
             Model = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
             TimeoutSeconds = timeoutSeconds <= 0 ? DefaultTimeoutSeconds : timeoutSeconds;
             ConfigurationSource = string.IsNullOrWhiteSpace(source) ? SourceDefault : source;
+            Provider = NormalizeProvider(provider);
+            ClaudeCliPath = string.IsNullOrWhiteSpace(claudeCliPath) ? string.Empty : claudeCliPath.Trim();
+            ClaudeModel = string.IsNullOrWhiteSpace(claudeModel) ? string.Empty : claudeModel.Trim();
+            ClaudeCliEnvironment = string.IsNullOrWhiteSpace(claudeCliEnvironment)
+                ? string.Empty
+                : claudeCliEnvironment.Trim();
         }
 
         /// <summary>接口基础地址（不含 /chat/completions）。</summary>
@@ -78,16 +122,70 @@ namespace MSIFAITOOLS.Services
         /// <summary>本次配置的实际来源（环境变量 / AI 设置画面 / App.config / 内置默认值）。</summary>
         public string ConfigurationSource { get; private set; }
 
+        /// <summary>
+        /// 调用方式：<see cref="ProviderCompatibleApi"/>（云端 OpenAI 兼容接口）
+        /// 或 <see cref="ProviderClaudeCodeCli"/>（本机 Claude Code CLI）。
+        /// </summary>
+        public string Provider { get; private set; }
+
+        /// <summary>
+        /// 本机 Claude Code 的可执行文件路径（claude.exe / claude.cmd）。
+        /// 留空 = 按常见安装位置与 PATH 自动查找（见 <see cref="ClaudeCodeCliClient.ResolveExecutable"/>）。
+        /// </summary>
+        public string ClaudeCliPath { get; private set; }
+
+        /// <summary>本机 Claude Code 的模型名（留空 = 用本机默认模型）。</summary>
+        public string ClaudeModel { get; private set; }
+
+        /// <summary>本机 Claude Code 的追加环境变量（KEY=VALUE，用 ; 分隔；可空）。</summary>
+        public string ClaudeCliEnvironment { get; private set; }
+
+        /// <summary>当前是否使用本机 Claude Code CLI。</summary>
+        public bool IsClaudeCodeCli
+        {
+            get { return string.Equals(Provider, ProviderClaudeCodeCli, StringComparison.OrdinalIgnoreCase); }
+        }
+
+        /// <summary>日志 / 界面显示用的调用方式名称。</summary>
+        public string ProviderDisplayName
+        {
+            get { return IsClaudeCodeCli ? "本地 Claude Code CLI" : "云端接口（OpenAI 兼容）"; }
+        }
+
         /// <summary>聊天补全接口的完整地址。</summary>
         public string Endpoint
         {
             get { return BaseUrl.TrimEnd('/') + "/chat/completions"; }
         }
 
-        /// <summary>是否已配置密钥（未配置时不允许发起分析）。</summary>
+        /// <summary>是否已配置（CLI 模式不要求 API Key；接口模式必须有密钥）。</summary>
         public bool IsConfigured
         {
-            get { return ApiKey.Length > 0; }
+            get { return IsClaudeCodeCli || ApiKey.Length > 0; }
+        }
+
+        /// <summary>
+        /// 规范化调用方式：只认 <c>claude-cli</c>（含 claude / claude-code / cli 等写法），
+        /// 其它值一律按云端接口处理。
+        /// </summary>
+        public static string NormalizeProvider(string provider)
+        {
+            if (string.IsNullOrWhiteSpace(provider))
+            {
+                return ProviderCompatibleApi;
+            }
+
+            string text = provider.Trim();
+
+            if (string.Equals(text, ProviderClaudeCodeCli, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(text, "claude", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(text, "claude-code", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(text, "cli", StringComparison.OrdinalIgnoreCase))
+            {
+                return ProviderClaudeCodeCli;
+            }
+
+            return ProviderCompatibleApi;
         }
 
         /// <summary>
@@ -114,10 +212,23 @@ namespace MSIFAITOOLS.Services
                 userSettings == null ? null : userSettings.BaseUrl, out source);
             string apiKey = ReadSetting(ApiKeyEnvironmentKey, ApiKeySettingKey, string.Empty,
                 userSettings == null ? null : userSettings.ApiKey, out source);
-            // 以密钥的来源代表整体配置来源（密钥是判定“是否已配置”的关键）
-            string apiKeySource = source;
             string model = ReadSetting(ModelEnvironmentKey, ModelSettingKey, DefaultModel,
                 userSettings == null ? null : userSettings.Model, out source);
+
+            // 调用方式：api（云端接口） / claude-cli（本机 Claude Code）
+            string provider = ReadSetting(ProviderEnvironmentKey, ProviderSettingKey,
+                ProviderCompatibleApi,
+                userSettings == null ? null : userSettings.Provider, out source);
+            string providerSource = source;
+            string claudeCliPath = ReadSetting(ClaudeCliPathEnvironmentKey, ClaudeCliPathSettingKey,
+                string.Empty,
+                userSettings == null ? null : userSettings.ClaudeCliPath, out source);
+            string claudeModel = ReadSetting(ClaudeModelEnvironmentKey, ClaudeModelSettingKey,
+                string.Empty,
+                userSettings == null ? null : userSettings.ClaudeModel, out source);
+            string claudeCliEnvironment = ReadSetting(ClaudeCliEnvironmentEnvironmentKey,
+                ClaudeCliEnvironmentSettingKey, string.Empty,
+                userSettings == null ? null : userSettings.ClaudeCliEnvironment, out source);
 
             int timeoutSeconds = DefaultTimeoutSeconds;
             string timeoutText = ReadSetting("MSIF_AI_TIMEOUT_SECONDS", TimeoutSettingKey,
@@ -136,7 +247,8 @@ namespace MSIFAITOOLS.Services
                 timeoutSeconds = parsedTimeout;
             }
 
-            return new AiApiOptions(baseUrl, apiKey, model, timeoutSeconds, apiKeySource);
+            return new AiApiOptions(baseUrl, apiKey, model, timeoutSeconds, providerSource,
+                provider, claudeCliPath, claudeModel, claudeCliEnvironment);
         }
 
         /// <summary>用户配置文件读取失败的原因（为空表示正常或文件不存在）。</summary>
@@ -145,6 +257,15 @@ namespace MSIFAITOOLS.Services
         /// <summary>日志用的配置摘要（不输出完整密钥）。</summary>
         public string Describe()
         {
+            if (IsClaudeCodeCli)
+            {
+                return string.Format("调用方式 {0}，路径 {1}，模型 {2}（来源：{3}）",
+                    ProviderDisplayName,
+                    ClaudeCliPath.Length == 0 ? "自动查找" : ClaudeCliPath,
+                    ClaudeModel.Length == 0 ? "本机默认" : ClaudeModel,
+                    ConfigurationSource);
+            }
+
             return string.Format("接口 {0}，模型 {1}，密钥 {2}（来源：{3}）", BaseUrl, Model,
                 MaskApiKey(), ConfigurationSource);
         }

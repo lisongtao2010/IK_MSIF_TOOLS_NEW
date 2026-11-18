@@ -22,6 +22,27 @@ namespace MSIFAITOOLS.Services
         private static readonly Dictionary<string, string> JapaneseTexts =
             new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            // ─────────────────── AI 设置：调用方式（云端接口 / 本地 Claude Code） ───────────────────
+            { "AI 设置（接口 / 本地 Claude Code）", "AI 設定（API / ローカル Claude Code）" },
+            { "调用方式", "呼び出し方法" },
+            { "云端接口（OpenAI 兼容）", "クラウドAPI（OpenAI互換）" },
+            { "本地 Claude Code CLI", "ローカル Claude Code CLI" },
+            { "云端接口：OpenAI 兼容的 /chat/completions。", "クラウドAPI：OpenAI互換の /chat/completions。" },
+            { "本地 Claude Code：调用本机已登录的 claude -p，不需要 API Key。", "ローカル Claude Code：本機でログイン済みの claude -p を呼び出します（API Key は不要）。" },
+            { "claude 路径（可选）", "claude のパス（任意）" },
+            { "本地 Claude Code CLI 参数", "ローカル Claude Code CLI の設定" },
+            { "自动查找（使用 PATH 与常见安装位置）", "自動検索（PATH と一般的なインストール先を使用）" },
+            { "本地 Claude Code：已找到 {0}", "ローカル Claude Code：検出しました {0}" },
+            { "本地 Claude Code：未找到 claude（请先在终端确认能运行 claude）", "ローカル Claude Code：claude が見つかりません（まずターミナルで claude が実行できるか確認してください）" },
+            { "模型（可空）", "モデル（空欄可）" },
+            { "追加环境变量", "追加環境変数" },
+            { "选择 Claude Code 程序（claude.exe / claude.cmd）", "Claude Code のプログラムを選択（claude.exe / claude.cmd）" },
+            { "正在调用本机 Claude Code CLI（首次启动可能较慢）...", "ローカル Claude Code CLI を呼び出しています（初回起動は時間がかかる場合があります）..." },
+            { "调用成功，Claude 返回：{0}", "呼び出し成功、Claude の応答：{0}" },
+            { "找不到 claude 程序：{0}", "claude のプログラムが見つかりません：{0}" },
+            { "请填写 API Key（或把调用方式切换为「本地 Claude Code CLI」）。", "API Key を入力してください（または呼び出し方法を「ローカル Claude Code CLI」に切り替えてください）。" },
+            { "说明：本机需先安装 Claude Code 并完成登录（终端里执行 claude 能对话即可；Google Cloud 等第三方认证也可）。claude 路径留空时自动查找（%USERPROFILE%\\.local\\bin、%APPDATA%\\npm、PATH）。环境变量每项写成 KEY=VALUE，用 ; 分隔（例：CLAUDE_CODE_USE_VERTEX=1;CLOUD_ML_REGION=asia-northeast1），不填则继承本程序的环境变量。用户提示词走标准输入（UTF-8），系统提示词写入临时文件，工作目录为 %TEMP%\\MSIFAITOOLS\\claude-cli。", "説明：本機に Claude Code をインストールしてログイン済みにしてください（ターミナルで claude が会話できれば OK。Google Cloud などの第三者認証でも可）。claude のパスが空欄なら自動検索します（%USERPROFILE%\\.local\\bin、%APPDATA%\\npm、PATH）。環境変数は KEY=VALUE 形式で ; 区切り（例：CLAUDE_CODE_USE_VERTEX=1;CLOUD_ML_REGION=asia-northeast1）。空欄なら本プログラムの環境変数を引き継ぎます。ユーザー側の指示は標準入力（UTF-8）、システムプロンプトは一時ファイルに書き出し、作業ディレクトリは %TEMP%\\MSIFAITOOLS\\claude-cli です。" },
+
             // ───────────────────────── 标题栏 / 语言切换 ─────────────────────────
             { "MSIF AI TOOLS  -  PDF 分解工具（坐标 + 文本 + 分类）", "MSIF AI TOOLS  -  PDF 分解ツール（座標 + テキスト + 分類）" },
             { "PDF 分解工具 · 坐标 / 文本 / plu（pdfplumber 风格）", "PDF 分解ツール · 座標 / テキスト / plu（pdfplumber 準拠）" },

@@ -211,7 +211,8 @@ namespace MSIFAITOOLS.Services
             if (!_options.IsConfigured)
             {
                 throw new InvalidOperationException(
-                    "未配置 AI 接口密钥：请在程序内【AI 设置】中填写 API Key" +
+                    "未配置 AI 调用方式：请在程序内【AI 设置】中填写 API Key，" +
+                    "或把「调用方式」切换为「本地 Claude Code CLI」" +
                     "（也可使用 App.config 的 AiApiKey 或环境变量 MSIF_AI_API_KEY）。");
             }
 

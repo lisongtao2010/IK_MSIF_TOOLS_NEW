@@ -138,6 +138,7 @@
     <Compile Include="Services\AiApiOptions.cs" />
     <Compile Include="Services\AiSettingsStore.cs" />
     <Compile Include="Services\ChatCompletionClient.cs" />
+    <Compile Include="Services\ClaudeCodeCliClient.cs" />
     <Compile Include="Services\AiPartResponseParser.cs" />
     <Compile Include="Services\AiPromptStore.cs" />
     <Compile Include="Services\PluTablePageLocator.cs" />
@@ -211,6 +212,7 @@
     <!-- 【AI 分析】追加机能 · 特注品记录数量设定：
          特注品 Excel（文件名第 5 位 Z，.xls / .xlsx / .xlsm）的整表原文 → AI 判数量 →
          写部品基本信息「数量」列 + classify\特注品.json 的「員数」。 -->
+    <Compile Include="Services\AiTokenUsage.cs" />
     <Compile Include="Services\SpecialProductQuantityAdvisor.cs" />
     <Compile Include="Services\SpecialProductQuantityPromptStore.cs" />
   </ItemGroup>
