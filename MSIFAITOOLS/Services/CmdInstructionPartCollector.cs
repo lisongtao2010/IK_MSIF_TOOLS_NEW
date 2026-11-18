@@ -70,7 +70,9 @@ namespace MSIFAITOOLS.Services
     ///   <item>「品種」出现在分类依据里的行保留 —— 分类依据的正文形如
     ///         <c>table_05.csv：H310 １７ラシッサ 片引戸 枠 アッセンブリ図</c>，先按空白 / 标点
     ///         切成单词做<b>完全一致</b>比较；一条都没命中时（依据里没有分隔符）再退回
-    ///         <b>包含</b>比较，尽量不漏数据；</item>
+    ///         <b>包含</b>比较 —— 此时<b>同一个单词里只认最长的品種</b>：
+    ///         依据 <c>文件名 H467U10002_V片引戸2枚建 枠 アッセンブリ図</c> 只命中
+    ///         「片引戸2枚建」，短的前缀品種「片引戸」不会被误判成命中；</item>
     ///   <item>「品種」<b>为空</b>的行（02 是単純部品表 / 普通部品表，或整张表没有「品種」列）
     ///         代表<b>所有品種共用</b>的部品：<b>不再丢弃</b>，一律登录，备註写 <c>品種：共通</c>；</item>
     ///   <item>部品コード 应该是<b>含英文字母</b>的编码；为空、「―」「-」「／」等占位符、纯数字时
@@ -798,23 +800,82 @@ namespace MSIFAITOOLS.Services
                 return matched;
             }
 
-            // ② 退回包含比较
-            string flat = NormalizeKey(evidence);
+            // ② 退回包含比较：先按单词逐个比（「H467U10002_V片引戸2枚建」这种词里没有分隔符），
+            //    且同一个单词里只认最长的品種 —— 否则「片引戸」会把「片引戸2枚建」的行也抢走；
+            //    单词上一个都没命中时，再把整段依据压平比一次（「片引戸 2枚建」被空格拆开的情况）。
+            List<string> tokenKeys = new List<string>();
 
-            if (flat.Length == 0)
+            foreach (string token in tokens)
             {
-                return matched;
+                string key = NormalizeKey(token);
+
+                if (key.Length > 0)
+                {
+                    tokenKeys.Add(key);
+                }
             }
 
-            foreach (string kindKey in kindList)
+            AddLongestContainsHits(tokenKeys, kindList, matched);
+
+            if (matched.Count == 0)
             {
-                if (flat.IndexOf(kindKey, StringComparison.OrdinalIgnoreCase) >= 0)
+                string flat = NormalizeKey(evidence);
+
+                if (flat.Length > 0)
                 {
-                    matched.Add(kindKey);
+                    AddLongestContainsHits(new string[] { flat }, kindList, matched);
                 }
             }
 
             return matched;
+        }
+
+        /// <summary>
+        /// 包含比较：在 <paramref name="sources"/> 的每一段文字里找出现的品種，
+        /// <b>同一段里只认最长的那些</b>（长度相同则全部保留）。
+        /// 例：依据里的 <c>H467U10002_V片引戸2枚建</c> 同时含「片引戸」与「片引戸2枚建」，
+        /// 只算「片引戸2枚建」命中，品種「片引戸」的行不会被误取。
+        /// </summary>
+        /// <param name="sources">已归一化的依据片段（单词 / 压平后的整段依据）。</param>
+        /// <param name="kindList">该 02 文件里出现过的品種（已归一化）。</param>
+        /// <param name="matched">命中的品種（追加进去）。</param>
+        private static void AddLongestContainsHits(IEnumerable<string> sources, List<string> kindList,
+            HashSet<string> matched)
+        {
+            foreach (string source in sources)
+            {
+                if (string.IsNullOrEmpty(source))
+                {
+                    continue;
+                }
+
+                List<string> hits = new List<string>();
+                int longest = 0;
+
+                foreach (string kindKey in kindList)
+                {
+                    if (source.IndexOf(kindKey, StringComparison.Ordinal) < 0)
+                    {
+                        continue;
+                    }
+
+                    if (kindKey.Length > longest)
+                    {
+                        longest = kindKey.Length;
+                        hits.Clear();
+                    }
+
+                    if (kindKey.Length == longest)
+                    {
+                        hits.Add(kindKey);
+                    }
+                }
+
+                foreach (string hit in hits)
+                {
+                    matched.Add(hit);
+                }
+            }
         }
 
         /// <summary>把分类依据按空白与常见标点切成单词（去掉空串）。</summary>

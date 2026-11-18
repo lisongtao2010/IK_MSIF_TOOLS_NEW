@@ -116,7 +116,9 @@ namespace MSIFAITOOLS.Services
     ///         （顶层 <c>items</c> 数组，字段相同）；</item>
     ///   <item>把分类依据按空白 / 标点切成单词，与 <c>品種</c> 做<b>完全一致</b>比较
     ///         （全角转半角、去空白、忽略大小写）；一个都没命中时再退回<b>包含</b>比较
-    ///         —— 与第 3 步「要領図部品追加」的判定完全一致；</item>
+    ///         —— 与第 3 步「要領図部品追加」的判定完全一致：包含比较时<b>同一个单词里
+    ///         只认最长的品種</b>（依据 <c>H467U10002_V片引戸2枚建</c> 只命中「片引戸2枚建」，
+    ///         短的前缀品種「片引戸」不算命中）；</item>
     ///   <item>命中的条目转成 <see cref="PartBasicInfo"/>：図番 = アッセンブリ図 の図番、页码 = 1，
     ///         部品名 / 枠区分 / 部品コード 取 特注品.json 的同名列，追加対応特注寸法进备注
     ///         （<c>品種：片引戸；特注寸法：2199 ≦Ｗ</c>）、<b>特注 = <see cref="SpecialNoteMark"/></b>（<c>1</c>），
@@ -593,6 +595,13 @@ namespace MSIFAITOOLS.Services
             }
 
             bool useContains = !anyTokenHit && flatEvidence.Length > 0;
+
+            // 包含比较与第 3 步同一套：同一个单词里只认最长的品種
+            // （依据 H467U10002_V片引戸2枚建 只命中「片引戸2枚建」，不会把「片引戸」的明细也带进来）
+            HashSet<string> containsKeys = useContains
+                ? ResolveContainsMatchedKinds(tokens.Keys, kindKeys, flatEvidence)
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             HashSet<string> addedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (CmdTzEntry entry in entries)
@@ -612,7 +621,7 @@ namespace MSIFAITOOLS.Services
                 }
 
                 bool matched = useContains
-                    ? flatEvidence.IndexOf(kindKey, StringComparison.OrdinalIgnoreCase) >= 0
+                    ? containsKeys.Contains(kindKey)
                     : tokens.ContainsKey(kindKey);
 
                 if (!matched)
@@ -1165,6 +1174,88 @@ namespace MSIFAITOOLS.Services
             }
 
             return tokens;
+        }
+
+        /// <summary>
+        /// 包含比较命中的品種：先按单词逐个找，<b>同一个单词里只认最长的那些</b>
+        /// （长度相同则全部保留）；单词上一个都没命中时再把压平后的整段依据比一次。
+        /// 例：依据里的 <c>H467U10002_V片引戸2枚建</c> 同时含「片引戸」与「片引戸2枚建」，
+        /// 只算「片引戸2枚建」命中（与第 3 步 <c>CmdInstructionPartCollector</c> 一致）。
+        /// </summary>
+        /// <param name="tokenKeys">已归一化的依据单词。</param>
+        /// <param name="kindKeys">明细里出现过的品種（已归一化）。</param>
+        /// <param name="flatEvidence">已归一化的整段依据（单词阶段没命中时兜底）。</param>
+        private static HashSet<string> ResolveContainsMatchedKinds(IEnumerable<string> tokenKeys,
+            IEnumerable<string> kindKeys, string flatEvidence)
+        {
+            HashSet<string> matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> kindList = new List<string>();
+
+            foreach (string kindKey in kindKeys)
+            {
+                if (!string.IsNullOrEmpty(kindKey))
+                {
+                    kindList.Add(kindKey);
+                }
+            }
+
+            if (kindList.Count == 0)
+            {
+                return matched;
+            }
+
+            AddLongestContainsHits(tokenKeys, kindList, matched);
+
+            if (matched.Count == 0 && !string.IsNullOrEmpty(flatEvidence))
+            {
+                AddLongestContainsHits(new string[] { flatEvidence }, kindList, matched);
+            }
+
+            return matched;
+        }
+
+        /// <summary>
+        /// 在 <paramref name="sources"/> 的每一段文字里找出现的品種，<b>同一段里只认最长的那几个</b>
+        /// （长度相同全部保留）—— 防止短的前缀品種（「片引戸」）把更具体的品種
+        /// （「片引戸2枚建」）的行也当成命中。
+        /// </summary>
+        private static void AddLongestContainsHits(IEnumerable<string> sources, List<string> kindList,
+            HashSet<string> matched)
+        {
+            foreach (string source in sources)
+            {
+                if (string.IsNullOrEmpty(source))
+                {
+                    continue;
+                }
+
+                List<string> hits = new List<string>();
+                int longest = 0;
+
+                foreach (string kindKey in kindList)
+                {
+                    if (source.IndexOf(kindKey, StringComparison.Ordinal) < 0)
+                    {
+                        continue;
+                    }
+
+                    if (kindKey.Length > longest)
+                    {
+                        longest = kindKey.Length;
+                        hits.Clear();
+                    }
+
+                    if (kindKey.Length == longest)
+                    {
+                        hits.Add(kindKey);
+                    }
+                }
+
+                foreach (string hit in hits)
+                {
+                    matched.Add(hit);
+                }
+            }
         }
 
         /// <summary>把分类依据按空白与常见标点切成单词（去掉空串）。</summary>

@@ -79,6 +79,7 @@
     </Compile>
     <Compile Include="Form1.Localization.cs">
       <DependentUpon>Form1.cs</DependentUpon>
+      <SubType>Form</SubType>
     </Compile>
     <Compile Include="PdfPreviewForm.cs">
       <SubType>Form</SubType>
