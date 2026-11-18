@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using UglyToad.PdfPig;
 using UglyToad.PdfPig.Content;
 using UglyToad.PdfPig.Core;
+using UglyToad.PdfPig.Graphics;
 
 namespace CadPartSplitter
 {
@@ -88,6 +88,22 @@ namespace CadPartSplitter
             string pdfPath, int pageIndex, int imgWidth, int imgHeight, DetectorOptions opts,
             List<StruckWordMark> struckPageWords)
         {
+            // 兼容旧调用：自己解析一次本页（流水线内部用下面的 PdfPageContent 重载，全页只解析一次）
+            // 日志用 o.Log（opts 可能为 null；Log 是方法、不是委托，不能直接放进条件表达式）。
+            DetectorOptions o = opts ?? new DetectorOptions();
+
+            return Extract(PdfPageContent.Load(pdfPath, pageIndex, o.Log),
+                           imgWidth, imgHeight, opts, struckPageWords);
+        }
+
+        /// <summary>
+        /// 同上，但直接使用已经解析好的页面内容（<see cref="PdfPageContent"/>：页面尺寸 + 词 + 矢量路径），
+        /// 不再打开 PDF。流水线里同一页的文字 / 圈号 / 表格共用这一份解析结果。
+        /// </summary>
+        public static List<RuledTable> Extract(
+            PdfPageContent page, int imgWidth, int imgHeight, DetectorOptions opts,
+            List<StruckWordMark> struckPageWords)
+        {
             var tables = new List<RuledTable>();
             DetectorOptions o = opts ?? new DetectorOptions();
             Action<string> write = o.Log;
@@ -98,196 +114,192 @@ namespace CadPartSplitter
                 return tables;
             }
 
-            if (string.IsNullOrWhiteSpace(pdfPath))
+            if (page == null || !page.IsValid)
+                return tables;      // 解析失败 / 页码越界：PdfPageContent.Load 里已经写过 WARN
+
+            if (imgWidth <= 0 || imgHeight <= 0)
+            {
+                write("[WARN] 页面尺寸或渲染尺寸无效，跳过表格内容提取。");
                 return tables;
+            }
 
             try
             {
-                using (var doc = PdfDocument.Open(pdfPath))
+                double pageW = page.Width, pageH = page.Height;
+
+                double scaleX = imgWidth / pageW;
+                double scaleY = imgHeight / pageH;
+                double mmPerPx = 25.4 / Math.Max(1.0, o.RenderDpi);
+
+                // 毫米参数 → PDF 单位（pt）
+                double tol = Math.Max(0.1, o.RuledTableLineToleranceMm) * PtPerMm;
+                double minLine = Math.Max(0.2, o.RuledTableMinLineMm) * PtPerMm;
+                double minCell = Math.Max(0.5, o.RuledTableMinCellMm) * PtPerMm;
+                double maxRowGap = Math.Max(minCell * 2.0, o.RuledTableMaxRowGapMm * PtPerMm);
+
+                var horizontals = new List<Seg>();
+                var verticals = new List<Seg>();
+
+                // 斜边不进框线集合，只用来认「三角形注記符号（△1 这种提醒记号）」：
+                // 三角形是矢量图形、里面的数字却在文字层里，不认出来就会被当成格子内容
+                // （H986U10002 的 切断寸法「100」旁边有个 △1 → 拼成「100 1」）
+                var diagonals = new List<Diag>();
+
+                int pathCount = CollectLineSegments(page.Paths, tol, minLine, horizontals, verticals, diagonals);
+
+                MergeCollinear(horizontals, tol);
+                MergeCollinear(verticals, tol);
+
+                write("[INFO] 表格框线：矢量路径 " + pathCount + " 条 → 横线 "
+                      + horizontals.Count + " 条 / 竖线 " + verticals.Count
+                      + " 条（共线段已合并，容差 "
+                      + o.RuledTableLineToleranceMm.ToString("0.##") + "mm）");
+
+                // 文字层先读出来：识别「取り消し線（划掉整行的横线）」要靠它 ——
+                // 横线从字身中间穿过、又把字整个盖住，那是 CAD 图里「这一行作废」的画法，不是格子边
+                List<WordBox> words = ReadWords(page.Words);
+
+                int dupWords = CountOverlappingDuplicates(words);
+
+                if (dupWords > 0)
                 {
-                    Page page = doc.GetPage(pageIndex + 1);   // PdfPig 的页码从 1 开始
+                    write("[INFO] 表格文字：有 " + dupWords + " 个词是同一个词重叠画了两遍"
+                          + "（CAD 文字重复放置 —— 表头会落成 部部品品ココーードド 这种样子）"
+                          + "→ 拼接格内文字时只留一个。");
+                }
 
-                    double pageW = page.Width, pageH = page.Height;
-                    if (pageW <= 0 || pageH <= 0 || imgWidth <= 0 || imgHeight <= 0)
+                var struckWords = new bool[words.Count];
+
+                int strikeLines = DropStrikeLines(
+                    horizontals, words, tol, minCell, struckWords, out List<Seg> strikeSegs);
+
+                if (strikeLines > 0)
+                {
+                    write("[INFO] 表格框线：剔除 " + strikeLines + " 条 取り消し線（横穿文字的划线，"
+                          + "不是格子边）→ 横线剩 " + horizontals.Count + " 条");
+
+                    foreach (Seg s in strikeSegs)
                     {
-                        write("[WARN] 页面尺寸或渲染尺寸无效，跳过表格内容提取。");
-                        return tables;
+                        write("[INFO]   划线 px(y=" + Math.Round((pageH - s.P) * scaleY)
+                              + " x=" + Math.Round(s.A * scaleX) + "~" + Math.Round(s.B * scaleX) + ")");
                     }
+                }
 
-                    double scaleX = imgWidth / pageW;
-                    double scaleY = imgHeight / pageH;
-                    double mmPerPx = 25.4 / Math.Max(1.0, o.RenderDpi);
+                int struckWordsCount = 0;
+                foreach (bool b in struckWords) if (b) struckWordsCount++;
 
-                    // 毫米参数 → PDF 单位（pt）
-                    double tol = Math.Max(0.1, o.RuledTableLineToleranceMm) * PtPerMm;
-                    double minLine = Math.Max(0.2, o.RuledTableMinLineMm) * PtPerMm;
-                    double minCell = Math.Max(0.5, o.RuledTableMinCellMm) * PtPerMm;
-                    double maxRowGap = Math.Max(minCell * 2.0, o.RuledTableMaxRowGapMm * PtPerMm);
+                // 页面级「被划掉的词」先交出去（与有没有表格无关）：
+                // 图纸上没画表格、把要領図索引写成自由文字的組立図（H527U10001）也可能
+                // 把其中一条划掉 —— 那时没有 tables_info.json 可查，只能靠这份清单传给下游。
+                int pageStruck = CollectStruckPageWords(
+                    struckPageWords, words, struckWords, pageH, scaleX, scaleY);
 
-                    var horizontals = new List<Seg>();
-                    var verticals = new List<Seg>();
+                if (struckWordsCount > 0)
+                    write("[INFO] 表格文字：" + struckWordsCount + " 个词被 取り消し線 划掉"
+                          + "（整行划掉 → 该行作废、不写进 tables\\*.csv；只划掉品番那一格 → 只清空该格，明细照收）"
+                          + (pageStruck > 0
+                                ? "；已记进图面划线清单 " + pageStruck
+                                  + " 个词（下游 01_アッセンブリ図_要領図 据此剔除作废条目）"
+                                : string.Empty));
 
-                    // 斜边不进框线集合，只用来认「三角形注記符号（△1 这种提醒记号）」：
-                    // 三角形是矢量图形、里面的数字却在文字层里，不认出来就会被当成格子内容
-                    // （H986U10002 的 切断寸法「100」旁边有个 △1 → 拼成「100 1」）
-                    var diagonals = new List<Diag>();
+                // 划线检测放在「有没有框线」之前：没有可围成矩形的框线时也要先把划线词交出去，
+                // 之后才判定「这页没有表格」直接返回。
+                if (horizontals.Count < 2 || verticals.Count < 2)
+                {
+                    write("[INFO] 表格内容：该页没有可围成矩形的框线（位图 / 文字已轮廓化的图纸属正常）。");
+                    return tables;
+                }
 
-                    int pathCount = CollectLineSegments(page, tol, minLine, horizontals, verticals, diagonals);
+                // 三角形注記符号（△1 / △2 这种提醒记号）里的数字：图形在矢量层、数字在文字层，
+                // 不认出来就会被当成格子内容（H986U10002 的 切断寸法 读成「100 1」）
+                bool[] markWords = MarkTriangleMarks(words, diagonals);
 
-                    MergeCollinear(horizontals, tol);
-                    MergeCollinear(verticals, tol);
+                int markCount = 0;
+                foreach (bool b in markWords) if (b) markCount++;
 
-                    write("[INFO] 表格框线：矢量路径 " + pathCount + " 条 → 横线 "
-                          + horizontals.Count + " 条 / 竖线 " + verticals.Count
-                          + " 条（共线段已合并，容差 "
-                          + o.RuledTableLineToleranceMm.ToString("0.##") + "mm）");
+                if (markCount > 0)
+                    write("[INFO] 表格文字：" + markCount
+                          + " 个词是「三角形注記符号里的数字」（△1 / △2 这种提醒记号："
+                          + "三角形是矢量图形、数字在文字层里）→ 不计入格内文字。");
 
-                    // 文字层先读出来：识别「取り消し線（划掉整行的横线）」要靠它 ——
-                    // 横线从字身中间穿过、又把字整个盖住，那是 CAD 图里「这一行作废」的画法，不是格子边
-                    List<WordBox> words = ReadWords(page);
+                List<Cell> cells = FindCells(horizontals, verticals, tol, minCell, maxRowGap);
+                int rawCells = cells.Count;
 
-                    int dupWords = CountOverlappingDuplicates(words);
+                // 图框（整页大小的内框）同样「四面有线」，按面积比排除
+                double pageArea = pageW * pageH;
+                cells.RemoveAll(c => CellArea(c) > pageArea * MaxCellAreaRatio);
 
-                    if (dupWords > 0)
-                    {
-                        write("[INFO] 表格文字：有 " + dupWords + " 个词是同一个词重叠画了两遍"
-                              + "（CAD 文字重复放置 —— 表头会落成 部部品品ココーードド 这种样子）"
-                              + "→ 拼接格内文字时只留一个。");
-                    }
+                // 孤立矩形（文字笔画凑出来的假格子）先清掉：留着它，下一步会把它包住的真格子当「套娃」误删
+                int isolatedCells = DropIsolatedCells(cells, tol);
 
-                    var struckWords = new bool[words.Count];
+                RemoveContainers(cells, tol);
 
-                    int strikeLines = DropStrikeLines(
-                        horizontals, words, tol, minCell, struckWords, out List<Seg> strikeSegs);
+                // 词中心落在哪个格子就归哪个格子，不看间距；
+                // 先给面积小的格子挑，这样嵌套 / 重叠时文字留在最里层
+                var used = new bool[words.Count];
+                var byAreaAsc = new List<Cell>(cells);
+                byAreaAsc.Sort((a, b) => CellArea(a).CompareTo(CellArea(b)));
 
-                    if (strikeLines > 0)
-                    {
-                        write("[INFO] 表格框线：剔除 " + strikeLines + " 条 取り消し線（横穿文字的划线，"
-                              + "不是格子边）→ 横线剩 " + horizontals.Count + " 条");
+                int assignedWords = 0;
+                foreach (var c in byAreaAsc)
+                    assignedWords += FillCell(c, words, used, struckWords, markWords);
 
-                        foreach (Seg s in strikeSegs)
-                        {
-                            write("[INFO]   划线 px(y=" + Math.Round((pageH - s.P) * scaleY)
-                                  + " x=" + Math.Round(s.A * scaleX) + "~" + Math.Round(s.B * scaleX) + ")");
-                        }
-                    }
+                List<List<Cell>> groups = GroupCells(cells, tol);
 
-                    int struckWordsCount = 0;
-                    foreach (bool b in struckWords) if (b) struckWordsCount++;
+                int kept = 0;
+                foreach (var g in groups)
+                {
+                    RuledTable table = BuildTable(g, tol, pageH, scaleX, scaleY, mmPerPx);
+                    if (table == null) continue;
 
-                    // 页面级「被划掉的词」先交出去（与有没有表格无关）：
-                    // 图纸上没画表格、把要領図索引写成自由文字的組立図（H527U10001）也可能
-                    // 把其中一条划掉 —— 那时没有 tables_info.json 可查，只能靠这份清单传给下游。
-                    int pageStruck = CollectStruckPageWords(
-                        struckPageWords, words, struckWords, pageH, scaleX, scaleY);
+                    tables.Add(table);
+                    kept++;
+                }
 
-                    if (struckWordsCount > 0)
-                        write("[INFO] 表格文字：" + struckWordsCount + " 个词被 取り消し線 划掉"
-                              + "（整行划掉 → 该行作废、不写进 tables\\*.csv；只划掉品番那一格 → 只清空该格，明细照收）"
-                              + (pageStruck > 0
-                                    ? "；已记进图面划线清单 " + pageStruck
-                                      + " 个词（下游 01_アッセンブリ図_要領図 据此剔除作废条目）"
-                                    : string.Empty));
+                tables.Sort(ByPosition);
+                for (int i = 0; i < tables.Count; i++)
+                    // 名称按位置序号编，两位补零：tables\table_01.csv … 在资源管理器 / Excel 里也按顺序排
+                    tables[i].Name = "table_" + (i + 1).ToString("00");
 
-                    // 划线检测放在「有没有框线」之前：没有可围成矩形的框线时也要先把划线词交出去，
-                    // 之后才判定「这页没有表格」直接返回。
-                    if (horizontals.Count < 2 || verticals.Count < 2)
-                    {
-                        write("[INFO] 表格内容：该页没有可围成矩形的框线（位图 / 文字已轮廓化的图纸属正常）。");
-                        return tables;
-                    }
+                int cellTotal = 0, textCellTotal = 0, struckRowTotal = 0, struckCellTotal = 0;
+                foreach (var t in tables)
+                {
+                    cellTotal += t.CellCount;
+                    textCellTotal += t.TextCellCount;
+                    struckRowTotal += t.StruckRowCount;
+                    struckCellTotal += t.StruckCellCount;
+                }
 
-                    // 三角形注記符号（△1 / △2 这种提醒记号）里的数字：图形在矢量层、数字在文字层，
-                    // 不认出来就会被当成格子内容（H986U10002 的 切断寸法 读成「100 1」）
-                    bool[] markWords = MarkTriangleMarks(words, diagonals);
+                write("[INFO] 表格内容：闭合矩形 " + rawCells + " 个 → 有效单元格 " + cells.Count
+                      + " 个（已排除图框等超大矩形"
+                      + (isolatedCells > 0
+                          ? "、文字笔画凑出的假矩形 " + isolatedCells + " 个"
+                          : string.Empty)
+                      + "），归成 " + kept + " 张表 / 单元格 " + cellTotal
+                      + " 个（有文字 " + textCellTotal + " 个，共填入 " + assignedWords + " 个词）"
+                      + (struckRowTotal > 0
+                          ? "；划线作废 " + struckRowTotal + " 行（不写进 tables\\*.csv）"
+                          : string.Empty)
+                      + (struckCellTotal > 0
+                          ? "；品番作废 " + struckCellTotal + " 格（只清空该格，明细照收）"
+                          : string.Empty));
 
-                    int markCount = 0;
-                    foreach (bool b in markWords) if (b) markCount++;
+                foreach (var t in tables)
+                {
+                    string strikeNote = string.Empty;
 
-                    if (markCount > 0)
-                        write("[INFO] 表格文字：" + markCount
-                              + " 个词是「三角形注記符号里的数字」（△1 / △2 这种提醒记号："
-                              + "三角形是矢量图形、数字在文字层里）→ 不计入格内文字。");
+                    if (t.StruckRowCount > 0)
+                        strikeNote = "划线作废 " + t.StruckRowCount + " 行 → 实出 " + t.VisibleRowCount + " 行";
 
-                    List<Cell> cells = FindCells(horizontals, verticals, tol, minCell, maxRowGap);
-                    int rawCells = cells.Count;
+                    if (t.StruckCellCount > 0)
+                        strikeNote += (strikeNote.Length > 0 ? "；" : string.Empty)
+                                      + "品番作废 " + t.StruckCellCount + " 格";
 
-                    // 图框（整页大小的内框）同样「四面有线」，按面积比排除
-                    double pageArea = pageW * pageH;
-                    cells.RemoveAll(c => CellArea(c) > pageArea * MaxCellAreaRatio);
-
-                    // 孤立矩形（文字笔画凑出来的假格子）先清掉：留着它，下一步会把它包住的真格子当「套娃」误删
-                    int isolatedCells = DropIsolatedCells(cells, tol);
-
-                    RemoveContainers(cells, tol);
-
-                    // 词中心落在哪个格子就归哪个格子，不看间距；
-                    // 先给面积小的格子挑，这样嵌套 / 重叠时文字留在最里层
-                    var used = new bool[words.Count];
-                    var byAreaAsc = new List<Cell>(cells);
-                    byAreaAsc.Sort((a, b) => CellArea(a).CompareTo(CellArea(b)));
-
-                    int assignedWords = 0;
-                    foreach (var c in byAreaAsc)
-                        assignedWords += FillCell(c, words, used, struckWords, markWords);
-
-                    List<List<Cell>> groups = GroupCells(cells, tol);
-
-                    int kept = 0;
-                    foreach (var g in groups)
-                    {
-                        RuledTable table = BuildTable(g, tol, pageH, scaleX, scaleY, mmPerPx);
-                        if (table == null) continue;
-
-                        tables.Add(table);
-                        kept++;
-                    }
-
-                    tables.Sort(ByPosition);
-                    for (int i = 0; i < tables.Count; i++)
-                        // 名称按位置序号编，两位补零：tables\table_01.csv … 在资源管理器 / Excel 里也按顺序排
-                        tables[i].Name = "table_" + (i + 1).ToString("00");
-
-                    int cellTotal = 0, textCellTotal = 0, struckRowTotal = 0, struckCellTotal = 0;
-                    foreach (var t in tables)
-                    {
-                        cellTotal += t.CellCount;
-                        textCellTotal += t.TextCellCount;
-                        struckRowTotal += t.StruckRowCount;
-                        struckCellTotal += t.StruckCellCount;
-                    }
-
-                    write("[INFO] 表格内容：闭合矩形 " + rawCells + " 个 → 有效单元格 " + cells.Count
-                          + " 个（已排除图框等超大矩形"
-                          + (isolatedCells > 0
-                              ? "、文字笔画凑出的假矩形 " + isolatedCells + " 个"
-                              : string.Empty)
-                          + "），归成 " + kept + " 张表 / 单元格 " + cellTotal
-                          + " 个（有文字 " + textCellTotal + " 个，共填入 " + assignedWords + " 个词）"
-                          + (struckRowTotal > 0
-                              ? "；划线作废 " + struckRowTotal + " 行（不写进 tables\\*.csv）"
-                              : string.Empty)
-                          + (struckCellTotal > 0
-                              ? "；品番作废 " + struckCellTotal + " 格（只清空该格，明细照收）"
-                              : string.Empty));
-
-                    foreach (var t in tables)
-                    {
-                        string strikeNote = string.Empty;
-
-                        if (t.StruckRowCount > 0)
-                            strikeNote = "划线作废 " + t.StruckRowCount + " 行 → 实出 " + t.VisibleRowCount + " 行";
-
-                        if (t.StruckCellCount > 0)
-                            strikeNote += (strikeNote.Length > 0 ? "；" : string.Empty)
-                                          + "品番作废 " + t.StruckCellCount + " 格";
-
-                        write("[TABLE] " + t.Name + "  行 " + t.RowCount + " / 列 " + t.ColumnCount
-                              + " / 单元格 " + t.CellCount + "（有文字 " + t.TextCellCount + "）"
-                              + (strikeNote.Length > 0 ? "【" + strikeNote + "】" : string.Empty)
-                              + "  绝对(x=" + t.PixelX + " y=" + t.PixelY
-                              + " w=" + t.PixelW + " h=" + t.PixelH + ")");
-                    }
+                    write("[TABLE] " + t.Name + "  行 " + t.RowCount + " / 列 " + t.ColumnCount
+                          + " / 单元格 " + t.CellCount + "（有文字 " + t.TextCellCount + "）"
+                          + (strikeNote.Length > 0 ? "【" + strikeNote + "】" : string.Empty)
+                          + "  绝对(x=" + t.PixelX + " y=" + t.PixelY
+                          + " w=" + t.PixelW + " h=" + t.PixelH + ")");
                 }
             }
             catch (Exception ex)
@@ -318,15 +330,15 @@ namespace CadPartSplitter
         /// </summary>
         /// <returns>处理过的矢量路径条数（仅用于日志）。</returns>
         private static int CollectLineSegments(
-            Page page, double tol, double minLine, List<Seg> horizontals, List<Seg> verticals,
-            List<Diag> diagonals)
+            IReadOnlyList<PdfPath> paths, double tol, double minLine,
+            List<Seg> horizontals, List<Seg> verticals, List<Diag> diagonals)
         {
-            if (page.ExperimentalAccess == null)
+            if (paths == null)
                 return 0;
 
             int pathCount = 0;
 
-            foreach (var path in page.ExperimentalAccess.Paths)
+            foreach (var path in paths)
             {
                 pathCount++;
 
@@ -1605,12 +1617,14 @@ namespace CadPartSplitter
             public double Y2;   // 上
         }
 
-        /// <summary>取该页文字层的全部词（剔除空白词与零尺寸框）。</summary>
-        private static List<WordBox> ReadWords(Page page)
+        /// <summary>把页面文字层里切好的词转成 <see cref="WordBox"/>（剔除空白词与零尺寸框）。</summary>
+        private static List<WordBox> ReadWords(IReadOnlyList<Word> pageWords)
         {
             var list = new List<WordBox>();
 
-            foreach (var w in page.GetWords())
+            if (pageWords == null) return list;
+
+            foreach (var w in pageWords)
             {
                 string text = (w.Text ?? string.Empty).Trim();
                 if (text.Length == 0) continue;

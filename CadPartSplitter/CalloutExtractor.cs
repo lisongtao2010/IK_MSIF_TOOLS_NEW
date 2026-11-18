@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using UglyToad.PdfPig;
 using UglyToad.PdfPig.Content;
 using UglyToad.PdfPig.Core;
+using UglyToad.PdfPig.Graphics;
 
 namespace CadPartSplitter
 {
@@ -40,6 +40,20 @@ namespace CadPartSplitter
             string pdfPath, int pageIndex, int imgWidth, int imgHeight,
             double dpi, List<PartInfo> parts, DetectorOptions opts)
         {
+            // 兼容旧调用：自己解析一次本页（流水线内部用下面的 PdfPageContent 重载，全页只解析一次）
+            DetectorOptions o = opts ?? new DetectorOptions();
+            return Extract(PdfPageContent.Load(pdfPath, pageIndex, o.Log),
+                           imgWidth, imgHeight, dpi, parts, opts);
+        }
+
+        /// <summary>
+        /// 同上，但直接使用已经解析好的页面内容（<see cref="PdfPageContent"/>：页面尺寸 + 词 + 矢量路径），
+        /// 不再打开 PDF。流水线里同一页的文字 / 圈号 / 表格共用这一份解析结果。
+        /// </summary>
+        public static List<Callout> Extract(
+            PdfPageContent page, int imgWidth, int imgHeight,
+            double dpi, List<PartInfo> parts, DetectorOptions opts)
+        {
             var result = new List<Callout>();
             DetectorOptions o = opts ?? new DetectorOptions();
             Action<string> write = o.Log;
@@ -52,129 +66,128 @@ namespace CadPartSplitter
 
             List<PartInfo> partList = parts ?? new List<PartInfo>();
 
+            if (page == null || !page.IsValid)
+                return result;      // 解析失败 / 页码越界：PdfPageContent.Load 里已经写过 WARN
+
+            if (imgWidth <= 0 || imgHeight <= 0)
+            {
+                write("[WARN] 页面尺寸或渲染尺寸无效，跳过圈号标注识别。");
+                return result;
+            }
+
             try
             {
-                using (var doc = PdfDocument.Open(pdfPath))
+                double pageW = page.Width, pageH = page.Height;
+                double scaleX = imgWidth  / pageW;
+                double scaleY = imgHeight / pageH;
+                double mmPerPx = 25.4 / Math.Max(1.0, dpi);
+
+                List<double[]> circles;
+                try
                 {
-                    Page page = doc.GetPage(pageIndex + 1);   // PdfPig 页码从 1 开始
-                    double pageW = page.Width, pageH = page.Height;
-                    if (pageW <= 0 || pageH <= 0 || imgWidth <= 0 || imgHeight <= 0)
+                    circles = FindCircles(page.Paths, scaleX, scaleY, pageH, o);
+                }
+                catch (Exception ex)
+                {
+                    write("[WARN] 读取 PDF 矢量路径失败，跳过圈号标注识别：" + ex.Message);
+                    return result;
+                }
+
+                if (circles.Count == 0)
+                {
+                    write("[INFO] 圈号标注：页面未发现圆形图形。");
+                    return result;
+                }
+
+                // 圆内的文字（只取 1~3 位纯数字：日文图纸的圈号基本都符合）
+                List<NumberWord> numberWords = ReadNumberWords(page.Words, pageH, scaleX, scaleY);
+                var used = new bool[numberWords.Count];
+                int matched = 0, skipped = 0;
+
+                foreach (double[] circle in circles)
+                {
+                    int best = -1;
+                    double bestDist = double.MaxValue;
+                    for (int i = 0; i < numberWords.Count; i++)
                     {
-                        write("[WARN] 页面尺寸或渲染尺寸无效，跳过圈号标注识别。");
-                        return result;
+                        if (used[i]) continue;
+
+                        // 数字必须装得进圈：圆是圈号时，圈内数字高度约为半径的 0.7~1.0 倍；
+                        // 大圆（孔、放大视图）里若恰好有数字，尺寸比例也对不上，可借此排除。
+                        if (numberWords[i].H > circle[2] * 1.3) continue;
+                        if (numberWords[i].W > circle[2] * 1.6) continue;
+
+                        double dx = numberWords[i].Cx - circle[0];
+                        double dy = numberWords[i].Cy - circle[1];
+                        double d  = Math.Sqrt(dx * dx + dy * dy);
+                        if (d > circle[2] * 0.95) continue;      // 词中心必须在圆内（留一点容差）
+                        if (d < bestDist) { bestDist = d; best = i; }
                     }
 
-                    double scaleX = imgWidth  / pageW;
-                    double scaleY = imgHeight / pageH;
-                    double mmPerPx = 25.4 / Math.Max(1.0, dpi);
+                    if (best < 0) { skipped++; continue; }
+                    used[best] = true;
+                    matched++;
 
-                    List<double[]> circles;
-                    try
+                    double cx = circle[0], cy = circle[1], r = circle[2];
+                    var c = new Callout
                     {
-                        circles = FindCircles(page, scaleX, scaleY, pageH, o);
-                    }
-                    catch (Exception ex)
-                    {
-                        write("[WARN] 读取 PDF 矢量路径失败，跳过圈号标注识别：" + ex.Message);
-                        return result;
-                    }
+                        Text    = numberWords[best].Text,
+                        Number  = ParseNumber(numberWords[best].Text),
+                        CenterX = Math.Round(cx, 1),
+                        CenterY = Math.Round(cy, 1),
+                        Radius  = Math.Round(r, 1),
+                        PixelX  = (int)Math.Round(cx - r),
+                        PixelY  = (int)Math.Round(cy - r),
+                        PixelW  = (int)Math.Round(r * 2),
+                        PixelH  = (int)Math.Round(r * 2),
+                        PdfX_mm      = Math.Round(cx * mmPerPx, 2),
+                        PdfY_mm      = Math.Round(cy * mmPerPx, 2),
+                        PdfRadius_mm = Math.Round(r * mmPerPx, 2)
+                    };
+                    c.Display = Callout.Compose(c.Number, c.Text);
 
-                    if (circles.Count == 0)
-                    {
-                        write("[INFO] 圈号标注：页面未发现圆形图形。");
-                        return result;
-                    }
-
-                    // 圆内的文字（只取 1~3 位纯数字：日文图纸的圈号基本都符合）
-                    List<NumberWord> numberWords = ReadNumberWords(page, pageH, scaleX, scaleY);
-                    var used = new bool[numberWords.Count];
-                    int matched = 0, skipped = 0;
-
-                    foreach (double[] circle in circles)
-                    {
-                        int best = -1;
-                        double bestDist = double.MaxValue;
-                        for (int i = 0; i < numberWords.Count; i++)
-                        {
-                            if (used[i]) continue;
-
-                            // 数字必须装得进圈：圆是圈号时，圈内数字高度约为半径的 0.7~1.0 倍；
-                            // 大圆（孔、放大视图）里若恰好有数字，尺寸比例也对不上，可借此排除。
-                            if (numberWords[i].H > circle[2] * 1.3) continue;
-                            if (numberWords[i].W > circle[2] * 1.6) continue;
-
-                            double dx = numberWords[i].Cx - circle[0];
-                            double dy = numberWords[i].Cy - circle[1];
-                            double d  = Math.Sqrt(dx * dx + dy * dy);
-                            if (d > circle[2] * 0.95) continue;      // 词中心必须在圆内（留一点容差）
-                            if (d < bestDist) { bestDist = d; best = i; }
-                        }
-
-                        if (best < 0) { skipped++; continue; }
-                        used[best] = true;
-                        matched++;
-
-                        double cx = circle[0], cy = circle[1], r = circle[2];
-                        var c = new Callout
-                        {
-                            Text    = numberWords[best].Text,
-                            Number  = ParseNumber(numberWords[best].Text),
-                            CenterX = Math.Round(cx, 1),
-                            CenterY = Math.Round(cy, 1),
-                            Radius  = Math.Round(r, 1),
-                            PixelX  = (int)Math.Round(cx - r),
-                            PixelY  = (int)Math.Round(cy - r),
-                            PixelW  = (int)Math.Round(r * 2),
-                            PixelH  = (int)Math.Round(r * 2),
-                            PdfX_mm      = Math.Round(cx * mmPerPx, 2),
-                            PdfY_mm      = Math.Round(cy * mmPerPx, 2),
-                            PdfRadius_mm = Math.Round(r * mmPerPx, 2)
-                        };
-                        c.Display = Callout.Compose(c.Number, c.Text);
-
-                        // 归属零件图：圆心落在哪个零件框内
-                        foreach (var p in partList)
-                        {
-                            if (cx < p.PixelX || cx > p.PixelX + p.PixelW) continue;
-                            if (cy < p.PixelY || cy > p.PixelY + p.PixelH) continue;
-                            c.PartIndex    = p.Index;
-                            c.PartFileName = p.FileName;
-                            c.LocalX       = (int)Math.Round(cx - p.PixelX);
-                            c.LocalY       = (int)Math.Round(cy - p.PixelY);
-                            break;
-                        }
-
-                        result.Add(c);
-                    }
-
-                    // 按「零件 → 上→下、左→右」排序，便于人眼核对
-                    result.Sort(ByPartThenPosition);
-
-                    foreach (var c in result)
-                    {
-                        c.Display = Callout.Compose(c.Number, c.Text);
-                        string where = string.IsNullOrEmpty(c.PartFileName) ? "（零件图外）" : c.PartFileName;
-                        write("[CALLOUT] " + c.Display + "  " + where
-                              + "  圆心(" + c.CenterX.ToString("0") + "," + c.CenterY.ToString("0") + ")"
-                              + " r=" + c.Radius.ToString("0") + "px=" + c.PdfRadius_mm.ToString("0.##") + "mm"
-                              + (c.PartIndex > 0 ? "  局部(" + c.LocalX + "," + c.LocalY + ")" : string.Empty));
-                    }
-
-                    int inParts = 0;
-                    foreach (var c in result) if (c.PartIndex > 0) inParts++;
-
-                    write("[INFO] 圈号标注：" + circles.Count + " 个圆 / 圈内数字 " + matched + " 个"
-                          + (skipped > 0 ? "（" + skipped + " 个圆内无数字，已忽略）" : string.Empty)
-                          + "，归属零件图 " + inParts + " 个"
-                          + (result.Count > inParts ? "，零件图外 " + (result.Count - inParts) + " 个" : string.Empty));
-
+                    // 归属零件图：圆心落在哪个零件框内
                     foreach (var p in partList)
                     {
-                        p.Callouts = new List<Callout>();
-                        foreach (var c in result)
-                            if (c.PartIndex == p.Index)
-                                p.Callouts.Add(c);
+                        if (cx < p.PixelX || cx > p.PixelX + p.PixelW) continue;
+                        if (cy < p.PixelY || cy > p.PixelY + p.PixelH) continue;
+                        c.PartIndex    = p.Index;
+                        c.PartFileName = p.FileName;
+                        c.LocalX       = (int)Math.Round(cx - p.PixelX);
+                        c.LocalY       = (int)Math.Round(cy - p.PixelY);
+                        break;
                     }
+
+                    result.Add(c);
+                }
+
+                // 按「零件 → 上→下、左→右」排序，便于人眼核对
+                result.Sort(ByPartThenPosition);
+
+                foreach (var c in result)
+                {
+                    c.Display = Callout.Compose(c.Number, c.Text);
+                    string where = string.IsNullOrEmpty(c.PartFileName) ? "（零件图外）" : c.PartFileName;
+                    write("[CALLOUT] " + c.Display + "  " + where
+                          + "  圆心(" + c.CenterX.ToString("0") + "," + c.CenterY.ToString("0") + ")"
+                          + " r=" + c.Radius.ToString("0") + "px=" + c.PdfRadius_mm.ToString("0.##") + "mm"
+                          + (c.PartIndex > 0 ? "  局部(" + c.LocalX + "," + c.LocalY + ")" : string.Empty));
+                }
+
+                int inParts = 0;
+                foreach (var c in result) if (c.PartIndex > 0) inParts++;
+
+                write("[INFO] 圈号标注：" + circles.Count + " 个圆 / 圈内数字 " + matched + " 个"
+                      + (skipped > 0 ? "（" + skipped + " 个圆内无数字，已忽略）" : string.Empty)
+                      + "，归属零件图 " + inParts + " 个"
+                      + (result.Count > inParts ? "，零件图外 " + (result.Count - inParts) + " 个" : string.Empty));
+
+                foreach (var p in partList)
+                {
+                    p.Callouts = new List<Callout>();
+                    foreach (var c in result)
+                        if (c.PartIndex == p.Index)
+                            p.Callouts.Add(c);
                 }
             }
             catch (Exception ex)
@@ -260,10 +273,10 @@ namespace CadPartSplitter
         /// 同心的内外两圈（粗线圈会画两条路径）会被合并成一条。
         /// </summary>
         private static List<double[]> FindCircles(
-            Page page, double scaleX, double scaleY, double pageH, DetectorOptions o)
+            IReadOnlyList<PdfPath> paths, double scaleX, double scaleY, double pageH, DetectorOptions o)
         {
             var found = new List<double[]>();
-            if (page.ExperimentalAccess == null)
+            if (paths == null)
                 return found;
 
             double dpi  = Math.Max(1.0, o.RenderDpi);
@@ -271,7 +284,7 @@ namespace CadPartSplitter
             double maxR = Math.Max(minR + 1.0, o.CalloutMaxRadiusMm * dpi / 25.4);
             double tol  = 1.0 + Math.Max(0.02, o.CalloutRadiusTolerance);
 
-            foreach (var path in page.ExperimentalAccess.Paths)
+            foreach (var path in paths)
             {
                 foreach (var sub in path)
                 {
@@ -423,11 +436,13 @@ namespace CadPartSplitter
         /// 同时返回词框宽高，供「数字必须装得进圈」的尺寸校验使用。
         /// </summary>
         private static List<NumberWord> ReadNumberWords(
-            Page page, double pageH, double scaleX, double scaleY)
+            IReadOnlyList<Word> pageWords, double pageH, double scaleX, double scaleY)
         {
             var list = new List<NumberWord>();
 
-            foreach (var w in page.GetWords())
+            if (pageWords == null) return list;
+
+            foreach (var w in pageWords)
             {
                 string text = (w.Text ?? string.Empty).Trim();
                 if (!IsNumber(text)) continue;

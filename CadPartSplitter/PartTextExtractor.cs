@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using UglyToad.PdfPig;
+using UglyToad.PdfPig.Content;
 
 namespace CadPartSplitter
 {
@@ -45,6 +45,20 @@ namespace CadPartSplitter
             string pdfPath, int pageIndex, int imgWidth, int imgHeight,
             double dpi, int tableStartX, List<PartInfo> parts, Action<string> log)
         {
+            // 兼容旧调用（单独调这一个方法时）：自己解析一次本页。
+            // 流水线内部用的是下面的 PdfPageContent 重载 —— 同一页只解析一次，四个模块共用。
+            return Attach(PdfPageContent.Load(pdfPath, pageIndex, log),
+                          imgWidth, imgHeight, dpi, tableStartX, parts, log);
+        }
+
+        /// <summary>
+        /// 同上，但直接使用已经解析好的页面内容（<see cref="PdfPageContent"/>：页面尺寸 + 词 + 词框），
+        /// 不再打开 PDF。流水线里同一页的文字 / 圈号 / 表格 / 要領図 都走这个重载。
+        /// </summary>
+        public static PageTextResult Attach(
+            PdfPageContent page, int imgWidth, int imgHeight,
+            double dpi, int tableStartX, List<PartInfo> parts, Action<string> log)
+        {
             Action<string> write = log ?? (_ => { });
 
             var result = new PageTextResult
@@ -59,89 +73,84 @@ namespace CadPartSplitter
 
             try
             {
-                using (var doc = PdfDocument.Open(pdfPath))
+                double pageW = page == null ? 0 : page.Width;
+                double pageH = page == null ? 0 : page.Height;
+                if (pageW <= 0 || pageH <= 0 || imgWidth <= 0 || imgHeight <= 0)
                 {
-                    var page = doc.GetPage(pageIndex + 1);   // PdfPig 页码从 1 开始
-
-                    double pageW = page.Width;
-                    double pageH = page.Height;
-                    if (pageW <= 0 || pageH <= 0 || imgWidth <= 0 || imgHeight <= 0)
-                    {
-                        write("[WARN] 页面尺寸或渲染尺寸无效，跳过文字坐标提取。");
-                        return result;
-                    }
-
-                    double scaleX = imgWidth  / pageW;
-                    double scaleY = imgHeight / pageH;
-
-                    int outside;
-                    var words = ReadPageWords(page, pageH, scaleX, scaleY, imgWidth, imgHeight, out outside);
-
-                    write($"[INFO] PDF 文字层：{words.Count} 个词（页面 {pageW:0.#}×{pageH:0.#} pt，"
-                          + $"缩放 {scaleX:0.####}×{scaleY:0.####}）");
-
-                    if (words.Count == 0)
-                    {
-                        write("[INFO] 该页没有文字层（扫描件或文字已轮廓化），跳过文字坐标提取。");
-                        return result;
-                    }
-
-                    if (outside > words.Count / 2)
-                    {
-                        write($"[WARN] {outside}/{words.Count} 个词换算后落在画面外，"
-                              + "可能是页面旋转或裁剪框偏移，文字坐标仅供参考。");
-                    }
-
-                    double mmPerPx = 25.4 / dpi;
-                    int    total   = 0;
-
-                    foreach (var part in parts)
-                    {
-                        part.Texts = CollectForPart(words, part, mmPerPx);
-                        total     += part.Texts.Count;
-
-                        if (part.Texts.Count > 0)
-                            write($"[TEXT] {part.FileName}  {part.Texts.Count} 个词");
-                    }
-
-                    result.HasTextLayer = true;
-                    result.WordCount    = words.Count;
-
-                    write($"[INFO] 文字坐标：共 {total} 个词已分配到 {parts.Count} 张零件图。");
-
-                    // ── 零件框以外的文字：表格 / 标题栏区 与 其它未归属 ──────────
-                    var tableWords = new List<PartText>();
-                    var otherWords = new List<PartText>();
-
-                    foreach (var w in words)
-                    {
-                        if (IsInsideAnyPart(w, parts))
-                            continue;
-
-                        bool inTable = tableStartX > 0 && (w.X + w.W / 2.0) >= tableStartX;
-                        PartText t = ToPartText(w, mmPerPx, 0, 0);   // 框外文字无局部坐标，Local = 页面坐标
-
-                        if (inTable) tableWords.Add(t);
-                        else         otherWords.Add(t);
-                    }
-
-                    tableWords.Sort(ByYThenX);
-                    otherWords.Sort(ByYThenX);
-
-                    result.TableWords = tableWords;
-                    result.OtherWords = otherWords;
-                    result.Tables     = BuildTables(tableWords, tableStartX, imgWidth, mmPerPx);
-
-                    write($"[INFO] 零件框外文字：{result.OutsideWordCount} 个词"
-                          + $"（表格区 {tableWords.Count} / 其它 {otherWords.Count}），"
-                          + $"表格 {result.Tables.Count} 张 / "
-                          + $"行 {result.Tables.Sum(tb => tb.Rows.Count)} / "
-                          + $"单元格 {result.Tables.Sum(tb => tb.CellCount)}");
-
-                    foreach (var tb in result.Tables)
-                        write($"[TABLE] {tb.Name}  行 {tb.Rows.Count} / 单元格 {tb.CellCount}  "
-                              + $"X {tb.PixelX}~{tb.PixelX + tb.PixelW}  Y {tb.PixelY}~{tb.PixelY + tb.PixelH}");
+                    write("[WARN] 页面尺寸或渲染尺寸无效，跳过文字坐标提取。");
+                    return result;
                 }
+
+                double scaleX = imgWidth  / pageW;
+                double scaleY = imgHeight / pageH;
+
+                int outside;
+                var words = ReadPageWords(page.Words, pageH, scaleX, scaleY, imgWidth, imgHeight, out outside);
+
+                write($"[INFO] PDF 文字层：{words.Count} 个词（页面 {pageW:0.#}×{pageH:0.#} pt，"
+                      + $"缩放 {scaleX:0.####}×{scaleY:0.####}）");
+
+                if (words.Count == 0)
+                {
+                    write("[INFO] 该页没有文字层（扫描件或文字已轮廓化），跳过文字坐标提取。");
+                    return result;
+                }
+
+                if (outside > words.Count / 2)
+                {
+                    write($"[WARN] {outside}/{words.Count} 个词换算后落在画面外，"
+                          + "可能是页面旋转或裁剪框偏移，文字坐标仅供参考。");
+                }
+
+                double mmPerPx = 25.4 / dpi;
+                int    total   = 0;
+
+                foreach (var part in parts)
+                {
+                    part.Texts = CollectForPart(words, part, mmPerPx);
+                    total     += part.Texts.Count;
+
+                    if (part.Texts.Count > 0)
+                        write($"[TEXT] {part.FileName}  {part.Texts.Count} 个词");
+                }
+
+                result.HasTextLayer = true;
+                result.WordCount    = words.Count;
+
+                write($"[INFO] 文字坐标：共 {total} 个词已分配到 {parts.Count} 张零件图。");
+
+                // ── 零件框以外的文字：表格 / 标题栏区 与 其它未归属 ──────────
+                var tableWords = new List<PartText>();
+                var otherWords = new List<PartText>();
+
+                foreach (var w in words)
+                {
+                    if (IsInsideAnyPart(w, parts))
+                        continue;
+
+                    bool inTable = tableStartX > 0 && (w.X + w.W / 2.0) >= tableStartX;
+                    PartText t = ToPartText(w, mmPerPx, 0, 0);   // 框外文字无局部坐标，Local = 页面坐标
+
+                    if (inTable) tableWords.Add(t);
+                    else         otherWords.Add(t);
+                }
+
+                tableWords.Sort(ByYThenX);
+                otherWords.Sort(ByYThenX);
+
+                result.TableWords = tableWords;
+                result.OtherWords = otherWords;
+                result.Tables     = BuildTables(tableWords, tableStartX, imgWidth, mmPerPx);
+
+                write($"[INFO] 零件框外文字：{result.OutsideWordCount} 个词"
+                      + $"（表格区 {tableWords.Count} / 其它 {otherWords.Count}），"
+                      + $"表格 {result.Tables.Count} 张 / "
+                      + $"行 {result.Tables.Sum(tb => tb.Rows.Count)} / "
+                      + $"单元格 {result.Tables.Sum(tb => tb.CellCount)}");
+
+                foreach (var tb in result.Tables)
+                    write($"[TABLE] {tb.Name}  行 {tb.Rows.Count} / 单元格 {tb.CellCount}  "
+                          + $"X {tb.PixelX}~{tb.PixelX + tb.PixelW}  Y {tb.PixelY}~{tb.PixelY + tb.PixelH}");
             }
             catch (Exception ex)
             {
@@ -155,16 +164,20 @@ namespace CadPartSplitter
 
         /// <summary>
         /// 读取一页的全部词并换算成页面像素坐标（原点左上、Y 向下）。
+        /// 词来自 <see cref="PdfPageContent.Words"/>（同一页只解析一次），
         /// 空白词、退化框（宽或高 ≤ 0）会被丢弃；<paramref name="outside"/> 返回换算后落在画面外的词数。
         /// </summary>
         private static List<WordBox> ReadPageWords(
-            UglyToad.PdfPig.Content.Page page, double pageH,
+            IReadOnlyList<Word> pageWords, double pageH,
             double scaleX, double scaleY, int imgWidth, int imgHeight, out int outside)
         {
             var words = new List<WordBox>();
             outside = 0;
 
-            foreach (var w in page.GetWords())
+            if (pageWords == null)
+                return words;
+
+            foreach (var w in pageWords)
             {
                 string text = (w.Text ?? string.Empty).Trim();
                 if (text.Length == 0)
@@ -518,61 +531,60 @@ namespace CadPartSplitter
         public static List<PageRect> DetectTableAreas(
             string pdfPath, int pageIndex, int imgWidth, int imgHeight, Action<string> log)
         {
+            // 兼容旧调用：自己解析一次本页（流水线内部用下面的 PdfPageContent 重载，全页只解析一次）
+            return DetectTableAreas(PdfPageContent.Load(pdfPath, pageIndex, log),
+                                    imgWidth, imgHeight, log);
+        }
+
+        /// <summary>同上，但直接使用已经解析好的页面内容（<see cref="PdfPageContent"/>），不再打开 PDF。</summary>
+        public static List<PageRect> DetectTableAreas(
+            PdfPageContent page, int imgWidth, int imgHeight, Action<string> log)
+        {
             Action<string> write = log ?? (_ => { });
             var areas = new List<PageRect>();
 
-            if (string.IsNullOrEmpty(pdfPath) || imgWidth <= 0 || imgHeight <= 0)
+            if (page == null || !page.IsValid || imgWidth <= 0 || imgHeight <= 0)
                 return areas;
 
             try
             {
-                using (var doc = PdfDocument.Open(pdfPath))
+                double scaleX = imgWidth  / page.Width;
+                double scaleY = imgHeight / page.Height;
+
+                int outside;
+                var raw = ReadPageWords(page.Words, page.Height, scaleX, scaleY, imgWidth, imgHeight, out outside);
+                if (raw.Count == 0)
+                    return areas;
+
+                var words = new List<PartText>(raw.Count);
+                foreach (var w in raw)
+                    words.Add(ToPartText(w, 1.0, 0, 0));   // 此处只用像素坐标，mm 不参与计算
+
+                var candidateRows = SplitRowsByWideGaps(BuildRows(words));
+
+                foreach (var block in GroupRowsIntoAreas(candidateRows))
                 {
-                    if (pageIndex < 0 || pageIndex >= doc.NumberOfPages)
-                        return areas;
+                    int bx0 = block.Min(r => r.PixelX);
+                    int by0 = block.Min(r => r.PixelY);
+                    int bx1 = block.Max(r => r.PixelX + r.PixelW);
+                    int by1 = block.Max(r => r.PixelY + r.PixelH);
 
-                    var page = doc.GetPage(pageIndex + 1);   // PdfPig 页码从 1 开始
-                    if (page.Width <= 0 || page.Height <= 0)
-                        return areas;
+                    int bw = bx1 - bx0;
+                    int bh = by1 - by0;
 
-                    double scaleX = imgWidth  / page.Width;
-                    double scaleY = imgHeight / page.Height;
+                    bool ok = LooksLikeTable(block, imgWidth, imgHeight);
+                    if (!ok)
+                        continue;
 
-                    int outside;
-                    var raw = ReadPageWords(page, page.Height, scaleX, scaleY, imgWidth, imgHeight, out outside);
-                    if (raw.Count == 0)
-                        return areas;
+                    write($"[TABLE-AREA] 表格块 行 {block.Count} / 列 {CountColumns(block)}"
+                          + $" / 对齐 {RowAlignment(block):0.00} / 行距 {RowPitchRegularity(block):0.00}"
+                          + $"  X {bx0}~{bx1}  Y {by0}~{by1}");
 
-                    var words = new List<PartText>(raw.Count);
-                    foreach (var w in raw)
-                        words.Add(ToPartText(w, 1.0, 0, 0));   // 此处只用像素坐标，mm 不参与计算
-
-                    var candidateRows = SplitRowsByWideGaps(BuildRows(words));
-
-                    foreach (var block in GroupRowsIntoAreas(candidateRows))
-                    {
-                        int bx0 = block.Min(r => r.PixelX);
-                        int by0 = block.Min(r => r.PixelY);
-                        int bx1 = block.Max(r => r.PixelX + r.PixelW);
-                        int by1 = block.Max(r => r.PixelY + r.PixelH);
-
-                        int bw = bx1 - bx0;
-                        int bh = by1 - by0;
-
-                        bool ok = LooksLikeTable(block, imgWidth, imgHeight);
-                        if (!ok)
-                            continue;
-
-                        write($"[TABLE-AREA] 表格块 行 {block.Count} / 列 {CountColumns(block)}"
-                              + $" / 对齐 {RowAlignment(block):0.00} / 行距 {RowPitchRegularity(block):0.00}"
-                              + $"  X {bx0}~{bx1}  Y {by0}~{by1}");
-
-                        areas.Add(new PageRect(bx0, by0, bw, bh));
-                    }
-
-                    write($"[INFO] 表格块检测：{areas.Count} 处表格 / 表題欄"
-                          + (areas.Count > 0 ? "（按块遮蔽，保留表格以外的零件视图）" : "（改用整列遮蔽）"));
+                    areas.Add(new PageRect(bx0, by0, bw, bh));
                 }
+
+                write($"[INFO] 表格块检测：{areas.Count} 处表格 / 表題欄"
+                      + (areas.Count > 0 ? "（按块遮蔽，保留表格以外的零件视图）" : "（改用整列遮蔽）"));
             }
             catch (Exception ex)
             {
@@ -598,15 +610,23 @@ namespace CadPartSplitter
         public static List<PageRect> ReadTextLineBoxes(
             string pdfPath, int pageIndex, int imgWidth, int imgHeight, Action<string> log)
         {
+            // 兼容旧调用：自己解析一次本页（流水线内部用下面的 PdfPageContent 重载，全页只解析一次）
+            return ReadTextLineBoxes(PdfPageContent.Load(pdfPath, pageIndex, log), imgWidth, imgHeight, log);
+        }
+
+        /// <summary>同上，但直接使用已经解析好的页面内容（<see cref="PdfPageContent"/>），不再打开 PDF。</summary>
+        public static List<PageRect> ReadTextLineBoxes(
+            PdfPageContent page, int imgWidth, int imgHeight, Action<string> log)
+        {
             Action<string> write = log ?? (_ => { });
             var boxes = new List<PageRect>();
 
-            if (string.IsNullOrEmpty(pdfPath) || imgWidth <= 0 || imgHeight <= 0)
+            if (page == null || !page.IsValid || imgWidth <= 0 || imgHeight <= 0)
                 return boxes;
 
             try
             {
-                foreach (var line in ReadTextLinesCore(pdfPath, pageIndex, imgWidth, imgHeight))
+                foreach (var line in ReadTextLinesCore(page, imgWidth, imgHeight))
                     boxes.Add(new PageRect(line.PixelX, line.PixelY, line.PixelW, line.PixelH));
             }
             catch (Exception ex)
@@ -635,15 +655,23 @@ namespace CadPartSplitter
         public static List<PartTextLine> ReadTextLines(
             string pdfPath, int pageIndex, int imgWidth, int imgHeight, Action<string> log)
         {
+            // 兼容旧调用：自己解析一次本页（流水线内部用下面的 PdfPageContent 重载，全页只解析一次）
+            return ReadTextLines(PdfPageContent.Load(pdfPath, pageIndex, log), imgWidth, imgHeight, log);
+        }
+
+        /// <summary>同上，但直接使用已经解析好的页面内容（<see cref="PdfPageContent"/>），不再打开 PDF。</summary>
+        public static List<PartTextLine> ReadTextLines(
+            PdfPageContent page, int imgWidth, int imgHeight, Action<string> log)
+        {
             Action<string> write = log ?? (_ => { });
             var lines = new List<PartTextLine>();
 
-            if (string.IsNullOrEmpty(pdfPath) || imgWidth <= 0 || imgHeight <= 0)
+            if (page == null || !page.IsValid || imgWidth <= 0 || imgHeight <= 0)
                 return lines;
 
             try
             {
-                return ReadTextLinesCore(pdfPath, pageIndex, imgWidth, imgHeight);
+                return ReadTextLinesCore(page, imgWidth, imgHeight);
             }
             catch (Exception ex)
             {
@@ -656,32 +684,27 @@ namespace CadPartSplitter
 
         /// <summary>
         /// <see cref="ReadTextLines"/> / <see cref="ReadTextLineBoxes"/> 的共用实现：
-        /// 打开 PDF → 读词 → 换算成页面像素坐标 → 按 <see cref="BuildLines"/> 拼行。
-        /// 页面尺寸 / 页码无效时返回空列表；解析异常交给调用方的 catch（两处的 WARN 文字不同）。
+        /// 读词（来自已解析好的 <see cref="PdfPageContent"/>，不再打开 PDF）→ 换算成页面像素坐标 →
+        /// 按 <see cref="BuildLines"/> 拼行。
+        /// 页面内容无效（<see cref="PdfPageContent.IsValid"/> 为 false）时返回空列表；
+        /// 解析异常交给调用方的 catch（两处的 WARN 文字不同）。
         /// </summary>
         private static List<PartTextLine> ReadTextLinesCore(
-            string pdfPath, int pageIndex, int imgWidth, int imgHeight)
+            PdfPageContent page, int imgWidth, int imgHeight)
         {
-            using (var doc = PdfDocument.Open(pdfPath))
-            {
-                if (pageIndex < 0 || pageIndex >= doc.NumberOfPages)
-                    return new List<PartTextLine>();
+            if (page == null || !page.IsValid)
+                return new List<PartTextLine>();
 
-                var page = doc.GetPage(pageIndex + 1);   // PdfPig 页码从 1 开始
-                if (page.Width <= 0 || page.Height <= 0)
-                    return new List<PartTextLine>();
+            int outside;
+            var raw = ReadPageWords(page.Words, page.Height,
+                                    imgWidth / page.Width, imgHeight / page.Height,
+                                    imgWidth, imgHeight, out outside);
 
-                int outside;
-                var raw = ReadPageWords(page, page.Height,
-                                        imgWidth / page.Width, imgHeight / page.Height,
-                                        imgWidth, imgHeight, out outside);
+            var texts = new List<PartText>(raw.Count);
+            foreach (var w in raw)
+                texts.Add(ToPartText(w, 1.0, 0, 0));   // mm 不参与计算，只取像素坐标
 
-                var texts = new List<PartText>(raw.Count);
-                foreach (var w in raw)
-                    texts.Add(ToPartText(w, 1.0, 0, 0));   // mm 不参与计算，只取像素坐标
-
-                return BuildLines(texts);
-            }
+            return BuildLines(texts);
         }
 
         /// <summary>

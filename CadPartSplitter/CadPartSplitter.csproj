@@ -113,6 +113,8 @@
     <Compile Include="RuledTable.cs" />
     <Compile Include="RuledTableExtractor.cs" />
     <Compile Include="RuledTableWriter.cs" />
+    <!-- 一页 PDF 的解析结果快照（词 + 矢量路径）：同一页只解析一次，供文字 / 圈号 / 表格 / 要領図 共用 -->
+    <Compile Include="PdfPageContent.cs" />
     <Compile Include="CsvFile.cs" />
     <Compile Include="HeaderNames.cs" />
     <Compile Include="LtStep1Builder.cs" />

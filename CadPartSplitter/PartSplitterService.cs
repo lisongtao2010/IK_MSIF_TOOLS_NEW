@@ -86,27 +86,39 @@ namespace CadPartSplitter
             int imgWidth, imgHeight;
             int maskStartX = -1;
 
+            bool isPdf = string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase);
+
+            // 同一页 PDF 只解析一次（页面尺寸 + 文字层全部词 + 全部矢量路径），
+            // 下面「表格块检测 / 文字行框 / 零件文字 / 圈号标注 / 有线表格 / 要領図一覧」全部共用这一份。
+            // 以前每个模块各自 PdfDocument.Open 一遍，同一页被打开解析 4~5 次 ——
+            // PdfPig 的开销几乎都在「解析交叉引用表 + 内容流 + 切词」上，重复打开是纯浪费。
+            // 位图输入（.png / .jpg …）没有文字层，留 null，各模块自行跳过。
+            PdfPageContent pageContent = null;
+
             using (Mat original = LoadImage(renderPath, opts))
             {
                 imgWidth  = original.Cols;
                 imgHeight = original.Rows;
+
+                // 位图渲染完再解析：先渲染少占一路 PDF 句柄，日志顺序也和以前一样「先渲染、后解析」。
+                if (isPdf)
+                    pageContent = PdfPageContent.Load(filePath, opts.PdfPageIndex, opts.Log);
 
                 // PDF 有文字层时，先用文字的行列结构定位「表格 / 表題欄」矩形，
                 // 让检测阶段只遮蔽这些矩形 —— 而不是把右侧整列涂黑
                 // （表格在上、零件视图在下且 X 投影重叠时，整列遮蔽会把零件视图一起抹掉）。
                 List<PageRect> tableAreas = null;
                 List<PageRect> lineBoxes  = null;
-                bool isPdf = string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase);
                 if (isPdf)
                 {
                     tableAreas = PartTextExtractor.DetectTableAreas(
-                        filePath, opts.PdfPageIndex, imgWidth, imgHeight, opts.Log);
+                        pageContent, imgWidth, imgHeight, opts.Log);
 
                     // 「文字行合计面积占自身外框 ≥ 60% 的块不是零件图」——
                     // 先算出整页文字行的外接框，交给检测阶段在导出 PNG 之前把表格残片筛掉。
                     if (opts.DropTextHeavyParts)
                         lineBoxes = PartTextExtractor.ReadTextLineBoxes(
-                            filePath, opts.PdfPageIndex, imgWidth, imgHeight, opts.Log);
+                            pageContent, imgWidth, imgHeight, opts.Log);
                 }
 
                 var detector = new PartDetector(opts);
@@ -119,15 +131,16 @@ namespace CadPartSplitter
                 PageTextResult pageText = null;
 
                 // PDF 有文字层时，把「零件框内 / 框外」的文字与坐标一并记录
-                if (string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase))
+                if (isPdf)
                 {
-                    pageText = PartTextExtractor.Attach(filePath, opts.PdfPageIndex, imgWidth, imgHeight,
+                    pageText = PartTextExtractor.Attach(pageContent, imgWidth, imgHeight,
                                                         opts.RenderDpi, maskStartX, parts, opts.Log);
 
                     // 圆圈是矢量图形、不在文字层里，单独识别「圈 + 圈内数字」（①1、②2 …）
+                    // 矢量路径同样来自这一份已解析的页面内容，不再重新打开 PDF。
                     if (pageText != null)
                     {
-                        pageText.Callouts = CalloutExtractor.Extract(filePath, opts.PdfPageIndex,
+                        pageText.Callouts = CalloutExtractor.Extract(pageContent,
                                                                      imgWidth, imgHeight, opts.RenderDpi, parts, opts);
                     }
                 }
@@ -174,7 +187,7 @@ namespace CadPartSplitter
             // 有线表格（单元格四面都被框线围住）—— 只读，与零件分割互不影响：
             // 哪怕这张图纸一个零件都没框出来，表格内容也照样落盘。
             // 开关、容差、日志都在 RuledTableExtractor / DetectorOptions 里，这里只负责「PDF 就试一次」。
-            if (string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase))
+            if (isPdf)
             {
                 // 顺手把「图面上被 取り消し線 划掉的词」带出来：**有没有表格都要落盘** ——
                 // 没画表格的組立図（H527U10001 那种只写自由文字的）也可能把其中一条
@@ -183,7 +196,7 @@ namespace CadPartSplitter
                 var struckPageWords = new List<StruckWordMark>();
 
                 tables = RuledTableExtractor.Extract(
-                    filePath, opts.PdfPageIndex, imgWidth, imgHeight, opts, struckPageWords);
+                    pageContent, imgWidth, imgHeight, opts, struckPageWords);
 
                 if (tables.Count > 0)
                     RuledTableWriter.Save(tables, opts.OutputDirectory, filePath, opts);
@@ -211,7 +224,7 @@ namespace CadPartSplitter
                 // **有没有表格都要试一次**：有些組立図根本没画表格，只在页面上写着
                 // 「下記に示す図面を参照のこと。/ A部詳細：H325U10011 …」（H527U10001 那种），
                 // 这时表格路径一条也收不到，改由整页文字行兜底（項目 保留到「部」，要領図漢字 留空）。
-                AssemblyYoryoBuilder.Build(opts.OutputDirectory, opts, filePath, opts.PdfPageIndex,
+                AssemblyYoryoBuilder.Build(opts.OutputDirectory, opts, pageContent,
                                            imgWidth, imgHeight);
 
                 if (tables.Count > 0)

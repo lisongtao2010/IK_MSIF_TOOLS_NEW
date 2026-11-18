@@ -236,7 +236,9 @@ namespace CadPartSplitter
         /// <returns>写出的要領図条数（不含表头）；0 表示没有生成文件。</returns>
         public static int Build(string outputDirectory, DetectorOptions opts)
         {
-            return Build(outputDirectory, opts, null, 0, 0, 0);
+            // 第三个参数显式标成 string：同名的 PdfPageContent 重载也在，
+            // 裸 null 两个都匹配（二义），这里说明走的是「没有 PDF」那一条。
+            return Build(outputDirectory, opts, (string)null, 0, 0, 0);
         }
 
         /// <summary>
@@ -266,6 +268,27 @@ namespace CadPartSplitter
         /// <returns>写出的要領図条数（不含表头）；0 表示没有生成文件。</returns>
         public static int Build(string outputDirectory, DetectorOptions opts, string pdfPath,
                                 int pageIndex, int renderWidth, int renderHeight)
+        {
+            // 兼容旧调用：自己解析一次本页（流水线内部用下面的 PdfPageContent 重载，全页只解析一次）
+            // 日志用 o.Log（opts 可能为 null；Log 是方法、不是委托，不能直接放进条件表达式）。
+            DetectorOptions o = opts ?? new DetectorOptions();
+
+            return Build(outputDirectory, opts,
+                         PdfPageContent.Load(pdfPath, pageIndex, o.Log),
+                         renderWidth, renderHeight);
+        }
+
+        /// <summary>
+        /// 同上，但直接使用已经解析好的页面内容（<see cref="PdfPageContent"/>：页面尺寸 + 词），
+        /// 不再打开 PDF。流水线里同一页的文字 / 圈号 / 表格 / 要領図 共用这一份解析结果。
+        /// </summary>
+        /// <param name="page">
+        /// 已解析的页面内容；null / 无效（<see cref="PdfPageContent.IsValid"/> 为 false）时只跑表格路径。
+        /// </param>
+        /// <param name="renderWidth">本次渲染的像素宽（文字坐标换算用；≤ 0 时跳过文字层）。</param>
+        /// <param name="renderHeight">本次渲染的像素高（同上）。</param>
+        public static int Build(string outputDirectory, DetectorOptions opts, PdfPageContent page,
+                                int renderWidth, int renderHeight)
         {
             DetectorOptions o = opts ?? new DetectorOptions();
 
@@ -302,7 +325,7 @@ namespace CadPartSplitter
 
                 // 未识别：页面上写着「A部詳細：H…」这种要領図索引时，按アッセンブリ図处理 ——
                 // 这种写法本身就是組立図上的索引（要領図 / 加工図 上不会这么写）。
-                freeIndex = ReadFreeTextIndex(pdfPath, pageIndex, renderWidth, renderHeight, drawingNumber, o);
+                freeIndex = ReadFreeTextIndex(page, renderWidth, renderHeight, drawingNumber, o);
 
                 if (freeIndex.Count == 0)
                 {
@@ -320,7 +343,7 @@ namespace CadPartSplitter
             {
                 o.Log("[INFO] 01_アッセンブリ図_要領図：图面分类「アッセンブリ図」（依据：" + categorySource + "），开始抽取。");
 
-                freeIndex = ReadFreeTextIndex(pdfPath, pageIndex, renderWidth, renderHeight, drawingNumber, o);
+                freeIndex = ReadFreeTextIndex(page, renderWidth, renderHeight, drawingNumber, o);
             }
 
             string csvDir = Path.Combine(outputDirectory, "tables");
@@ -1710,19 +1733,19 @@ namespace CadPartSplitter
         /// 重复合并几条、几条没配上 項目」，并把没配上的那几条原文（截断）打出来 ——
         /// 一眼能看出是文字层缺字 / 写法不认识 / 还是真的重复，不用靠猜。
         ///
-        /// 没有 PDF（<paramref name="pdfPath"/> 为 null）/ 页面尺寸无效 / 无文字层时返回空列表。
+        /// 没有页面内容（<paramref name="page"/> 为 null）/ 页面尺寸无效 / 无文字层时返回空列表。
         /// </summary>
-        private static List<string[]> ReadFreeTextIndex(string pdfPath, int pageIndex,
+        private static List<string[]> ReadFreeTextIndex(PdfPageContent page,
                                                         int renderWidth, int renderHeight,
                                                         string drawingNumber, DetectorOptions o)
         {
             var found = new List<string[]>();
 
-            if (string.IsNullOrWhiteSpace(pdfPath) || renderWidth <= 0 || renderHeight <= 0)
+            if (page == null || !page.IsValid || renderWidth <= 0 || renderHeight <= 0)
                 return found;
 
             List<PartTextLine> lines = PartTextExtractor.ReadTextLines(
-                pdfPath, pageIndex, renderWidth, renderHeight, line => o.Log(line));
+                page, renderWidth, renderHeight, line => o.Log(line));
 
             if (lines.Count == 0)
                 return found;
