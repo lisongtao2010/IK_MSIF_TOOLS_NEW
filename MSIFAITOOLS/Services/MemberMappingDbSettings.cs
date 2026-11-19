@@ -64,7 +64,7 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 具名连接：<c>connJP2</c>（10.103.126.209 / MSIF）。
-        /// 部材不材 mapping（<c>DL_BuhinBuzaiMapping</c>）用它 —— 部品基本信息画面点【保存】时
+        /// 部材 mapping（<c>DL_BuhinBuzaiMapping</c>）用它 —— 部品基本信息画面点【保存】时
         /// 把「部品名 / 部材名 / 部品コード」登录 / 更新进该表（<see cref="BuhinBuzaiMappingRepository"/>）。
         /// App.config 的 <c>&lt;connectionStrings&gt;</c> 里必须启用这一行。
         /// </summary>
@@ -602,7 +602,7 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 部材不材 mapping（<c>MSIF.dbo.DL_BuhinBuzaiMapping</c>）用的连接：
+        /// 部材 mapping（<c>MSIF.dbo.DL_BuhinBuzaiMapping</c>）用的连接：
         /// <see cref="MemberMappingDbSettings.JP2ConnectionName"/>（<c>connJP2</c> = 10.103.126.209 / MSIF）。
         /// <para>
         /// 由 <see cref="BuhinBuzaiMappingRepository.Register"/> 在部品基本信息画面【保存】时调用。
@@ -615,7 +615,7 @@ namespace MSIFAITOOLS.Services
         /// </para>
         /// <para>
         /// App.config 里没有 <c>connJP2</c>、画面也没保存过时退回 <see cref="Resolve"/>；
-        /// 那样会去 genpin 库找这张表 → 保存画面上出现「部材不材 mapping 登录失败」，
+        /// 那样会去 genpin 库找这张表 → 保存画面上出现「部材 mapping 登录失败」，
         /// 部品基本信息本身照样保存成功。
         /// </para>
         /// </summary>

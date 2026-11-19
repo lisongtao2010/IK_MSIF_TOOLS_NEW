@@ -97,7 +97,7 @@ namespace MSIFAITOOLS
                 tipHeader.SetToolTip(btnDbJp1,
                     UiText.T("维护 ① genpin 库的连接（部材名置换表 T_M_MergeName / CMD 分析 T_M_PartsMaster）"));
                 tipHeader.SetToolTip(btnDbJp2,
-                    UiText.T("维护 ② MSIF 库的连接（部材不材 mapping DL_BuhinBuzaiMapping）"));
+                    UiText.T("维护 ② MSIF 库的连接（部材 mapping DL_BuhinBuzaiMapping）"));
                 tipHeader.SetToolTip(btnLangZh,
                     UiText.T("界面语言：中文 / 日本語（切换后立即生效，并记住选择）"));
                 tipHeader.SetToolTip(btnLangJa, tipHeader.GetToolTip(btnLangZh));

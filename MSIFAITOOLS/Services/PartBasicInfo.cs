@@ -103,7 +103,7 @@ namespace MSIFAITOOLS.Services
         /// （<c>CmdPartAnalysisService.ApplyMemberNames</c>）、第 2 / 3 步按位置拆条
         /// （<c>CmdCalloutPartSplitter.Clone</c> / <c>CmdInstructionPartCollector</c>）。
         /// 「选择部材名」窗口的候选<b>不再</b>置换（显示的是表示部材名 <c>MsifDevName</c> /
-        /// 部材不材 mapping 的 <c>BuzaiName</c>）。
+        /// 部材 mapping 的 <c>BuzaiName</c>）。
         /// 库里存的已经是置换后的值；读取时再换一次的话，
         /// 置换表里存在链式规则（<c>A → B</c> 且 <c>B → C</c>）时会连换两次（<c>A → C</c>），
         /// 第 2 / 3 步「读出来 → 改 → 整张表写回」（<c>PartBasicInfoRepository.Query</c> →

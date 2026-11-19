@@ -43,7 +43,10 @@ namespace MSIFAITOOLS
         /// <summary>PDF 预览窗口（非模态，选中分类列表行时复用同一个窗口）。</summary>
         private PdfPreviewForm _previewForm;
 
-        /// <summary>部品基本信息窗口（非模态，选中分类列表行后复用同一个窗口）。</summary>
+        /// <summary>
+        /// 部品基本信息窗口（非模态，<b>全局只保留一个</b>：选中分类列表行后复用同一个窗口，
+        /// 不同图番只切换显示内容；引用丢了用 <see cref="PartBasicInfoForm.FindOpenInstance"/> 找回）。
+        /// </summary>
         private PartBasicInfoForm _partInfoForm;
 
         /// <summary>填充分类表格期间抑制「选中即预览」，避免批量刷新时弹出预览窗口。</summary>
@@ -270,13 +273,13 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 【接続② MSIF】：维护 SQL Server ② 的连接（部材不材 mapping <c>DL_BuhinBuzaiMapping</c>）。
+        /// 【接続② MSIF】：维护 SQL Server ② 的连接（部材 mapping <c>DL_BuhinBuzaiMapping</c>）。
         /// 保存后，下一次在部品基本信息画面点【保存】时按新连接写入。
         /// </summary>
         private void BtnDbJp2Settings_Click(object sender, EventArgs e)
         {
             ShowDbConnectionSettings(MemberMappingDbSettings.JP2ConnectionName,
-                "② MSIF（部材不材 mapping）");
+                "② MSIF（部材 mapping）");
         }
 
         /// <summary>
@@ -2094,7 +2097,8 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 在独立窗口（PartBasicInfoForm）中显示指定 PDF（図番）已登录到 SQLite 的部品基本信息；
-        /// 窗口已存在时复用并切换到该 PDF。PDF 预览画面与本画面同时打开：
+        /// 部品基本信息画面<b>全局只保留一个</b>：已经打开时只切换显示内容，只有没有窗口（或被用户关掉）时才新建。
+        /// PDF 预览画面与本画面同时打开：
         /// 预览窗口在主画面以外的屏幕（不和主画面挤在一块屏上）、部品基本信息在主画面所在的屏幕
         /// （只有 1 块屏幕时左右并排）。
         /// </summary>
@@ -2110,44 +2114,87 @@ namespace MSIFAITOOLS
 
             string databasePath = ResolvePartDatabasePath();
 
+            // 部品基本信息画面全局只保留一个：先取现在已经打开的那个
+            // （主画面自己的引用丢了也能从 Application.OpenForms 里找回来，
+            //  见 PartBasicInfoForm.FindOpenInstance）
+            PartBasicInfoForm form = PartBasicInfoForm.FindOpenInstance();
+
             // 换了图纸文件夹（= 换了一份库）：先把旧窗口关掉重建，免得继续读写上一个项目的库。
-            // 旧窗口有未保存的修改时会先询问，用户选「取消」就继续用旧窗口（他正在编辑旧库的数据）
-            if (_partInfoForm != null && !_partInfoForm.IsDisposed &&
-                !string.Equals(_partInfoForm.DatabasePath, databasePath, StringComparison.OrdinalIgnoreCase))
+            // 旧窗口有未保存的修改时会先询问 —— 用户选「取消」就保留旧窗口，
+            // 这时<b>不再新建第二个窗口</b>（全局只保留一个），只把旧窗口提到前面提示先保存 / 关闭。
+            if (form != null && !string.Equals(form.DatabasePath, databasePath, StringComparison.OrdinalIgnoreCase))
             {
-                _partInfoForm.Close();
+                form.Close();
+
+                // 还活着 = 用户在「未保存」询问里点了「取消」：保留旧窗口，绝不新建第二个
+                if (!form.IsDisposed)
+                {
+                    if (!form.Visible)
+                    {
+                        form.Show();
+                    }
+
+                    form.BringToFront();
+                    form.Activate();
+                    SetStatus("部品基本信息画面有未保存的修改，切换数据库已取消：请先保存或关闭它",
+                        Color.FromArgb(239, 108, 0));
+                    return;
+                }
+
+                form = null;
             }
 
-            bool created = _partInfoForm == null || _partInfoForm.IsDisposed;
+            bool created = form == null || form.IsDisposed;
 
             if (created)
             {
-                _partInfoForm = new PartBasicInfoForm(databasePath);
+                form = new PartBasicInfoForm(databasePath);
+
                 // 不设 Owner：Owned 窗口永远浮在 Owner（主画面）之上，主画面就再也盖不住它了。
                 // 主画面只通过 MainWindow 传给本画面做「窗口摆放 / z 顺序」判断；
                 // 关闭主窗口时由 OnFormClosed 显式关闭本画面。
-                _partInfoForm.MainWindow = this;
-                _partInfoForm.FormClosed += PartInfoForm_FormClosed;
+                form.MainWindow = this;
+            }
 
+            // 复用 / 从 Application.OpenForms 找回来的窗口也记为当前窗口
+            _partInfoForm = form;
+
+            if (created)
+            {
                 // 主画面已打开的预览窗口移交给部品基本信息画面（两个画面成对显示）
                 TransferPreviewFormToPartInfo();
             }
 
-            _partInfoForm.ShowDrawing(item.FilePath);
+            // 关闭事件只挂一次（新建 / 找回来的窗口都要挂上）
+            form.FormClosed -= PartInfoForm_FormClosed;
+            form.FormClosed += PartInfoForm_FormClosed;
 
-            if (created || !_partInfoForm.Visible)
+            form.ShowDrawing(item.FilePath);
+
+            // 复用窗口时「切换图番」会先问是否保存，用户点「取消」就还是原来的图番：
+            // 这时只把窗口显示出来，状态栏不要写成新图番
+            bool drawingSwitched = string.Equals(form.PdfPath, item.FilePath, StringComparison.OrdinalIgnoreCase);
+
+            if (created || !form.Visible)
             {
-                _partInfoForm.Show();
+                if (form.WindowState == FormWindowState.Minimized)
+                {
+                    form.WindowState = FormWindowState.Normal;
+                }
+
+                form.Show();
             }
 
             if (bringToFront)
             {
-                _partInfoForm.BringToFront();
-                _partInfoForm.Activate();
+                form.BringToFront();
+                form.Activate();
             }
 
-            SetStatus("部品基本信息：" + PartBasicInfoRepository.ResolveDrawingNo(item.FilePath),
-                Color.FromArgb(46, 125, 50));
+            SetStatus(drawingSwitched
+                    ? "部品基本信息：" + PartBasicInfoRepository.ResolveDrawingNo(item.FilePath)
+                    : "已取消切换图番：部品基本信息画面保持原来的图番",
+                drawingSwitched ? Color.FromArgb(46, 125, 50) : Color.FromArgb(239, 108, 0));
         }
 
         /// <summary>部品基本信息窗口关闭后清空引用，便于下次重新创建。</summary>
@@ -2158,6 +2205,14 @@ namespace MSIFAITOOLS
             if (form != null)
             {
                 form.FormClosed -= PartInfoForm_FormClosed;
+
+                // 只清「这一个」的引用：新建的窗口已经接替时不要把新引用也清掉
+                if (ReferenceEquals(_partInfoForm, form))
+                {
+                    _partInfoForm = null;
+                }
+
+                return;
             }
 
             _partInfoForm = null;
@@ -2203,6 +2258,12 @@ namespace MSIFAITOOLS
             // Close() 会触发 FormClosed（事件里会清空字段），所以先取到局部变量
             PdfPreviewForm preview = _previewForm;
             PartBasicInfoForm partInfo = _partInfoForm;
+
+            // 兜底：部品基本信息画面全局只保留一个 —— 引用丢了也把已打开的那个找回来一起关
+            if (partInfo == null || partInfo.IsDisposed)
+            {
+                partInfo = PartBasicInfoForm.FindOpenInstance();
+            }
 
             _previewForm = null;
             _partInfoForm = null;

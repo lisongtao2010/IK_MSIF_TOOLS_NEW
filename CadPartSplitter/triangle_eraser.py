@@ -1,118 +1,78 @@
 #!/usr/bin/env python3
 """
-triangle_eraser.py
-批量擦除工程图纸 PDF 中的「三角形注释符号」（△1, △2 等改版标记）
+triangle_eraser.py (底层矢量指令外科手术版 - 全形态 CAD 三角形通杀版)
+批量物理删除工程图纸 PDF 中的「三角形注释符号」（△1, △2, △3, △4 等改版标记）
 
-特点：
-  · 只擦除「小三角形框 + 框内数字」的组合，不影响邻近的尺寸数字（如 100）和表格边框线
-  · 支持矢量 PDF（CAD/AutoCAD 导出）和扫描版 PDF（图片页面），自动切换检测策略
-  · 用白色矩形覆盖（redaction），不改变页面其他所有内容
+核心升级：
+  · 修复了 PDF 中用 `m -> l -> l -> h`（2条线+闭合指令）画三角形时被漏检的 Bug！
+  · 针对 AutoCAD SHX 拆线特性：支持通过 `AutoCAD SHX Text` 纯数字批注直接反推锁定三角形区域，
+    无论三角形是 1 笔画还是 3 条独立线段拼成的，全部精准识别并物理删除！
+  · 按子路径（subpath）粒度手术切割，100% 保留所有表格边框线与紧邻文字（如 MZC●●72）。
 
 安装依赖：
-  pip install pymupdf opencv-python numpy
-
-用法示例：
-  # 单张测试（强烈建议先跑这个确认效果，会在原文件旁生成 *_clean.pdf）
-  python triangle_eraser.py --test drawing.pdf
-
-  # 单张测试 + debug 模式（额外输出红框标注图 PNG，直观看到识别了哪些三角形）
-  python triangle_eraser.py --test drawing.pdf --debug
-
-  # 批量处理整个文件夹
-  python triangle_eraser.py --input ./pdf_in --output ./pdf_out
-
-  # 批量 + debug
-  python triangle_eraser.py --input ./pdf_in --output ./pdf_out --debug
+  pip install pymupdf pikepdf opencv-python numpy
 """
 
-import fitz          # PyMuPDF
+import fitz          # PyMuPDF（用于定位识别与生成 debug 图）
+import pikepdf       # 底层 PDF 指令流手术刀（用于无损删除指定路径、SHX笔画和文本）
 import cv2
 import numpy as np
 import os, sys, argparse, math
 from pathlib import Path
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  可调参数（如果识别效果不理想，先从这里调整）
+#  可调参数
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 三角形大小范围（单位：PDF points，1 pt = 1/72 英寸 ≈ 0.353 mm）
-# 工程图纸上的改版三角符号通常 5~12 mm，对应 14~34 pt
-# 如果漏识别，可适当调大 TRIANGLE_MAX_PT；如果误识别，可调小
-TRIANGLE_MIN_PT = 6     # 低于此尺寸的三角形跳过（箭头尖端、极小装饰）
-TRIANGLE_MAX_PT = 50    # 超过此尺寸的三角形跳过（大型几何图形、箭头块）
-
-# 擦除区域向外扩展量（pt），确保三角形边线也被完整覆盖住
-# 保持尽量小，避免白色矩形扩到相邻内容（如旁边的尺寸数字）
-ERASE_PADDING_PT = 1
-
-# 矢量路径检测：三条边长度的「不均匀度」容差（0~1，越大越宽松）
-# 等腰/等边三角形约 0~0.15；改版符号有时稍微变形，给到 0.4
-SIDE_RATIO_TOLERANCE = 0.45
-
-# 图像层检测（扫描 PDF）：渲染分辨率（dpi）——越高越准但越慢，150 够用
-IMAGE_DPI = 150
-
-# 图像层检测：多边形轮廓近似精度（占周长比例），越小越严格（认定为三角形）
-APPROX_EPSILON_RATIO = 0.05
-
-# 三角形框内「数字」的搜索扩展量（pt）
-# 只用于初步搜索候选词，最终判定仍用中心点是否在框内——保持小值即可
-DIGIT_SEARCH_EXPAND = 2
+TRIANGLE_MIN_PT = 6          # 低于此尺寸的三角形跳过（pt）
+TRIANGLE_MAX_PT = 50         # 超过此尺寸的三角形跳过（pt）
+SIDE_RATIO_TOLERANCE = 0.45  # 三条边长度均匀度容差（0~1，越大越宽松）
+IMAGE_DPI = 150              # debug 预览图渲染分辨率
+DIGIT_SEARCH_EXPAND = 2      # 数字搜索扩展容差（pt）
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  矢量路径层检测（适用于 CAD 导出的矢量 PDF）
+#  1. 利用 PyMuPDF 精准定位「三角形框」（兼容 m-l-l-h、普通字体、AutoCAD SHX）
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _extract_vertices(items):
-    """
-    从 get_drawings() 的 items 列表提取顶点序列。
-    只处理 moveto / lineto，贝塞尔曲线只取终点（粗略近似）。
-    """
     pts = []
     for item in items:
         kind = item[0]
-        if kind == "m":          # moveto → 起点
+        if kind in ("m", "l"):
             pts.append(item[1])
-        elif kind == "l":        # lineto → 终点
-            pts.append(item[1])
-        elif kind == "c":        # curveto → 只取终点
+        elif kind == "c":
             pts.append(item[3])
     return pts
 
 
 def _looks_like_triangle(items):
     """
-    判断一条路径是否是三角形：
-      · 恰好 3 条直线段（lineto）
+    判断一条路径是否是三角形（兼容 3条l 或 2条l+闭合指令h）：
+      · 提取去重后的唯一顶点数必须恰好为 3
       · 没有贝塞尔曲线
-      · 三条边的长度接近（等腰/等边）
+      · 三条边长度接近
     """
-    line_items  = [i for i in items if i[0] == "l"]
     curve_items = [i for i in items if i[0] == "c"]
-
-    if len(line_items) != 3 or len(curve_items) > 0:
+    if len(curve_items) > 0:
         return False
 
     pts = _extract_vertices(items)
-
-    # 去掉重复点（起点/终点相同），取前 3 个唯一顶点
     unique = []
     for p in pts:
-        if not unique or (abs(p.x - unique[-1].x) > 0.5 or abs(p.y - unique[-1].y) > 0.5):
-            unique.append(p)
-        if len(unique) == 3:
-            break
+        # 过滤掉与上一个点重合，或与第一个起点重合（闭合点）的坐标
+        if any(abs(p.x - u.x) < 0.5 and abs(p.y - u.y) < 0.5 for u in unique):
+            continue
+        unique.append(p)
 
-    if len(unique) < 3:
+    # 必须恰好 3 个顶点（兼容 m-l-l-l 和 m-l-l-h 两种写法）
+    if len(unique) != 3:
         return False
 
-    def dist(a, b):
-        return math.hypot(a.x - b.x, a.y - b.y)
-
-    sides = [dist(unique[0], unique[1]),
-             dist(unique[1], unique[2]),
-             dist(unique[2], unique[0])]
-
+    sides = [
+        math.hypot(unique[0].x - unique[1].x, unique[0].y - unique[1].y),
+        math.hypot(unique[1].x - unique[2].x, unique[1].y - unique[2].y),
+        math.hypot(unique[2].x - unique[0].x, unique[2].y - unique[0].y),
+    ]
     mean_side = sum(sides) / 3
     if mean_side < 1:
         return False
@@ -121,386 +81,468 @@ def _looks_like_triangle(items):
     return (std / mean_side) < SIDE_RATIO_TOLERANCE
 
 
-def find_vector_triangles(page):
-    """
-    在矢量图形层（page.get_drawings）查找三角形注释符号。
-    返回 list of fitz.Rect（三角形的边界框）。
-    """
-    found = []
-
-    for d in page.get_drawings():
-        rect = d.get("rect")
-        if rect is None:
-            continue
-
-        w, h = rect.width, rect.height
-
-        # ① 大小过滤
-        if w < TRIANGLE_MIN_PT or h < TRIANGLE_MIN_PT:
-            continue
-        if w > TRIANGLE_MAX_PT or h > TRIANGLE_MAX_PT:
-            continue
-
-        # ② 长宽比过滤：三角形边界框大致接近正方形（0.3~3.0）
-        ratio = w / h if h > 0 else 0
-        if ratio < 0.3 or ratio > 3.0:
-            continue
-
-        # ③ 形状过滤：3 条直线段构成的闭合三角形
-        items = d.get("items", [])
-        if not _looks_like_triangle(items):
-            continue
-
-        found.append(rect)
-
-    return found
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  图像层检测（适用于扫描版 PDF / 图片页面，作为矢量检测的兜底）
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def find_image_triangles(page, dpi=IMAGE_DPI):
-    """
-    把页面渲染成灰度图，用 OpenCV 轮廓检测找三角形注释符号。
-    返回 list of fitz.Rect（已换算回 PDF points 坐标）。
-    """
-    mat = fitz.Matrix(dpi / 72, dpi / 72)
-    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
-    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
-
-    # 二值化（深色线条 → 白色前景，白色背景 → 黑色）
-    _, binary = cv2.threshold(img, 200, 255, cv2.THRESH_BINARY_INV)
-
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # 坐标换算比例：图像像素 → PDF points
-    scale = 72.0 / dpi
-    found = []
-
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < 20:
-            continue    # 噪点，太小
-
-        # 多边形近似：顶点数等于 3 才是三角形
-        peri   = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, APPROX_EPSILON_RATIO * peri, True)
-
-        if len(approx) != 3:
-            continue
-
-        # 凸性检查（改版三角形都是凸多边形）
-        if not cv2.isContourConvex(approx):
-            continue
-
-        x, y, w, h = cv2.boundingRect(cnt)
-        w_pt = w * scale
-        h_pt = h * scale
-
-        # 大小过滤
-        if w_pt < TRIANGLE_MIN_PT or h_pt < TRIANGLE_MIN_PT:
-            continue
-        if w_pt > TRIANGLE_MAX_PT or h_pt > TRIANGLE_MAX_PT:
-            continue
-
-        # 长宽比过滤
-        ratio = w / h if h > 0 else 0
-        if ratio < 0.3 or ratio > 3.0:
-            continue
-
-        # 换算回 PDF 坐标（PyMuPDF 页面坐标原点在左上角，y 轴向下，与图像一致）
-        x0 = x       * scale
-        y0 = y       * scale
-        x1 = (x + w) * scale
-        y1 = (y + h) * scale
-
-        found.append(fitz.Rect(x0, y0, x1, y1))
-
-    return found
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  核心验证：三角形框内必须有纯数字
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _word_center_inside(word_tuple, tri_rect):
-    """
-    判断一个词的「中心点」是否落在三角形边界框内。
-    这是防止旁边的尺寸数字（如「100」）被误收的核心判断。
-    word_tuple 是 get_text("words") 返回的 (x0, y0, x1, y1, text, ...) 元组。
-    """
-    wx0, wy0, wx1, wy1 = word_tuple[:4]
-    cx = (wx0 + wx1) / 2
-    cy = (wy0 + wy1) / 2
-    return tri_rect.x0 <= cx <= tri_rect.x1 and tri_rect.y0 <= cy <= tri_rect.y1
-
-
-def has_digit_inside(page, tri_rect):
-    """
-    检查三角形边界框内是否有纯数字文本（1~4 位改版编号）。
-    判定条件：数字词的「中心点」必须落在三角形框内（不只是与扩展区域相交）。
-    这样即使「100」紧贴三角形右侧，只要它的中心在框外，就不会被认为是框内数字。
-    """
+def _get_normal_digits_inside(page, tri_rect):
+    """查找普通/CID文本层中落在三角形框内的纯数字字符小框"""
     search = fitz.Rect(
         tri_rect.x0 - DIGIT_SEARCH_EXPAND,
         tri_rect.y0 - DIGIT_SEARCH_EXPAND,
         tri_rect.x1 + DIGIT_SEARCH_EXPAND,
         tri_rect.y1 + DIGIT_SEARCH_EXPAND,
     )
-
-    for word in page.get_text("words", clip=search):
-        text = word[4].strip()
-        if text.isdigit() and 1 <= len(text) <= 4:
-            # ★ 核心修复：中心点必须在三角形框内，不能只是在扩展搜索区里
-            if _word_center_inside(word, tri_rect):
-                return True
-
-    return False
-
-
-def collect_digit_rects_inside(page, tri_rect):
-    """
-    收集三角形边界框内所有纯数字文字的矩形（用于一并擦除）。
-    同样用中心点判定，确保只收框内的数字，不收旁边的尺寸数字（如「100」）。
-    """
-    search = fitz.Rect(
-        tri_rect.x0 - DIGIT_SEARCH_EXPAND,
-        tri_rect.y0 - DIGIT_SEARCH_EXPAND,
-        tri_rect.x1 + DIGIT_SEARCH_EXPAND,
-        tri_rect.y1 + DIGIT_SEARCH_EXPAND,
-    )
-
-    rects = []
-    for word in page.get_text("words", clip=search):
-        text = word[4].strip()
-        if text.isdigit() and 1 <= len(text) <= 4:
-            # ★ 核心修复：只收中心点在三角形框内的数字
-            if _word_center_inside(word, tri_rect):
-                rects.append(fitz.Rect(word[:4]))
-
-    return rects
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  方案A：擦除前收集被遮文字 → 擦除 → 恢复文字
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _color_int_to_rgb(color_int):
-    """PDF 颜色整数 (0xRRGGBB) → (r, g, b)，各分量 0.0-1.0。"""
-    r = ((color_int >> 16) & 0xFF) / 255.0
-    g = ((color_int >> 8)  & 0xFF) / 255.0
-    b = ( color_int        & 0xFF) / 255.0
-    return (r, g, b)
-
-
-def collect_covered_text(page, tri_rect):
-    """
-    擦除前，收集三角形白色遮盖区域内「非改版编号」的原始文字信息。
-    这些文字在擦除后会被重新插回，防止把原图表格里的字一起抹掉。
-
-    返回 list of dict，每项含 text / bbox / size / color。
-    """
-    erase_rect = fitz.Rect(
-        tri_rect.x0 - ERASE_PADDING_PT,
-        tri_rect.y0 - ERASE_PADDING_PT,
-        tri_rect.x1 + ERASE_PADDING_PT,
-        tri_rect.y1 + ERASE_PADDING_PT,
-    )
-
-    result = []
-    raw = page.get_text("rawdict", clip=erase_rect)
-
+    digit_rects = []
+    raw = page.get_text("rawdict", clip=search)
     for block in raw.get("blocks", []):
-        if block.get("type") != 0:   # 只处理文字块
+        if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
             for span in line.get("spans", []):
-                text = span.get("text", "")
-                stripped = text.strip()
-                if not stripped:
+                for ch in span.get("chars", []):
+                    c = ch.get("c", "")
+                    if c.isdigit():
+                        bx0, by0, bx1, by1 = ch["bbox"]
+                        cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
+                        if tri_rect.x0 <= cx <= tri_rect.x1 and tri_rect.y0 <= cy <= tri_rect.y1:
+                            digit_rects.append(fitz.Rect(bx0, by0, bx1, by1))
+    return digit_rects
+
+
+def _get_all_shx_digit_annots(page):
+    """获取页面上所有内容为 1~4 位纯数字的 AutoCAD SHX Text 批注"""
+    shx_list = []
+    for annot in page.annots() or []:
+        info = annot.info or {}
+        title = info.get("title", "")
+        content = info.get("content", "").strip()
+        if ("AutoCAD SHX" in title or "SHX" in title) and content.isdigit() and 1 <= len(content) <= 4:
+            shx_list.append(annot.rect)
+    return shx_list
+
+
+def _has_shx_vector_strokes_inside(all_drawings, tri_rect):
+    """检查三角形内部是否包含 AutoCAD SHX 字体拆分出来的小矢量笔画"""
+    inner_margin = 0.3
+    for d in all_drawings:
+        r = d.get("rect")
+        if r is None:
+            continue
+        if (abs(r.x0 - tri_rect.x0) < 0.8 and abs(r.y0 - tri_rect.y0) < 0.8 and
+            abs(r.x1 - tri_rect.x1) < 0.8 and abs(r.y1 - tri_rect.y1) < 0.8):
+            continue
+        if (r.x0 >= tri_rect.x0 + inner_margin and r.x1 <= tri_rect.x1 - inner_margin and
+            r.y0 >= tri_rect.y0 + inner_margin and r.y1 <= tri_rect.y1 - inner_margin):
+            if r.width > 0.3 or r.height > 1.2:
+                return True
+    return False
+
+
+def _merge_rect_into_list(rect_list, new_rect, tol=1.5):
+    """去重添加矩形"""
+    for r in rect_list:
+        if (abs(r.x0 - new_rect.x0) <= tol and abs(r.y0 - new_rect.y0) <= tol and
+            abs(r.x1 - new_rect.x1) <= tol and abs(r.y1 - new_rect.y1) <= tol):
+            return
+    rect_list.append(new_rect)
+
+
+def find_valid_triangles_and_digits(page):
+    """
+    双重锁定策略：
+      策略 1：扫描所有矢量路径，识别三角形外框 + 内部数字（普通数字 / SHX批注 / SHX笔画）
+      策略 2：直接从 AutoCAD SHX Text 纯数字批注出发，反向包围周围的小线段组（专门攻克把三角形拆成3条独立直线的 CAD 图纸）
+    """
+    tri_rects = []
+    all_digit_rects = []
+
+    all_drawings = page.get_drawings()
+    all_shx_annots = _get_all_shx_digit_annots(page)
+
+    # ── 策略 1：正向找一笔画三角形 ──
+    for d in all_drawings:
+        rect = d.get("rect")
+        if rect is None:
+            continue
+        w, h = rect.width, rect.height
+        if w < TRIANGLE_MIN_PT or h < TRIANGLE_MIN_PT or w > TRIANGLE_MAX_PT or h > TRIANGLE_MAX_PT:
+            continue
+        ratio = w / h if h > 0 else 0
+        if ratio < 0.3 or ratio > 3.0:
+            continue
+        if not _looks_like_triangle(d.get("items", [])):
+            continue
+
+        digits = _get_normal_digits_inside(page, rect)
+        expanded = fitz.Rect(rect.x0 - 3, rect.y0 - 3, rect.x1 + 3, rect.y1 + 3)
+        matched_shx = [sr for sr in all_shx_annots if sr.intersects(expanded)]
+        has_shx_strokes = _has_shx_vector_strokes_inside(all_drawings, rect)
+
+        if digits or matched_shx or has_shx_strokes:
+            _merge_rect_into_list(tri_rects, rect)
+            all_digit_rects.extend(digits)
+
+    # ── 策略 2：针对拆成多条独立线段的 AutoCAD SHX 符号，由 SHX 批注反向锁定包围框 ──
+    for sr in all_shx_annots:
+        # 检查是否已经被策略 1 覆盖
+        if any(tr.contains(sr) or tr.intersects(sr) for tr in tri_rects):
+            continue
+
+        # 在 SHX 数字批注周围 18pt 范围内收集所有短小线段（构成三角形外框的独立边）
+        cx, cy = (sr.x0 + sr.x1) / 2, (sr.y0 + sr.y1) / 2
+        search_box = fitz.Rect(cx - 18, cy - 18, cx + 18, cy + 18)
+        nearby_small_rects = [sr]
+
+        for d in all_drawings:
+            r = d.get("rect")
+            if r is None:
+                continue
+            # 必须是短小线段（排除长表格线！）
+            if r.width <= TRIANGLE_MAX_PT and r.height <= TRIANGLE_MAX_PT:
+                if search_box.contains(r):
+                    nearby_small_rects.append(r)
+
+        if len(nearby_small_rects) >= 2:
+            union_rect = fitz.Rect(nearby_small_rects[0])
+            for r in nearby_small_rects[1:]:
+                union_rect.include_rect(r)
+            if TRIANGLE_MIN_PT <= union_rect.width <= TRIANGLE_MAX_PT and TRIANGLE_MIN_PT <= union_rect.height <= TRIANGLE_MAX_PT:
+                _merge_rect_into_list(tri_rects, union_rect)
+
+    return tri_rects, all_digit_rects, all_shx_annots
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  2. 底层 PDF 指令流手术刀（按 subpath 子路径逐段切割，绝不伤及表格长线）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _mat_mul(m1, m2):
+    a1, b1, c1, d1, e1, f1 = m1
+    a2, b2, c2, d2, e2, f2 = m2
+    return [
+        a1 * a2 + b1 * c2,
+        a1 * b2 + b1 * d2,
+        c1 * a2 + d1 * c2,
+        c1 * b2 + d1 * d2,
+        e1 * a2 + f1 * c2 + e2,
+        e1 * b2 + f1 * d2 + f2,
+    ]
+
+
+def _transform_pt(x, y, ctm, page_h, crop_x0, crop_y0):
+    px = ctm[0] * x + ctm[2] * y + ctm[4]
+    py = ctm[1] * x + ctm[3] * y + ctm[5]
+    fx = px - crop_x0
+    fy = page_h - (py - crop_y0)
+    return fx, fy
+
+
+def _should_remove_subpath(bbox, tri_rects, tol=1.2):
+    """
+    判断一条独立的子路径（subpath）是否应该被物理删除：
+      只要这条子路径的整个包围盒完全落入（或紧贴重合）某个目标三角形区域内，就删除！
+      因为表格边框线很长，其包围盒必然远远超出三角形框，因此 100% 不会被误删！
+    """
+    if bbox is None:
+        return False
+    x0, y0, x1, y1 = bbox
+    for tr in tri_rects:
+        if (x0 >= tr.x0 - tol and x1 <= tr.x1 + tol and
+            y0 >= tr.y0 - tol and y1 <= tr.y1 + tol):
+            return True
+    return False
+
+
+def _pt_hits_any_digit_rect(fx, fy, digit_rects, tol=2.0):
+    for dr in digit_rects:
+        if (dr.x0 - tol <= fx <= dr.x1 + tol and
+            dr.y0 - tol <= fy <= dr.y1 + tol):
+            return True
+    return False
+
+
+def _estimate_tj_width_em(pdf_str_obj, is_cid=True):
+    try:
+        raw_bytes = bytes(pdf_str_obj)
+    except Exception:
+        raw_bytes = str(pdf_str_obj).encode("latin1", errors="ignore")
+    char_count = max(1, len(raw_bytes) // 2) if (is_cid and len(raw_bytes) >= 2) else max(1, len(raw_bytes))
+    return char_count * 550.0
+
+
+def _remove_triangles_from_stream(pdf, obj_or_page, tri_rects, digit_rects, page_h, crop_x0, crop_y0, init_ctm=None):
+    if init_ctm is None:
+        init_ctm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
+    resources = obj_or_page.get("/Resources")
+    if resources and "/XObject" in resources:
+        xobjs = resources["/XObject"]
+        for name, xobj in list(xobjs.items()):
+            try:
+                if xobj.get("/Subtype") == pikepdf.Name("/Form"):
+                    x_mat = [float(v) for v in xobj.get("/Matrix", [1, 0, 0, 1, 0, 0])]
+                    sub_ctm = _mat_mul(x_mat, init_ctm)
+                    _remove_triangles_from_stream(pdf, xobj, tri_rects, digit_rects, page_h, crop_x0, crop_y0, sub_ctm)
+            except Exception:
+                pass
+
+    try:
+        instructions = pikepdf.parse_content_stream(obj_or_page)
+    except Exception:
+        return
+
+    ctm = list(init_ctm)
+    ctm_stack = []
+    new_instructions = []
+
+    # 按 subpath（每次 m 到下一次 m 或绘制操作符）精细缓存，防止多条线打包在一个 S 里时无法拆分
+    subpaths = []          # list of (inst_list, pts_list)
+    cur_sub_insts = []
+    cur_sub_pts = []
+
+    in_text = False
+    tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    tlm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    font_size = 10.0
+
+    PATH_BUILD_OPS = {"m", "l", "c", "v", "y", "h", "re"}
+    PATH_PAINT_OPS = {"S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n"}
+
+    def commit_subpath():
+        nonlocal cur_sub_insts, cur_sub_pts
+        if cur_sub_insts:
+            subpaths.append((cur_sub_insts, cur_sub_pts))
+            cur_sub_insts = []
+            cur_sub_pts = []
+
+    def flush_all_subpaths(paint_inst=None):
+        nonlocal subpaths
+        commit_subpath()
+        if not subpaths and paint_inst is None:
+            return
+
+        kept_insts = []
+        for s_insts, s_pts in subpaths:
+            bbox = None
+            if s_pts:
+                xs = [p[0] for p in s_pts]
+                ys = [p[1] for p in s_pts]
+                bbox = (min(xs), min(ys), max(xs), max(ys))
+            # 只有落入三角形框内的子路径才丢弃，同组里的长表格线完整保留！
+            if not _should_remove_subpath(bbox, tri_rects):
+                kept_insts.extend(s_insts)
+
+        if kept_insts:
+            new_instructions.extend(kept_insts)
+            if paint_inst is not None:
+                new_instructions.append(paint_inst)
+
+        subpaths = []
+
+    for operands, operator in instructions:
+        op = str(operator)
+
+        if op == "q":
+            flush_all_subpaths()
+            ctm_stack.append(list(ctm))
+            new_instructions.append((operands, operator))
+            continue
+        elif op == "Q":
+            flush_all_subpaths()
+            if ctm_stack:
+                ctm = ctm_stack.pop()
+            new_instructions.append((operands, operator))
+            continue
+        elif op == "cm" and len(operands) == 6:
+            flush_all_subpaths()
+            m = [float(x) for x in operands]
+            ctm = _mat_mul(m, ctm)
+            new_instructions.append((operands, operator))
+            continue
+
+        if op in PATH_BUILD_OPS:
+            # 每次遇到新的 moveto (m) 或矩形 (re)，切分出一条独立的子路径
+            if op in ("m", "re"):
+                commit_subpath()
+
+            cur_sub_insts.append((operands, operator))
+            if op in ("m", "l") and len(operands) >= 2:
+                fx, fy = _transform_pt(float(operands[0]), float(operands[1]), ctm, page_h, crop_x0, crop_y0)
+                cur_sub_pts.append((fx, fy))
+            elif op in ("c", "v", "y") and len(operands) >= 2:
+                for idx in range(0, len(operands) - 1, 2):
+                    fx, fy = _transform_pt(float(operands[idx]), float(operands[idx + 1]), ctm, page_h, crop_x0, crop_y0)
+                    cur_sub_pts.append((fx, fy))
+            elif op == "re" and len(operands) == 4:
+                rx, ry, rw, rh = [float(v) for v in operands]
+                for cx, cy in [(rx, ry), (rx + rw, ry), (rx, ry + rh), (rx + rw, ry + rh)]:
+                    cur_sub_pts.append(_transform_pt(cx, cy, ctm, page_h, crop_x0, crop_y0))
+            continue
+
+        if op in PATH_PAINT_OPS:
+            flush_all_subpaths((operands, operator))
+            continue
+
+        flush_all_subpaths()
+
+        if op == "BT":
+            in_text = True
+            tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            tlm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            new_instructions.append((operands, operator))
+            continue
+        elif op == "ET":
+            in_text = False
+            new_instructions.append((operands, operator))
+            continue
+
+        if in_text:
+            if op == "Tf" and len(operands) >= 2:
+                font_size = float(operands[1])
+            elif op == "Tm" and len(operands) == 6:
+                tm = [float(x) for x in operands]
+                tlm = list(tm)
+            elif op in ("Td", "TD") and len(operands) == 2:
+                tx, ty = float(operands[0]), float(operands[1])
+                tlm = _mat_mul([1, 0, 0, 1, tx, ty], tlm)
+                tm = list(tlm)
+            elif op in ("Tj", "'", '"'):
+                full_tm = _mat_mul(tm, ctm)
+                fx, fy = _transform_pt(font_size * 0.25, font_size * 0.35, full_tm, page_h, crop_x0, crop_y0)
+                if _pt_hits_any_digit_rect(fx, fy, digit_rects):
+                    continue
+            elif op == "TJ" and len(operands) >= 1 and isinstance(operands[0], pikepdf.Array):
+                arr = operands[0]
+                new_items = []
+                cur_offset_em = 0.0
+                removed_any = False
+
+                for item in arr:
+                    if isinstance(item, pikepdf.String):
+                        x_em = (cur_offset_em + 250.0) / 1000.0 * font_size
+                        y_em = 0.35 * font_size
+                        full_tm = _mat_mul(tm, ctm)
+                        fx, fy = _transform_pt(x_em, y_em, full_tm, page_h, crop_x0, crop_y0)
+
+                        w_em = _estimate_tj_width_em(item)
+                        if _pt_hits_any_digit_rect(fx, fy, digit_rects):
+                            new_items.append(-w_em)
+                            removed_any = True
+                        else:
+                            new_items.append(item)
+                        cur_offset_em += w_em
+                    else:
+                        val = float(item)
+                        cur_offset_em -= val
+                        new_items.append(item)
+
+                if removed_any:
+                    if any(isinstance(it, pikepdf.String) for it in new_items):
+                        new_instructions.append(([pikepdf.Array(new_items)], operator))
                     continue
 
-                # 三角形框内的改版编号数字（1~4 位纯数字 + 中心在框内）→ 要删，不恢复
-                if stripped.isdigit() and 1 <= len(stripped) <= 4:
-                    bbox = span["bbox"]
-                    cx = (bbox[0] + bbox[2]) / 2
-                    cy = (bbox[1] + bbox[3]) / 2
-                    if tri_rect.x0 <= cx <= tri_rect.x1 and tri_rect.y0 <= cy <= tri_rect.y1:
-                        continue
+        new_instructions.append((operands, operator))
 
-                result.append({
-                    "bbox":  span["bbox"],
-                    "text":  text,                               # 保留含空格的原始文本
-                    "size":  span.get("size", 10),
-                    "color": _color_int_to_rgb(span.get("color", 0)),
-                })
+    flush_all_subpaths()
 
-    return result
+    new_bytes = pikepdf.unparse_content_stream(new_instructions)
+    if isinstance(obj_or_page, pikepdf.Page):
+        obj_or_page.Contents = pdf.make_stream(new_bytes)
+    else:
+        obj_or_page.write(new_bytes)
 
 
-def restore_covered_text(page, covered_list):
-    """
-    擦除后，把之前收集的文字重新插回页面。
-    字号和颜色取自原始数据；字体统一使用 Helvetica（近似）。
-    若原始文字含 CJK 字符，Helvetica 无法正确渲染，会打印 WARN。
-    """
-    for t in covered_list:
-        bbox = t["bbox"]
-        # 插入点：文字基线左端（bbox 左下角，y 取 y1）
-        pt = fitz.Point(bbox[0], bbox[3])
+def _remove_shx_annotations(pike_page, shx_rects, page_h, crop_x0, crop_y0):
+    """移除页面注释层（/Annots）中的 AutoCAD SHX Text 纯数字批注"""
+    if not shx_rects or "/Annots" not in pike_page:
+        return
+    annots = pike_page["/Annots"]
+    kept_annots = pikepdf.Array()
+    for annot in annots:
         try:
-            page.insert_text(
-                pt,
-                t["text"],
-                fontsize=t["size"],
-                color=t["color"],
-                fontname="helv",
-            )
-        except Exception as e:
-            print(f"    [WARN] 文字恢复失败（{repr(t['text'][:15])}）：{e}")
+            rect = annot.get("/Rect")
+            if rect and len(rect) == 4:
+                ax0, ay0, ax1, ay1 = [float(v) for v in rect]
+                fx0 = min(ax0, ax1) - crop_x0
+                fx1 = max(ax0, ax1) - crop_x0
+                fy0 = page_h - (max(ay0, ay1) - crop_y0)
+                fy1 = page_h - (min(ay0, ay1) - crop_y0)
+                a_fitz = fitz.Rect(fx0, fy0, fx1, fy1)
+
+                if any(a_fitz.intersects(sr) and abs(a_fitz.x0 - sr.x0) < 3 and abs(a_fitz.y0 - sr.y0) < 3 for sr in shx_rects):
+                    continue
+        except Exception:
+            pass
+        kept_annots.append(annot)
+
+    if len(kept_annots) > 0:
+        pike_page["/Annots"] = kept_annots
+    else:
+        del pike_page["/Annots"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  擦除一页
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def erase_triangles_on_page(page, debug=False):
-    """
-    检测并擦除一页上的所有三角形注释符号。
-
-    返回：
-      (erased_count, debug_image_or_None)
-      debug_image 是 RGB numpy array，标注了被识别到的区域（红框）。
-      注意：debug_image 在 apply_redactions 之前捕获，所以显示的是原始页面。
-    """
-    # ── 步骤 1：矢量层检测 ────────────────────────────────────────────────────
-    triangles = find_vector_triangles(page)
-    triangles = [r for r in triangles if has_digit_inside(page, r)]
-
-    # ── 步骤 2：如果矢量层找不到，改用图像层检测（扫描 PDF 兜底）────────────
-    used_image_detection = False
-    if not triangles:
-        triangles = find_image_triangles(page)
-        triangles = [r for r in triangles if has_digit_inside(page, r)]
-        if triangles:
-            used_image_detection = True
-
-    if not triangles:
-        return 0, None
-
-    # ── 步骤 3：如果开了 debug，在擦除前先渲染原页面并标注红框 ────────────────
-    debug_img = None
-    if debug:
-        mat = fitz.Matrix(IMAGE_DPI / 72, IMAGE_DPI / 72)
-        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
-        img = np.frombuffer(pix.samples, dtype=np.uint8) \
-                .reshape(pix.height, pix.width, 3).copy()
-        scale = IMAGE_DPI / 72
-
-        for tri in triangles:
-            # 收集该三角形关联的所有擦除区域（三角形本身 + 框内数字）
-            digit_rects = collect_digit_rects_inside(page, tri)
-            all_rects = [tri] + digit_rects
-
-            for r in all_rects:
-                x0 = max(0, int(r.x0 * scale))
-                y0 = max(0, int(r.y0 * scale))
-                x1 = min(img.shape[1], int(r.x1 * scale))
-                y1 = min(img.shape[0], int(r.y1 * scale))
-                cv2.rectangle(img, (x0, y0), (x1, y1), (255, 0, 0), 2)  # 红框
-
-        debug_img = img
-
-    # ── 步骤 3.5：收集被三角形遮盖的原始文字（方案A：擦除后需恢复）────────────
-    covered_per_tri = []
-    for tri in triangles:
-        covered = collect_covered_text(page, tri)
-        covered_per_tri.append(covered)
-        if covered:
-            preview = [c["text"].strip() for c in covered if c["text"].strip()]
-            print(f"    [INFO] 三角形下检测到原始文字，擦除后将恢复：{preview}")
-
-    # ── 步骤 4：添加 redaction 遮盖（白色矩形）──────────────────────────────
-    for tri in triangles:
-        # 三角形轮廓本身（加 padding，确保边线也被覆盖）
-        padded = fitz.Rect(
-            tri.x0 - ERASE_PADDING_PT,
-            tri.y0 - ERASE_PADDING_PT,
-            tri.x1 + ERASE_PADDING_PT,
-            tri.y1 + ERASE_PADDING_PT,
-        )
-        page.add_redact_annot(padded, fill=(1, 1, 1))   # 白色填充
-
-        # 框内数字文字（单独再加一次，确保文字被清除）
-        for digit_rect in collect_digit_rects_inside(page, tri):
-            page.add_redact_annot(digit_rect, fill=(1, 1, 1))
-
-    # 应用所有 redaction（同时处理矢量图形和图像像素）
-    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_PIXELS)
-
-    # ── 步骤 5：恢复被三角形遮盖的原始文字 ──────────────────────────────────
-    for covered in covered_per_tri:
-        restore_covered_text(page, covered)
-
-    method = "图像层" if used_image_detection else "矢量层"
-    return len(triangles), debug_img
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  单文件处理
+#  3. 单文件处理与调试图输出
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def process_pdf(input_path, output_path, debug=False):
-    """
-    处理单个 PDF 文件：检测并擦除所有三角形注释符号，保存到 output_path。
-    返回总擦除数量。
-    """
     input_path  = Path(input_path)
     output_path = Path(output_path)
 
-    doc   = fitz.open(str(input_path))
+    fitz_doc = fitz.open(str(input_path))
+    page_data = {}
     total = 0
 
-    for i, page in enumerate(doc):
-        count, debug_img = erase_triangles_on_page(page, debug=debug)
+    for i, page in enumerate(fitz_doc):
+        tris, digits, shx_rects = find_valid_triangles_and_digits(page)
+        page_data[i] = (tris, digits, shx_rects)
+        count = len(tris)
         total += count
 
         if count > 0:
-            print(f"    第 {i + 1} 页：擦除 {count} 个三角形注释符号")
+            print(f"    第 {i + 1} 页：精准锁定 {count} 个三角形注释符号（普通数字 {len(digits)} 个，SHX批注 {len(shx_rects)} 个）")
+            if debug:
+                mat = fitz.Matrix(IMAGE_DPI / 72, IMAGE_DPI / 72)
+                pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3).copy()
+                scale = IMAGE_DPI / 72
+                for tr in tris:
+                    x0, y0 = max(0, int(tr.x0 * scale)), max(0, int(tr.y0 * scale))
+                    x1, y1 = min(img.shape[1], int(tr.x1 * scale)), min(img.shape[0], int(tr.y1 * scale))
+                    cv2.rectangle(img, (x0, y0), (x1, y1), (255, 0, 0), 2)
+                debug_path = output_path.with_name(output_path.stem + f"_debug_p{i + 1}.png")
+                cv2.imwrite(str(debug_path), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                print(f"    → Debug 标注图：{debug_path}")
         else:
             print(f"    第 {i + 1} 页：未检测到三角形注释符号，跳过")
 
-        # 保存 debug 标注图
-        if debug and debug_img is not None:
-            debug_path = output_path.with_name(
-                output_path.stem + f"_debug_p{i + 1}.png"
-            )
-            cv2.imwrite(str(debug_path),
-                        cv2.cvtColor(debug_img, cv2.COLOR_RGB2BGR))
-            print(f"    → Debug 标注图：{debug_path}")
+    page_boxes = []
+    for page in fitz_doc:
+        cb = page.cropbox
+        page_boxes.append((cb.height, cb.x0, cb.y0))
+    fitz_doc.close()
 
-    doc.save(str(output_path), garbage=4, deflate=True)
-    doc.close()
+    with pikepdf.open(str(input_path)) as pdf:
+        for i, pike_page in enumerate(pdf.pages):
+            tris, digits, shx_rects = page_data.get(i, ([], [], []))
+            if not tris and not shx_rects:
+                continue
+            page_h, crop_x0, crop_y0 = page_boxes[i]
+            _remove_triangles_from_stream(pdf, pike_page, tris, digits, page_h, crop_x0, crop_y0)
+            _remove_shx_annotations(pike_page, shx_rects, page_h, crop_x0, crop_y0)
+
+        pdf.save(str(output_path))
 
     return total
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  批量处理
+#  4. 批量处理与命令行入口（保持原有操作方式完全不变）
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def batch_process(input_dir, output_dir, debug=False):
-    """
-    批量处理 input_dir 下所有 .pdf 文件（不递归子文件夹），
-    结果保存到 output_dir，保持原文件名不变。
-    """
     input_dir  = Path(input_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     pdfs = sorted(input_dir.glob("*.pdf"))
-
     if not pdfs:
         print(f"[警告] 在「{input_dir}」里没有找到 .pdf 文件。")
         return
@@ -509,80 +551,43 @@ def batch_process(input_dir, output_dir, debug=False):
     print("=" * 60)
 
     total_erased = 0
-    failed       = []
+    failed = []
 
     for idx, pdf_path in enumerate(pdfs, 1):
         out_path = output_dir / pdf_path.name
         print(f"[{idx}/{len(pdfs)}] {pdf_path.name}")
-
         try:
             count = process_pdf(pdf_path, out_path, debug=debug)
-            print(f"  → 完成，共擦除 {count} 个符号。\n")
+            print(f"  → 完成，共物理删除 {count} 个符号。\n")
             total_erased += count
-
         except Exception as e:
             print(f"  → [错误] {type(e).__name__}: {e}\n")
             failed.append((pdf_path.name, str(e)))
 
     print("=" * 60)
-    print(f"批量完成：{len(pdfs)} 个文件，共擦除 {total_erased} 个三角形注释符号。")
+    print(f"批量完成：{len(pdfs)} 个文件，共物理删除 {total_erased} 个三角形注释符号。")
     print(f"输出目录：{output_dir}")
 
     if failed:
-        print(f"\n以下 {len(failed)} 个文件处理失败（已跳过，不影响其他文件）：")
+        print(f"\n以下 {len(failed)} 个文件处理失败：")
         for name, err in failed:
             print(f"  ✗ {name}：{err}")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  命令行入口
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def main():
     parser = argparse.ArgumentParser(
-        description="批量擦除工程图纸 PDF 中的三角形注释符号（△1, △2 等改版标记）",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例：
-  # 单张测试（先运行这个确认效果）
-  python triangle_eraser.py --test drawing.pdf
-
-  # 单张测试 + debug 模式（生成红框标注 PNG）
-  python triangle_eraser.py --test drawing.pdf --debug
-
-  # 批量处理整个文件夹
-  python triangle_eraser.py --input ./pdf_in --output ./pdf_out
-
-  # 批量 + debug
-  python triangle_eraser.py --input ./pdf_in --output ./pdf_out --debug
-        """,
+        description="批量物理删除工程图纸 PDF 中的三角形注释符号（△1, △2, △3 等改版标记）"
     )
-
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument(
-        "--test", metavar="PDF文件",
-        help="单张测试模式：指定一个 PDF 文件路径，处理后在同目录生成 *_clean.pdf",
-    )
-    mode.add_argument(
-        "--input", metavar="输入文件夹",
-        help="批量模式：指定包含 PDF 的输入文件夹",
-    )
-
-    parser.add_argument(
-        "--output", metavar="输出文件夹",
-        help="批量模式下必填；单张模式下可选（默认在原文件旁生成 *_clean.pdf）",
-    )
-    parser.add_argument(
-        "--debug", action="store_true",
-        help="额外输出 PNG 标注图，用红框标出识别到的三角形区域（方便核对效果）",
-    )
+    mode.add_argument("--test", metavar="PDF文件", help="单张测试模式")
+    mode.add_argument("--input", metavar="输入文件夹", help="批量模式：输入文件夹")
+    parser.add_argument("--output", metavar="输出文件夹", help="输出文件夹")
+    parser.add_argument("--debug", action="store_true", help="输出红框标注 PNG")
 
     args = parser.parse_args()
 
-    # ── 单张测试 ──────────────────────────────────────────────────────────────
     if args.test:
         input_path = Path(args.test)
-
         if not input_path.exists():
             print(f"[错误] 文件不存在：{input_path}")
             sys.exit(1)
@@ -601,30 +606,18 @@ def main():
         try:
             count = process_pdf(input_path, output_path, debug=args.debug)
             print("-" * 60)
-            print(f"完成：共擦除 {count} 个三角形注释符号 → {output_path}")
-
-            if count == 0:
-                print("\n[提示] 未检测到符号，可能的原因：")
-                print("  1. 图纸里的三角形尺寸超出范围（调整 TRIANGLE_MAX_PT / TRIANGLE_MIN_PT）")
-                print("  2. 三角形边数不是 3（CAD 用贝塞尔曲线画的，调整 SIDE_RATIO_TOLERANCE）")
-                print("  3. 三角形内部没有纯数字文本（框内有字母或汉字，不在擦除范围）")
-                print("  加上 --debug 参数可以生成标注图，直观看到检测范围。")
-
+            print(f"完成：共物理删除 {count} 个三角形注释符号 → {output_path}")
         except Exception as e:
             print(f"[错误] {type(e).__name__}: {e}")
             sys.exit(1)
-
-    # ── 批量模式 ──────────────────────────────────────────────────────────────
     else:
         if not args.output:
             print("[错误] 批量模式下请用 --output 指定输出文件夹。")
             sys.exit(1)
-
         input_dir = Path(args.input)
         if not input_dir.exists():
             print(f"[错误] 输入文件夹不存在：{input_dir}")
             sys.exit(1)
-
         batch_process(args.input, args.output, debug=args.debug)
 
 

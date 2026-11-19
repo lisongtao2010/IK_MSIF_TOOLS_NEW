@@ -20,9 +20,10 @@ namespace MSIFAITOOLS
         /// <summary>测试连接时使用的最大超时（秒），避免界面长时间等待。</summary>
         private const int TestTimeoutSeconds = 30;
 
-        /// <summary>模型下拉列表的常用预设（也允许手工输入其它名称）。</summary>
+        /// <summary>模型下拉列表的常用预设（第一项 = 默认模型，也允许手工输入其它名称）。</summary>
         private static readonly string[] ModelPresets =
         {
+            "deepseek-v4.1-flash-1017",
             "deepseek-v4-flash",
             "deepseek-v3",
             "deepseek-r1",

@@ -8,7 +8,7 @@
 > `Services\BuhinBuzaiMappingCatalog.cs`（部材不材 mapping 的内存缓存：部品CD / 部品名 → 部材名）、
 > `Services\MemberNameReplacementCatalog.cs`（置换表的内存缓存：表示部材名 / 置换）、
 > `Services\JapaneseTextConverter.cs`（登录时的全角片假名 → 半角片假名 转换）
-> 更新日期：2026-11-17
+> 更新日期：2026-11-18
 
 ---
 
@@ -21,6 +21,11 @@
 |----|----------|----------|----------|
 | 部品名（`colPartName`） | 在单元格里**打字** → 自动弹出；`F4` 手动开关 | `PartNameCandidatePopup`（**不抢焦点**） | `1`～`9` / `0`（第 10 项）、鼠标单击、`Esc` 关闭 |
 | 部材名（`colMemberName`） | **单击**单元格（不进入普通编辑） | `MemberNamePickerForm`（非模态，可同时操作本画面） | `1`～`9` / `0`、鼠标单击、`Enter` 写入输入内容 |
+
+> 表格最左侧的「行号」列（Excel 行号栏那样，选行用）见第 8 节。
+>
+> 部品基本信息画面本身**全局只保留一个窗口**（换图番只切换显示内容、不再新开），
+> 见 `部品基本信息画面_唯一窗口_功能说明.md`。
 
 ---
 
@@ -70,29 +75,44 @@
 ## 3. 部材名：选择部材名窗口（`MemberNamePickerForm`）
 
 - 单击「部材名」单元格即打开（非模态：开着也能改别的格子 / 换行 / 看图纸），**不进入普通编辑**。
+- **位置**：面板贴在点到的「部材名」单元格**下面那一行** —— 上边贴住这一格的下边（留 2px），
+  左边和这一格对齐，所以**不遮挡选中的这一行**，又离点到的格子最近
+  （`PartBasicInfoForm.PlaceMemberNamePicker` 用 `GetCellDisplayRectangle` 取这一格的屏幕矩形，
+  交给 `WindowLayoutHelper.PlacePopupNextToCell` 摆放；窗口自身的 `StartPosition = Manual`）。
+  - 下方放不下（靠近屏幕底部）→ 改放到这一格**上面**（= 上一行）；上下都放不下 → 贴住工作区底部。
+  - 横向超出屏幕工作区 → 往左挪；面板比屏幕还宽 → 贴住工作区左边。
+  - **跟着走**：写完自动跳到下一行（见下面的「写完自动跳到下一行」）或换一行再点「部材名」时，
+    面板重新贴到新的这一格下面那一行；手动拖过的位置会在下一次点时被重新贴回来。
+  - 点到的这一格被滚出画面 / 表格还没布局好时，退回「相对本画面居中」（`StartPosition` 设成 `Manual` 之前的旧行为）。
 - **「部材名」单元格进入内嵌编辑时面板自动收起**：面板开着的时候按 `F2` / 双击 / 直接打字让这一格自己进入编辑，
   面板会立刻隐藏（`HideMemberNamePicker`，只 `Hide` 不 `Close` —— 候选一览、滚动位置、检索框内容都留着），
   免得面板浮在编辑框上面、面板里的数字键 / 鼠标滚轮又把值写进正在编辑的这一格；
   编辑结束以后再单击「部材名」单元格，面板重新显示（`ShowMemberNamePicker` 里 `!Visible` → `Show(this)`）。
   其它列（部品名 / 数量 / 备注…）进入编辑时面板不受影响。
 - **数据只在内存里查**：主画面打开时（`PartBasicInfoForm.OnLoad` → `PreloadMemberNamePickerData`）一次性读好
-  ① 部材不材 mapping（SQL Server `MSIF.dbo.DL_BuhinBuzaiMapping`，`BuhinBuzaiMappingCatalog`：部品CD / 部品名 → 部材名）、
+  ① 部材不材 mapping（SQL Server `MSIF.dbo.DL_BuhinBuzaiMapping`，`BuhinBuzaiMappingCatalog`：部品CD / 部品名 → 部材名；
+  **SQL Server 连不上时改读本机表** SQLite `DL_BuhinBuzaiMapping`，见第 3.2 节）、
   ② 置换表（SQL Server `genpin.dbo.T_M_MergeName`，`MemberNameReplacementCatalog`；程序启动时已预读，没读成功时这里补读一次）和
   ③ 部材部品マスタ（SQLite「部材部品」表，`MemberPartCatalog`）。之后点「部材名」只是内存查找，**不再连数据库 / 读盘**，窗口瞬间打开。
 - **候补顺序**（数字越小越靠前；打开窗口时按 `1` 就是第 ① 项）：
 
   | 优先度 | 来源 | 说明 |
   |--------|------|------|
-  | ① | 部材不材 mapping 的 `BuzaiName`，**部品CD（`BuhinCd`）与该行「部品コード」一致** | 这条部品实际用过的部材名，最可信（`GetBuzaiNamesByBuhinCd`） |
-  | ② | 同一张表的 `BuzaiName`，**部品名（`BuhinName`）与该行「部品名」一致** | 部品CD 还没登记的部品的退路（`GetBuzaiNamesByBuhinName`） |
+  | ① | 部材不材 mapping 的 `BuzaiName`，**部品CD（`BuhinCd`）与该行「部品コード」一致** | 这条部品实际用过的部材名，最可信 |
+  | ② | 同一张表的 `BuzaiName`，**部品名（`BuhinName`）与该行「部品名」一致** | 部品CD 还没登记的部品的退路 |
   | ③ | 置换表的**表示部材名 `MsifDevName`**（该行「部品名」在表里的写法 + 同一个部材的其它叫法） | 面板显示 / 写进单元格的就是这个写法，**不会**换成原部材名 `GenpinName`（`GetDisplayNames`） |
   | ④ | 这一格现在的值（拆开 `\|`，方便改回原值） | |
   | ⑤ | 部材部品マスタ 的部材名 一览 | |
+
+  ① ② 由 `BuhinBuzaiMappingCatalog.GetRecommendedBuzaiNames(部品コード, 部品名)` 一次取出：
+  **部品CD 一致的排在前面，部品名 一致的接在后面，重复的只留一个**（不分全角 / 半角，忽略空白）。
 
   例：某行「部品コード = `MDQ703`、部品名 = `ジョイント金具`」时，候选是
   `Ｖレール / 下枠 / 上枠`（①，表里这个部品CD 用过的 3 个部材名）→ `ｼﾞｮｲﾝﾄ金具`（③）→ 这一格现在的值 → 部材部品マスタ 一览。
 - 部材不材 mapping / 置换表没读进内存时（服务器连不上）只是少那几段推荐项，
   状态行提示「部材不材 mapping 连不上，没有以前用过的部材名」/「置换表连不上，没有表示部材名」，其余候补照常可用。
+  部材不材 mapping 用了**本机表兜底**时（服务器连不上、本机表里有数据）推荐项照常显示，
+  状态行改写「部材不材 mapping 用的是本机缓存」（数据 = 上次连上服务器时的镜像 + 本机保存过的组合，见 3.2）。
 - 顶部输入框打字过滤（`↑` / `↓` 换项），列表里没有的名字打在输入框里按 `Enter` 直接写入；
   输入框为空时按 `Enter` 会先确认是否清空这一格。想打数字当关键字时按住 `Ctrl`。
 - **每页 10 项 + 分页**：数字键只有 `1`～`9` 和 `0`，所以一览一次只显示 10 项，编号每页都从 `1` 重新开始
@@ -105,12 +125,14 @@
   值没变（点了和这一格一样的内容）时不会产生「有未保存的修改」，但选择照样往下走。
 - 保存成功后新登录的「部材名 + 部品名」规则会立刻重新读进内存（`RefreshMemberNameCatalog`），
   部材不材 mapping 更新成功时也会重新读一次（`BuhinBuzaiMappingCatalog.Reload`），不用重开画面。
+  同一批「部品名 / 部材名 / 部品コード」还会写进**本机表**（SQLite `DL_BuhinBuzaiMapping`，
+  `LocalBuhinBuzaiMappingRepository.TryUpsert`）——**服务器写不进去也写**，所以断网时登录过的组合下次还能推荐。
 
 ### 3.1 外观（贴近 Google 日语输入法的候补面板，`MemberNamePickerForm.Style.cs`）
 
 | 部位 | 样式 |
 |------|------|
-| 窗口 | 无标题栏的白色浮窗：`FormBorderStyle.None` + 1px `Padding` 画出浅灰细边框（`OnPaint`），`CS_DROPSHADOW` 给一点系统投影 |
+| 窗口 | 无标题栏的白色浮窗：`FormBorderStyle.None` + 1px `Padding` 画出浅灰细边框（`OnPaint`），`CS_DROPSHADOW` 给一点系统投影；**位置**由主画面按「部材名」单元格算（贴在这一格下面那一行、不遮挡选中的行，见第 3 节） |
 | 顶部检索框 | 灰色圆角块（`#F1F3F4`，圆角 6px）里坐一个无边框 `TextBox`，左边画放大镜；有焦点时圆角块描一圈浅蓝（`#AECBFA`）；空的时候用 `EM_SETCUEBANNER` 显示灰色提示「检索部材名（直接打字过滤）」 |
 | 候补一览 | `ListBox`（`DrawMode = OwnerDrawFixed`、`ItemHeight = 30`、白底无边框）：左边灰色编号（1～9，第 10 项 `0`；每页 10 项，编号每页重新开始），右边部材名（有「Yu Gothic UI」就用它，没有退回微软雅黑）；**选中行浅蓝圆角**（`#D2E3FC`，编号变蓝），**悬停行浅灰**（`#F5F7F9`） |
 | 底部状态行 | 一条浅灰分隔线 + 左边「已写入：xxx」（清空这一格时红字）+ 翻页小按钮 `‹` `›` 和页码 `1/3`（到头了变灰）+ 右边灰色按键提示 `1-9 · ↑↓ · Enter` + 关闭按钮 `✕`（扁平、悬停浅灰） |
@@ -119,11 +141,33 @@
 **窗口操作**：没有标题栏，所以
 
 - **拖动**：按住顶部检索区的空白处（左边放大镜那一带）或底部状态行（`✕` 以外的地方）拖 —— 走 `WM_NCLBUTTONDOWN` + `HTCAPTION`，
-  和拖标题栏一样（双击不会最大化）。
+  和拖标题栏一样（双击不会最大化）。拖过去的位置只是临时的：下一次点「部材名」（或写完自动跳到下一行）
+  面板会重新贴到那一格的下一行（见第 3 节的「位置」）。
 - **改大小**：拖右下角手柄（最小 `320×400`）；宽度变化时检索框、一览、状态行都跟着变。
 - **键盘焦点**：一直留在检索框里（点候补行 / 翻页按钮后自动还给检索框并全选），所以可以直接接着打字过滤；
   鼠标停在候补一览上滚滚轮时由消息过滤器把滚轮转给「翻页」（列表本身不拿焦点、也没有滚动条：一页 10 项正好放下）。
 - **`Esc`**：关闭窗口（= 右上角 `✕`；已经写入的值留在主画面单元格里）。
+
+### 3.2 部材不材 mapping 的本机表（SQL Server 连不上时的兜底）
+
+服务器上的 `[MSIF].[dbo].[DL_BuhinBuzaiMapping]` 在本机也有一张**同名表**
+（SQLite `DL_BuhinBuzaiMapping`，`Services\LocalBuhinBuzaiMappingRepository.cs`），
+所以现场连不上 `10.103.126.209` 时，「选择部材名」窗口照样有「以前用过的部材名」。
+
+| 项目 | 内容 |
+|------|------|
+| 数据库文件 | 与「部材部品」マスタ同一个 SQLite 库：`MemberPartDatabasePath`（默认 `D:\MSIFDB\MSIF_MemberParts.db`；环境变量 `MSIF_MEMBER_PARTS_DB` 优先）。**不需要额外配置** |
+| 表结构 | `BuhinName`（部品名）/ `BuzaiName`（部材名）/ `BuhinCd`（部品CD）/ `UpdatedAt`（更新日時），主键 = `BuhinName` + `BuzaiName`（与服务器相同 → 不会有重复行）；`BuhinCd` 上有索引 |
+| 建表 | 第一次用到时自动 `CREATE TABLE IF NOT EXISTS`（不用手工建、也不用导入） |
+| 写入 ① | **读服务器成功**（画面打开时的预读 / 保存后的 `Reload`）→ 整表镜像过来（`ReplaceAll`，服务器为准，服务器上删掉的行本机也删掉） |
+| 写入 ② | 部品基本信息画面**【保存】** → 同一批「部品名 / 部材名 / 部品コード」按主键 upsert（`TryUpsert`）；**服务器写失败时也写**，所以断网期间登录的组合不会丢 |
+| 读取 | 读服务器**失败**时自动读本机表（`BuhinBuzaiMappingCatalog.Load` 的 catch 分支）：`IsLoaded = true`、`IsLocalFallback = true`、`LocalDescription` = 本机库路径 |
+| 推荐项顺序 | 与服务器一样：**部品CD 一致 → 部品名 一致 → 去重**（`GetRecommendedBuzaiNames`） |
+| 失败时 | 读 / 写本机表都不抛异常（`TryReplaceAll` / `TryUpsert` 只返回原因文字）。本机也读不到时才是「没有推荐项」，状态行照旧提示「连不上」 |
+| 想重建本机缓存 | 删掉本机表里的行（或删掉数据库文件）即可；下次连上服务器预读时会重新镜像 |
+
+> `BuhinCd` 为空的组合在 upsert 时**保留本机原来的值**（与服务器 `UPDATE` 的规则一致）；
+> `部品名 / 部材名` 为空、`部材名 = その他`、`部材名` 含 `|` 的行与服务器一样不登录。
 
 ---
 
@@ -139,6 +183,8 @@
 - 「主画面」= `MainWindow`（由 `Form1.ShowPartInfo` 传入 `Form1`，**不设 `Owner`**）；取不到时退回本画面自己。
 - **不设 `Owner`**：Owned 窗口永远浮在 Owner（主画面）之上，会导致本画面「一直保持在主画面前边」。现在点一下主画面即可把它压到后面；关闭主画面时由 `Form1.OnFormClosed` 显式关闭本画面。
 - 本画面自动打开的 PDF 预览窗口不抢焦点；和主画面有重叠时（单屏并排）由 `WindowLayoutHelper.PlaceBehindMainWindowIfOverlapping` 把它插到主画面后面。
+- 「选择部材名」面板**不走**这里的规则：它由 `WindowLayoutHelper.PlacePopupNextToCell` 按点到的
+  「部材名」单元格摆放（贴在下一行、不遮挡选中的行，见第 3 节）。
 - 详细规则见 `PdfPreviewForm_功能说明.md` 第 3 节。
 
 ---
@@ -204,4 +250,27 @@
 - 想用**原部材名**（`GenpinName`，例 `アルミ上`）→ 在「选择部材名」窗口的输入框里直接打（列表里没有的话按 `Enter` 写入）。
   面板的候选（部材不材 mapping 的 `BuzaiName` / 表示部材名 `MsifDevName`）都是「表示」侧的写法，
   不会自动给出原部材名。
+
+---
+
+## 8. 行号列（最左侧，选行用）
+
+表格最前面是 Excel 最左侧那种**行号**：列名 `colNo`、表头「行号」（日语「行番号」）、**只读**。
+
+| 项目 | 行为 |
+|------|------|
+| 值 | 画面行号 = 表格里的第几行（1 起）。载入明细、【追加行】/ 右键插入行、【删除行】后自动重排（`RenumberRows`） |
+| 编辑 | **不可编辑**（`ReadOnly`）：点它不进入编辑框；也不参与【保存】/【保存 Excel】 |
+| 位置 | `DisplayIndex = 0` + `Frozen = true`：固定在最左边，横向滚动时不跟着跑掉 |
+| 外观 | 浅灰底（`RowNumberBackColor` = 242/242/242）+ 深灰字；行背景色（淡绿 / 淡蓝 / 淡粉 / 淡紫）不影响这一格 |
+| 点行号 | **选中整行**（`SelectWholeRow`），和 Excel 点行号一样；不按 Ctrl 时先清掉原来的选择 |
+| `Ctrl` + 点行号 | **追加**到当前选择 → 多选几行后用【删除行】/ 右键「删除行」一次删多行（菜单文字变成「删除选中的 N 行」） |
+| 选完的当前格 | 停在「行号」格 → 方向键从这一行继续走，`Delete` / 右键菜单的作用对象也是这一行 |
+
+- 表格仍是「单元格选中」模式（`CellSelect`）：点行号只是把**这一行的所有单元格**都选中，
+  所以 `GetSelectedRows()`（按选中单元格收集行）不用改，删除 / 插入行照旧。
+- 这一列在**列集合里的位置仍是最后**（`Rows.Add` / `Rows.Insert` 的位置参数按列集合顺序传值），
+  只有**显示顺序**排到第 1 列（`DisplayIndex`），所以 `PopulateParts` / `InsertBlankRow` 的填充代码不用动。
+- 行号只是画面上的序号：**不写进数据库**、**不导出到 Excel**（`ExportColumnNames` 里没有它）。
+- 行号列的表头提示（鼠标停在表头）：「画面行号（追加 / 删除行后自动重排，不可编辑）。点这一格 = 选中整行；按住 Ctrl 点可以多选，【删除行】一次删多行。」
 

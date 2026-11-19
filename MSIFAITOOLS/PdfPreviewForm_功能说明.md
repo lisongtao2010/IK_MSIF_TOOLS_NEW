@@ -3,7 +3,7 @@
 > 所属项目：`MSIFAITOOLS`（.NET Framework 4.8 / WinForms / AnyCPU）
 > 源文件：`PdfPreviewForm.cs`、`PdfPreviewForm.Designer.cs`、`Services\PdfTextSelection.cs`
 > 主程序：`MSIFAITOOLS\bin\Debug\MSIFAITOOLS.exe`
-> 更新日期：2026-10-27
+> 更新日期：2026-11-18
 
 ---
 
@@ -333,6 +333,32 @@ lines =  N  → N 行：max(20, N × 20) 像素
 | 复制文本 | 跨行自动换行、行内词间距过大时补一个空格（`GetText`） |
 | 鼠标捕获 | 拖选时 `picPage.Capture = true`，鼠标移出页面也能继续选；`MouseLeave` / `MouseUp` 负责收尾 |
 
+### 9.3 红框闪烁定位（`FlashTextHighlight`，部品基本信息画面用）
+
+部品基本信息画面**选中一行记录**时，会在预览画面上把这一行的来源位置用**红框闪 3 次**标出来：
+
+```csharp
+// PartBasicInfoForm.FlashSelectedRowSource()
+_previewForm.FlashTextHighlight(页码 - 1, new[] { 部品図番, 部品コード, 部品名 });
+```
+
+| 环节 | 说明 |
+|------|------|
+| 定位文字 | 按传入顺序优先：**部品図番 → 部品CD（部品コード）→ 部品名**，取**第一个在该页找到**的（有部品図番 就用它，部品図番 命中就不会改用部品CD / 部品名）；少于 2 个字符的文字不参与定位（会到处命中） |
+| 页 | 先用 `GoToPage` 翻到这一行的「页码」页（越界时夹到有效范围） |
+| 匹配 | 逐行（竖排时逐列）拼接该行文字后 `IndexOf`，不跨行；比较前两边都走 `JapaneseTextConverter.NormalizeWidth`（NFKC）＋ 去掉空白，全角 / 半角、空格差异不影响命中 |
+| 多行命中 | 同一关键字命中多行时**按分数取最优**：`CountOtherNeedles` 数「这一行里还含有其它关键字的个数」，取最多的那一行（部品図番 + 部品CD / 部品名 同时出现 → 部品表行）；同分取最靠前的一行 |
+| 宽松匹配 | **每个关键字**按原样找不到时，再走一遍**宽松匹配**（`TryMatchFlashPattern` / `TryFindFlashPatternInLine`）：`□` `○` `〇` `◯` `△` = 可变位（匹配 **0 或 1 个字符**），字符之间允许夹 `-` `_` `/` `・` 等分隔符（最多连续 `FlashMaxSeparatorSkip` = 2 个），**关键字里自带的分隔符也可以缺省**，匹配长度 ≤ 关键字长度 + `FlashMaxExtraLength`（8）。库里 `MZA□968` → 图纸 `MZA1-968` / `MZA1968` / `MZA968` 均命中；库 `HJ-1234` → 图纸 `HJ1234` 也命中 |
+| 模糊 CD 不退化 | 某个关键字含可变位（`□` / `○` …）而宽松匹配也失败 → 直接返回 `false`（**不**退到后面的关键字）：同族部品共用部品名，退过去只会闪到别的部品上 |
+| 矩形 | 命中文字的字符外接矩形四周各留 1 PDF 点；按当前 `_zoom` 换算成像素（`ToPixelRectangle`） |
+| 绘制 | 在 `PicPage_Paint` 里画：红色 2.5 像素外框 `ARGB(255,220,20,20)` ＋ 淡红填充 `ARGB(45,230,30,30)`，再外扩 2 像素 |
+| 闪烁 | `_flashTimer` 每 200 ms 翻转一次显示 / 隐藏，共 6 次翻转 = **亮 / 灭各 3 次**（约 1.2 秒），结束后自动清除 |
+| 滚动 | 闪之前把红框位置滚到可见区域中央（计算方式与 Ctrl+滚轮缩放一致） |
+| 清空 | 换页 / 换文档 / 关闭窗口时立刻清掉；缩放、拖动、选字、清除选择都不影响它（PDF 坐标不变，闪烁结束自动消失） |
+| 静默失败 | 该页没有这些文字 / PDF 没有文字层 / 文档未打开 → 返回 `false`，**不改状态栏、不弹提示**（每选一行都报错会很吵） |
+| 不闪的行 | 调用方先判 `PartBasicInfoForm.IsSpecialOrderPartRow`：**特注品**（「特注」= 1，或「数据来源」= `CMD分析・特注品.json`）的行**不调用**本方法 —— 这些部品来自特注品 Excel 的部品表，图纸上不一定印着对应文字（2026-11-18 追加） |
+| 不动窗口 | 闪的时候只改预览画面上的红框，**不改窗口的 z 顺序、不激活、不抢焦点**（2026-11-18 起不再调用 `WindowLayoutHelper.BringToFrontWithoutActivate`：每换一行都提一次最前，预览窗口会在屏幕上跳一下，也会把用户放到后面的窗口拉到前面） |
+
 ---
 
 ## 10. 其他按钮
@@ -457,4 +483,9 @@ lines =  N  → N 行：max(20, N × 20) 像素
 | 2026-10-26 | 新增文字选择与复制（PdfPig 字形坐标 + 自绘高亮）、右键菜单、Ctrl+A / Ctrl+C / Esc |
 | 2026-10-27 | 新增 **Ctrl + 滚轮以鼠标为中心缩放**（含进程级滚轮消息过滤器，修复焦点在工具栏按钮时滚轮失效）、滚轮 / Shift+滚轮滚动、**「✋ 拖动」按钮与中键拖动平移**；工具栏按钮宽度重排以容纳新按钮 |
 | 2026-11-16 | **辅助窗口不再「一直保持在主画面前边」**：部品基本信息画面去掉 `Owner`（主画面改用 `MainWindow` 传入）；PDF 预览窗口不抢焦点显示、和主画面重叠时由 `WindowLayoutHelper.PlaceBehindMainWindowIfOverlapping` 插到主画面后面 |
-
+| 2026-11-18 | 新增 **`FlashTextHighlight(页, 关键字)` 红框闪烁定位**：部品基本信息画面选中记录时，在对应页上用红框闪 3 次标出来源位置（`_flashTimer` + `PicPage_Paint` 自绘，静默失败、不抢焦点） |
+| 2026-11-18 | 修改：`FlashTextHighlight` 闪红框时**不再改动窗口的 z 顺序**（调用方去掉 `WindowLayoutHelper.BringToFrontWithoutActivate`）—— 每换一行提一次最前会让预览窗口在屏幕上跳一下，也会把用户放到后面的窗口拉到前面；现在只画红框，窗口位置 / 前后关系 / 焦点都不变 |
+| 2026-11-18 | 修改：**特注品的行不调用 `FlashTextHighlight`**（调用方 `PartBasicInfoForm.IsSpecialOrderPartRow`：「特注」= 1 / 「数据来源」= `CMD分析・特注品.json`）—— 特注品来自特注品 Excel 的部品表，图纸上不一定印着对应文字，闪了多半找不到或命中到别的部品上 |
+| 2026-11-18 | 修改：`TryFindTextRectangle` 改为「**部品CD 第 1 优先** + 同一关键字命中多行时**按分数取最优**」—— 原来碰到第一个含其它关键字的行就返回，现在用新增的 `CountOtherNeedles` 数每行含其它关键字的个数、取最多的那一行（同分取最前）；部品CD 命中时不会改用部品名定位 |
+| 2026-11-18 | 新增：**部品CD 的宽松匹配**（`TryMatchFlashPattern` / `TryMatchFlashPatternAt` / `TryFindFlashPatternInLine` / `IsFlashWildcard` / `ContainsFlashWildcard`）—— 库里的部品CD 是模糊 CD（`MZA□968` / `MZB○○963`），图纸上印的是 `MZA1-968` 这样的具体值：第 1 个关键字先精确匹配，再按「可变位 = 任意 0～1 字符 + 允许分隔符」宽松匹配；模糊 CD 宽松匹配也失败时返回 `false`，不退化到部品名（否则会闪到同族别的部品） |
+| 2026-11-18 | 修改：宽松匹配从「只对第 1 个关键字」改为**每个关键字都先精确、再宽松**，`FlashTextHighlight` 的关键字顺序改为「**部品図番 → 部品CD → 部品名**」（部品図番 第 1 优先，有部品図番 就用它定位）；「模糊 CD 不退化」的触发条件由「第 1 个关键字含可变位」改为「当前关键字含可变位」。好处：部品図番 在图上少写 `-`（库 `HJ-1234` / 图纸 `HJ1234`）也能命中，且模糊 CD（`MZA□968`）的行有部品図番 时不再受模糊 CD 认不出而不闪的影响 |

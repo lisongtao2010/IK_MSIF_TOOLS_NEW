@@ -12,10 +12,10 @@ namespace MSIFAITOOLS.Services
     internal sealed class AiApiOptions
     {
         /// <summary>默认接口地址（OpenAI Compatible）。</summary>
-        public const string DefaultBaseUrl = "https://api-ap-southeast-1.modelarts-maas.com/v1";
+        public const string DefaultBaseUrl = "https://api-ap-southeast-1.modelarts-maas.com/v2";
 
         /// <summary>默认模型。</summary>
-        public const string DefaultModel = "deepseek-v4-flash";
+        public const string DefaultModel = "deepseek-v4.1-flash-1017";
 
         /// <summary>默认请求超时（秒）。</summary>
         public const int DefaultTimeoutSeconds = 180;

@@ -10,7 +10,8 @@ namespace CadPartSplitter
 {
     /// <summary>
     /// 从「渲染用的 PDF」里删掉图纸上的三角形注記符号（△1 / △2 … 改版标记），
-    /// 做法参照 <c>triangle_eraser.py</c>（PyMuPDF + redaction），只是换成 PDFium。
+    /// 做法参照 <c>triangle_eraser.py</c>（PyMuPDF 定位 + pikepdf 改内容流），
+    /// 只是把底层换成 PdfPig（读）+ PDFium（改）。
     ///
     /// <para>
     /// 为什么需要：这类符号是 <b>CAD 画进页面内容流</b>的普通矢量图形 + 文字，
@@ -21,42 +22,50 @@ namespace CadPartSplitter
     /// </para>
     ///
     /// <para>
-    /// 检测用 PdfPig（与 <see cref="RuledTableExtractor"/> 的 <c>MarkTriangleMarks</c> 同一套判据）：
+    /// 检测用 PdfPig（两条判据取并集，与 <c>triangle_eraser.py</c> 的「双重锁定」对齐）：
     /// <list type="number">
-    ///   <item>矢量层：全部路径（含 Form XObject，坐标已应用 CTM）扁平化成线段，
-    ///         斜边（两个方向都超过 <see cref="LineTolerancePt"/>、长度 ≥ <see cref="MinLinePt"/>）收进候选表；</item>
-    ///   <item>文字层：1~3 位纯数字的词，在它周围 3 倍字高的窗口里找两条斜边 ——
-    ///         有公共端点（容差 1/4 字高）、另两端近似等高（底边水平，容差 1/2 字高）、
-    ///         底宽 0.5~3 倍字高、三角形高 0.8~4 倍字高、数字中心落在三角形内；</item>
-    ///   <item>全部满足才算 △ 注記符号 —— 文字笔画、引线、箭头凑不出这个组合，
-    ///         所以不需要「等边」这种在 CAD 里常不成立的约束（py 版要求等边 + 同一 path 内 3 条线，
-    ///         等腰的 △ 和拆成三个对象的边都会漏）。</item>
+    ///   <item><b>整条路径就是三角形</b>（py 的策略 1）：矢量层每条路径（含 Form XObject，坐标已应用 CTM）
+    ///         去掉重合点后<b>恰好 3 个顶点</b>、没有贝塞尔曲线、三边长度均匀
+    ///         （标准差 / 均值 &lt; <see cref="SideUniformRatio"/>）、包围盒 6~50 pt 且长宽比 0.3~3.0，
+    ///         并且框内有「数字字符的中心」或「拆成独立短线段的笔画」—— 全满足才算；</item>
+    ///   <item><b>两条斜边夹一个数字</b>（py 策略 2 在 C# 里的替代）：CAD 把三角形的三条边画成
+    ///         独立对象时整条路径判据失效，改用「1~3 位纯数字的词 + 它周围 3 倍字高内的两条斜边」——
+    ///         两条斜边共用一个端点（容差 1/4 字高）、另两端近似等高（底边水平，容差 1/2 字高）、
+    ///         底宽 0.5~3 倍字高、高 0.8~4 倍字高、数字中心落在三角形内；</item>
+    ///   <item>两条判据命中的框按包围盒去重（容差 <see cref="LineTolerancePt"/>）。
+    ///         文字笔画、引线、三角形外侧的尺寸数字都凑不出这些组合。</item>
     /// </list>
     /// </para>
     ///
     /// <para>
-    /// 擦除：在页面坐标里插一块不透明白矩形（外扩 <see cref="ErasePaddingPt"/> pt），
-    /// 等价于 py 版 <c>add_redact_annot(fill=(1,1,1))</c> + <c>apply_redactions()</c> ——
-    /// 白矩形落在内容流末尾，渲染时把三角形和里面的数字一起盖住，画在 Form XObject 里的也盖得住。
-    /// 最后 <c>FPDFPage_GenerateContent</c> 生成内容流、<c>FPDF_SaveAsCopy</c> 另存
-    /// <c>&lt;输出目录&gt;\&lt;图纸名&gt;_clean.pdf</c>。
+    /// 擦除（与 py 的「内容流手术」同一个目标：把符号从图纸上<b>物理删掉</b>，不是盖住了事）：
+    /// 逐页遍历 PDFium 的页面对象（<c>FPDFPage_GetObject</c>），把<b>整个落在</b>三角形框里
+    /// （容差 <see cref="PathEraseTolerancePt"/> pt）的路径对象交给 <c>FPDFPage_RemoveObject</c> 删掉；
+    /// 整串就是 1~4 位数字的文本对象也一并删（<c>FPDFTextObj_GetText</c> 先看清内容，
+    /// <c>100 1</c> 这种混着尺寸的绝不删）。删完 <c>FPDFPage_GenerateContent</c> +
+    /// <c>FPDF_SaveAsCopy</c> 另存 <c>&lt;输出目录&gt;\&lt;图纸名&gt;_clean.pdf</c>。
+    /// </para>
     ///
-    /// 为什么不删对象：三角形可能整条画在 Form XObject 里、也可能三条边是三个独立对象，
-    /// 页面级对象接口（<c>FPDFPage_RemoveObject</c>）既看不进 form 也删不了拆开的边；
-    /// 白矩形在页面坐标里直接盖，覆盖 form 里的图形没有任何问题，与 py 的 redaction 等价。
+    /// <para>
+    /// 为什么还要白块兜底：py 能按「子路径」粒度切内容流，PDFium 只能整对象删，三种情况删不动 ——
+    /// ① 三角形画在 Form XObject 里（页面对象接口看不进去）；② 三角形与表格长线在同一个路径对象里
+    /// （整删会把长线一起删掉）；③ 数字与尺寸挤在同一个文本对象里（拆不开）。
+    /// 这些框逐个补一块不透明白矩形（外扩 <see cref="ErasePaddingPt"/> pt，等价于 py 的 redaction），
+    /// 渲染结果与 py 一致；能纯删的框不盖白块，免得把穿过框的表格线涂掉一小截。
     /// </para>
     ///
     /// <para>
     /// 与 <see cref="PdfAnnotationStripper"/> 的关系：那一步先删注释并另存 <c>_clean.pdf</c>，
-    /// 本步骤在它的输出上再「读 → 盖白块 → 另存」，文件名不变（覆盖同一份 <c>_clean.pdf</c>），
+    /// 本步骤在它的输出上再「读 → 删对象（删不动的盖白块）→ 另存」，文件名不变（覆盖同一份 <c>_clean.pdf</c>），
     /// 所以渲染（<see cref="PdfRenderer"/>）拿到的始终是同一路径。文字 / 表格 / 圈号分析仍读原 PDF，
     /// 不受影响。任何失败只告警并返回传入的路径，绝不让预处理把识别流程搞崩。
     /// </para>
     ///
     /// <para>
-    /// 代价与限制：clean.pdf 的文字层里那个数字还在（渲染时被白块盖住）——
-    /// 表格提取本来就有 <c>MarkTriangleMarks</c> 把它剔掉，不影响 CSV。
-    /// 扫描件（没有文字层）认不出，日志里会是「没找到」。
+    /// 代价与限制：整串是数字的文本对象能直接删掉；和尺寸挤在同一个文本对象里的数字删不得，
+    /// 只能白块盖住 —— 那份 <c>_clean.pdf</c> 的文字层里它还在（渲染时看不见）。
+    /// 表格提取读的是原 PDF，本来就有 <c>MarkTriangleMarks</c> 把它剔掉，不影响 CSV。
+    /// 扫描件（没有文字层、也没有矢量三角形）认不出，日志里会是「命中 0 处」。
     /// </para>
     /// </summary>
     internal static class TriangleMarkEraser
@@ -117,8 +126,54 @@ namespace CadPartSplitter
         /// <summary>框内数字的位数下限（改版编号 1~3 位，与 MarkTriangleMarks 一致）。</summary>
         private const int MinDigitLength = 1;
 
-        /// <summary>框内数字的位数上限。</summary>
+        /// <summary>
+        /// 框内数字的位数上限（与 <see cref="RuledTableExtractor"/> 的 <c>MarkTriangleMarks</c> 一致；
+        /// py 版放宽到 4 位，这里收紧到 3 位，免得把四位数的寸法当成编号误删）。
+        /// </summary>
         private const int MaxDigitLength = 3;
+
+        /// <summary>可以整串删掉的文本对象位数上限（py 的 1~4 位；只看「整串是不是数字」，不看上下文）。</summary>
+        private const int TextObjDigitMaxLength = 4;
+
+        // ── py 版（triangle_eraser.py）的三角形判据参数 ──
+
+        /// <summary>三角形包围盒下限（pt）：更小的多半是文字笔画 / 箭头尖（py 的 TRIANGLE_MIN_PT）。</summary>
+        private const double TriangleMinPt = 6;
+
+        /// <summary>三角形包围盒上限（pt）：更大的就不是「把数字框起来的记号」了（py 的 TRIANGLE_MAX_PT）。</summary>
+        private const double TriangleMaxPt = 50;
+
+        /// <summary>三角形包围盒的长宽比下限（py：0.3）。</summary>
+        private const double TriangleBoxRatioMin = 0.3;
+
+        /// <summary>三角形包围盒的长宽比上限（py：3.0）。</summary>
+        private const double TriangleBoxRatioMax = 3.0;
+
+        /// <summary>三边均匀度：边长标准差 / 均值小于这个数才算三角形（py 的 SIDE_RATIO_TOLERANCE）。</summary>
+        private const double SideUniformRatio = 0.45;
+
+        /// <summary>顶点去重容差（pt）：<c>m-l-l-h</c> 的闭合点与起点算同一个顶点（py 的 0.5）。</summary>
+        private const double VertexJoinPt = 0.5;
+
+        /// <summary>最短的平均边长（pt）：低于 1 pt 的图形直接否掉（py 的 mean_side &lt; 1）。</summary>
+        private const double MinMeanSidePt = 1.0;
+
+        /// <summary>判定「这个对象整个落在三角形框里」的容差（pt，py 的 _should_remove_subpath 容差）。</summary>
+        private const double PathEraseTolerancePt = 1.2;
+
+        // ── 「框内有拆出来的笔画」判据（py 的 _has_shx_vector_strokes_inside）──
+
+        /// <summary>笔画要落在这个内缩量之内才算「在三角形里面」（pt）。</summary>
+        private const double InnerStrokeMargin = 0.3;
+
+        /// <summary>与三角形框四条边比对时的容差（pt）：同尺寸的对象是三角形自己，不算笔画。</summary>
+        private const double SameRectTolerancePt = 0.8;
+
+        /// <summary>笔画的最小宽度（pt）：宽于它才算一笔。</summary>
+        private const double InnerStrokeMinWidthPt = 0.3;
+
+        /// <summary>笔画的最小高度（pt）：高于它才算一笔（竖笔）。</summary>
+        private const double InnerStrokeMinHeightPt = 1.2;
 
         private const string PdfiumDll = "pdfium.dll";
 
@@ -184,7 +239,7 @@ namespace CadPartSplitter
             if (triangles.Count == 0)
                 return inputPath;
 
-            // ── 擦除：PDFium 在这几个位置盖白矩形 ──
+            // ── 擦除：PDFium 删掉整个落在框里的页面对象，删不动的补白矩形 ──
             lock (SyncRoot)
             {
                 byte[] data;
@@ -227,30 +282,30 @@ namespace CadPartSplitter
                         return inputPath;
                     }
 
-                    // 检测用的是 PdfPig 的页内坐标，白块用的是 PDFium 的页面坐标；
+                    // 检测用的是 PdfPig 的页内坐标，删除 / 白块用的是 PDFium 的页面坐标；
                     // 页面设了 /Rotate 时 PdfPig 会把文字 / 路径坐标旋到显示方向，两者差 90° 的倍数，
-                    // 照着盖会把白块盖错位置 —— 直接跳过，宁可不擦，也不能盖掉无辜的图面内容。
+                    // 照着删 / 盖会动错对象 —— 直接跳过，宁可不擦，也不能删掉无辜的图面内容。
                     int rotation = FPDFPage_GetRotation(page);
                     if (rotation != 0)
                     {
                         o.Log("[WARN] 三角形注記符号：第 " + (pageIndex + 1) + " 页设了 /Rotate "
-                              + (rotation * 90) + "°，检测坐标与页面坐标不一致，跳过（避免白块盖错位置）。");
+                              + (rotation * 90) + "°，检测坐标与页面坐标不一致，跳过（避免删错 / 盖错位置）。");
                         FPDF_ClosePage(page);
                         return inputPath;
                     }
 
-                    int covered;
+                    int handled, deletedObjects, whiteRects;
                     try
                     {
-                        covered = CoverWithWhiteRects(page, triangles, o);
+                        handled = EraseTriangles(page, triangles, o, out deletedObjects, out whiteRects);
                     }
                     finally
                     {
                         FPDF_ClosePage(page);
                     }
 
-                    // 一块都没盖 → 不另存副本，直接用原路径（与「没有批注时不生成副本」一致）
-                    if (covered <= 0)
+                    // 一处都没动成 → 不另存副本，直接用原路径（与「没有批注时不生成副本」一致）
+                    if (handled <= 0)
                         return inputPath;
 
                     string cleanPath = BuildCleanPath(inputPath, outputDir);
@@ -261,8 +316,10 @@ namespace CadPartSplitter
 
                     MoveIntoPlace(tempPath, cleanPath);
 
-                    o.Log("[INFO] 三角形注記符号：第 " + (pageIndex + 1) + " 页遮掉 " + covered
-                          + " 处（△数字），渲染用 → " + cleanPath);
+                    o.Log("[INFO] 三角形注記符号：第 " + (pageIndex + 1) + " 页处理 " + handled
+                          + " 处（△数字）→ 物理删除 " + deletedObjects + " 个页面对象"
+                          + (whiteRects > 0 ? "，另外 " + whiteRects + " 处盖白块兜底" : string.Empty)
+                          + "，渲染用 → " + cleanPath);
 
                     return cleanPath;
                 }
@@ -450,48 +507,350 @@ namespace CadPartSplitter
                 return result;
             }
 
-            // ① 斜边：全部矢量路径（含 Form XObject，坐标已应用 CTM）扁平化后逐段筛
+            // ① 矢量层先整体过一遍：每条路径（含 Form XObject，坐标已应用 CTM）的子路径顶点、
+            //    有没有曲线（判据 1 用），以及全部斜边（判据 2 用）
+            var paths = new List<PathInfo>();
             var diagonals = new List<Diag>();
 
             foreach (PdfPath path in page.Paths)
             {
-                foreach (PdfSubpath sub in path)
-                {
-                    List<PdfPoint> points = Flatten(sub);
+                PathInfo info = ReadPath(path);
+                if (info == null)
+                    continue;
 
+                paths.Add(info);
+
+                foreach (List<PdfPoint> points in info.Subpaths)
                     for (int i = 1; i < points.Count; i++)
                         AddDiagonal(points[i - 1], points[i], diagonals);
+            }
+
+            // ② 文字层：数字字符（判据 1 判断「框里有数字」）与数字词（判据 2 的起点）
+            List<Digit> digits = ReadDigits(page.Words);
+
+            int byPath = 0, byPair = 0;
+
+            // ── 判据 1：整条路径就是三角形 + 框内有数字 / 笔画（py 的策略 1） ──
+            foreach (PathInfo info in paths)
+            {
+                TriangleBox box;
+                if (!LooksLikeTriangle(info, out box))
+                    continue;
+
+                if (!HasDigitInside(digits, box) && !HasStrokeInside(paths, info, box))
+                    continue;
+
+                if (!ContainsBox(result, box))
+                {
+                    result.Add(box);
+                    byPath++;
                 }
             }
 
-            // 一条斜边都没有 → 这页不可能有 △（扫描件、只有表格的页都走这里）
-            if (diagonals.Count < 2)
+            // ── 判据 2：两条斜边夹一个数字（py 策略 2 的 C# 替代，覆盖「三条边拆成独立对象」） ──
+            if (diagonals.Count >= 2)
             {
-                o.Log("[INFO] 三角形注記符号：第 " + (pageIndex + 1) + " 页矢量路径 " + page.PathCount
-                      + " 条里凑不出斜边（" + diagonals.Count + " 条），这页没有 △（扫描件也会走这里）。");
-                return result;
-            }
+                foreach (Word word in page.Words)
+                {
+                    if (!IsMarkNumber(word.Text))
+                        continue;
 
-            // ② 文字层：1~3 位纯数字的词，且周围能找到「顶点重合 + 水平底边」的两条斜边
-            foreach (Word word in page.Words)
-            {
-                if (!IsMarkNumber(word.Text))
-                    continue;
+                    TriangleBox triangle;
+                    if (!TryFindTriangle(word.BoundingBox, diagonals, out triangle))
+                        continue;
 
-                TriangleBox triangle;
-                if (!TryFindTriangle(word.BoundingBox, diagonals, out triangle))
-                    continue;
-
-                if (!ContainsBox(result, triangle))
-                    result.Add(triangle);
+                    if (!ContainsBox(result, triangle))
+                    {
+                        result.Add(triangle);
+                        byPair++;
+                    }
+                }
             }
 
             o.Log("[INFO] 三角形注記符号：第 " + (pageIndex + 1) + " 页矢量路径 " + page.PathCount
-                  + " 条 → 斜边 " + diagonals.Count + " 条、文字 " + page.WordCount
-                  + " 个词 → 命中 " + result.Count + " 处 △数字"
-                  + (result.Count > 0 ? "。" : "（要「两条斜边凑成三角 + 框内有 1~3 位数字」同时成立才算）。"));
+                  + " 条（斜边 " + diagonals.Count + " 条）、文字 " + page.WordCount + " 个词（数字字符 "
+                  + digits.Count + " 个）→ 命中 " + result.Count + " 处 △数字"
+                  + (result.Count > 0
+                        ? "（整条路径判据 " + byPath + " 处、斜边配对 " + byPair + " 处）。"
+                        : "（要「整条路径 = 三角形 且 框内有数字 / 笔画」，"
+                          + "或「两条斜边凑成三角 且 框内有 1~3 位数字」才算）。"));
 
             return result;
+        }
+
+        // ── 判据 1 的几何 / 文字工具（对应 py 的 _looks_like_triangle /
+        //    _get_normal_digits_inside / _has_shx_vector_strokes_inside） ──
+
+        /// <summary>
+        /// 一条矢量路径（PDF 里的一个 path 对象）的几何摘要：各子路径的折线点列、有没有曲线、
+        /// 以及整体包围盒（判据 1 与「框内有笔画」都按它判断，等价于 py 的 <c>d["rect"]</c>）。
+        /// </summary>
+        private sealed class PathInfo
+        {
+            public readonly List<List<PdfPoint>> Subpaths = new List<List<PdfPoint>>();
+            public bool HasCurve;
+            public double Left = double.MaxValue;
+            public double Bottom = double.MaxValue;
+            public double Right = double.MinValue;
+            public double Top = double.MinValue;
+
+            public bool HasPoints { get { return Subpaths.Count > 0; } }
+            public double Width { get { return Right - Left; } }
+            public double Height { get { return Top - Bottom; } }
+        }
+
+        /// <summary>把一条 <see cref="PdfPath"/> 读成 <see cref="PathInfo"/>（没有点 / 空路径返回 null）。</summary>
+        private static PathInfo ReadPath(PdfPath path)
+        {
+            if (path == null)
+                return null;
+
+            var info = new PathInfo();
+
+            foreach (PdfSubpath sub in path)
+            {
+                if (sub == null)
+                    continue;
+
+                List<PdfPoint> points = Flatten(sub);
+
+                if (points.Count > 0)
+                {
+                    info.Subpaths.Add(points);
+
+                    foreach (PdfPoint p in points)
+                    {
+                        if (p.X < info.Left) info.Left = p.X;
+                        if (p.X > info.Right) info.Right = p.X;
+                        if (p.Y < info.Bottom) info.Bottom = p.Y;
+                        if (p.Y > info.Top) info.Top = p.Y;
+                    }
+                }
+
+                foreach (var command in sub.Commands)
+                {
+                    if (command is PdfSubpath.CubicBezierCurve
+                        || command is PdfSubpath.QuadraticBezierCurve
+                        || command is PdfSubpath.BezierCurve)
+                    {
+                        info.HasCurve = true;
+                        break;
+                    }
+                }
+            }
+
+            return info.HasPoints ? info : null;
+        }
+
+        /// <summary>
+        /// 判据 1（py 的 <c>_looks_like_triangle</c>）：整条路径就是一个三角形 ——
+        /// 没有贝塞尔曲线、去重后恰好 3 个顶点（<c>m-l-l-h</c> 的闭合点与起点算同一个）、
+        /// 三边长度均匀（标准差 / 均值 &lt; <see cref="SideUniformRatio"/>）、
+        /// 包围盒 6~50 pt 且长宽比 0.3~3.0。
+        /// </summary>
+        private static bool LooksLikeTriangle(PathInfo info, out TriangleBox box)
+        {
+            box = null;
+
+            if (info == null || !info.HasPoints || info.HasCurve)
+                return false;
+
+            double width = info.Width;
+            double height = info.Height;
+
+            if (width < TriangleMinPt || height < TriangleMinPt
+                || width > TriangleMaxPt || height > TriangleMaxPt)
+                return false;
+
+            if (height <= 0)
+                return false;
+
+            double ratio = width / height;
+            if (ratio < TriangleBoxRatioMin || ratio > TriangleBoxRatioMax)
+                return false;
+
+            var unique = new List<PdfPoint>();
+
+            foreach (List<PdfPoint> points in info.Subpaths)
+            {
+                foreach (PdfPoint p in points)
+                {
+                    bool duplicate = false;
+
+                    foreach (PdfPoint u in unique)
+                    {
+                        if (Math.Abs(p.X - u.X) < VertexJoinPt && Math.Abs(p.Y - u.Y) < VertexJoinPt)
+                        {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!duplicate)
+                        unique.Add(p);
+                }
+            }
+
+            if (unique.Count != 3)
+                return false;
+
+            double s01 = Distance(unique[0], unique[1]);
+            double s12 = Distance(unique[1], unique[2]);
+            double s20 = Distance(unique[2], unique[0]);
+
+            double mean = (s01 + s12 + s20) / 3.0;
+            if (mean < MinMeanSidePt)
+                return false;
+
+            double std = Math.Sqrt(((s01 - mean) * (s01 - mean)
+                                    + (s12 - mean) * (s12 - mean)
+                                    + (s20 - mean) * (s20 - mean)) / 3.0);
+
+            if (std / mean >= SideUniformRatio)
+                return false;
+
+            box = new TriangleBox
+            {
+                Left = info.Left,
+                Bottom = info.Bottom,
+                Right = info.Right,
+                Top = info.Top
+            };
+
+            return true;
+        }
+
+        /// <summary>两点距离（pt）。</summary>
+        private static double Distance(PdfPoint a, PdfPoint b)
+        {
+            double dx = b.X - a.X;
+            double dy = b.Y - a.Y;
+            return Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        /// <summary>文字层里的一个数字字符：字形框的中心（pt，原点在左下）。</summary>
+        private sealed class Digit
+        {
+            public double CenterX;
+            public double CenterY;
+        }
+
+        /// <summary>
+        /// 文字层里的数字字符（半角 / 全角都算）。判据 1 靠它判断「三角形框里有数字」。
+        /// 一个词可能跨出三角形（<c>100 1</c> 这种被 △ 挤在一起的），所以按<b>字符</b>取中心，
+        /// 与 py 的 <c>rawdict</c> 一致；个别字体拿不到逐字符框时，整词都是数字就退回用词框。
+        /// </summary>
+        private static List<Digit> ReadDigits(IReadOnlyList<Word> words)
+        {
+            var list = new List<Digit>();
+
+            if (words == null)
+                return list;
+
+            foreach (Word word in words)
+            {
+                if (word == null)
+                    continue;
+
+                bool anyLetter = false;
+
+                if (word.Letters != null)
+                {
+                    foreach (Letter letter in word.Letters)
+                    {
+                        if (letter == null)
+                            continue;
+
+                        anyLetter = true;
+
+                        if (!IsDigitChar(letter.Value))
+                            continue;
+
+                        list.Add(CenterOf(letter.GlyphRectangle));
+                    }
+                }
+
+                if (!anyLetter && IsMarkNumber(word.Text))
+                    list.Add(CenterOf(word.BoundingBox));
+            }
+
+            return list;
+        }
+
+        /// <summary>取一个矩形框的中心点。</summary>
+        private static Digit CenterOf(PdfRectangle rect)
+        {
+            return new Digit
+            {
+                CenterX = (rect.Left + rect.Right) / 2.0,
+                CenterY = (rect.Bottom + rect.Top) / 2.0
+            };
+        }
+
+        /// <summary>单个字符是不是数字（半角 0~9 / 全角 ０~９）。</summary>
+        private static bool IsDigitChar(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length != 1)
+                return false;
+
+            char c = text[0];
+            return (c >= '0' && c <= '9') || (c >= '\uFF10' && c <= '\uFF19');
+        }
+
+        /// <summary>
+        /// 判据 1 的「框里有数字」（py 的 <c>_get_normal_digits_inside</c>）：
+        /// 数字字符的中心落在三角形框里就算。py 那个 2 pt 的 <c>DIGIT_SEARCH_EXPAND</c>
+        /// 只是 <c>get_text(clip=…)</c> 的取数范围，判定用的仍是三角形原框，这里同理。
+        /// </summary>
+        private static bool HasDigitInside(List<Digit> digits, TriangleBox box)
+        {
+            if (digits == null || digits.Count == 0)
+                return false;
+
+            foreach (Digit d in digits)
+            {
+                if (d.CenterX >= box.Left && d.CenterX <= box.Right
+                    && d.CenterY >= box.Bottom && d.CenterY <= box.Top)
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 判据 1 的「框里有笔画」（py 的 <c>_has_shx_vector_strokes_inside</c>）：
+        /// AutoCAD SHX 字体的数字在 PDF 里可能是拆开的矢量笔画（文字层里读不到数字），
+        /// 这时只要三角形框内有<b>明显小于三角形本身</b>的其它路径，就认为里面有笔画的数字。
+        /// 四条边都与三角形重合的对象是三角形自己，先排除（容差 <see cref="SameRectTolerancePt"/>）。
+        /// </summary>
+        private static bool HasStrokeInside(List<PathInfo> paths, PathInfo self, TriangleBox box)
+        {
+            if (paths == null || box == null)
+                return false;
+
+            double innerLeft = box.Left + InnerStrokeMargin;
+            double innerBottom = box.Bottom + InnerStrokeMargin;
+            double innerRight = box.Right - InnerStrokeMargin;
+            double innerTop = box.Top - InnerStrokeMargin;
+
+            foreach (PathInfo p in paths)
+            {
+                if (p == null || ReferenceEquals(p, self))
+                    continue;
+
+                if (Math.Abs(p.Left - box.Left) < SameRectTolerancePt
+                    && Math.Abs(p.Bottom - box.Bottom) < SameRectTolerancePt
+                    && Math.Abs(p.Right - box.Right) < SameRectTolerancePt
+                    && Math.Abs(p.Top - box.Top) < SameRectTolerancePt)
+                    continue;
+
+                if (p.Left >= innerLeft && p.Right <= innerRight
+                    && p.Bottom >= innerBottom && p.Top <= innerTop
+                    && (p.Width > InnerStrokeMinWidthPt || p.Height > InnerStrokeMinHeightPt))
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -576,23 +935,328 @@ namespace CadPartSplitter
         }
 
         /// <summary>
-        /// 擦除：把 <paramref name="triangles"/> 逐个盖白块，再生成内容流，返回盖上的个数。
-        /// 等价于 py 版的 <c>add_redact_annot(fill=(1,1,1))</c> + <c>apply_redactions()</c>。
+        /// 一个三角形框的处理计划：框里有哪些<b>可以整删</b>的对象（<see cref="Mine"/>），
+        /// 以及框里还有没有删不掉 / 只部分相交的东西（<see cref="Leftover"/>）。
         /// </summary>
-        private static int CoverWithWhiteRects(IntPtr page, List<TriangleBox> triangles, DetectorOptions o)
+        private sealed class Frame
         {
-            int covered = 0;
+            public TriangleBox Box;
+            public readonly List<PageObjectInfo> Mine = new List<PageObjectInfo>();
+            public bool Leftover;
+        }
+
+        /// <summary>
+        /// 擦除：先物理删除整个落在三角形框里的页面对象（路径对象、整串是数字的文本对象），
+        /// 删不动的再盖白块兜底，最后生成内容流。与 py 的「内容流手术」同一个目标 ——
+        /// 符号从图纸上真的消失，而不是只被盖住（只有 PDFium 删不了的那几类才退回白块）。
+        /// </summary>
+        /// <returns>处理过的三角形个数（纯删除 + 白块），一处都没动成时返回 0。</returns>
+        private static int EraseTriangles(
+            IntPtr page, List<TriangleBox> triangles, DetectorOptions o,
+            out int deletedObjects, out int whiteRects)
+        {
+            deletedObjects = 0;
+            whiteRects = 0;
+
+            if (triangles == null || triangles.Count == 0)
+                return 0;
+
+            // 页面级对象（看不到 Form XObject 里的内容 —— 那些框会落到白块兜底）
+            List<PageObjectInfo> objects = ReadPageObjects(page);
+
+            var frames = new List<Frame>();
+            var toDelete = new List<PageObjectInfo>();
 
             foreach (TriangleBox triangle in triangles)
             {
-                if (CoverWithWhiteRect(page, triangle))
-                    covered++;
+                var frame = new Frame { Box = triangle };
+                frames.Add(frame);
+
+                if (objects == null)
+                    continue;   // 这版 pdfium.dll 没有对象接口 → 整框交给白块
+
+                foreach (PageObjectInfo obj in objects)
+                {
+                    if (!Intersects(obj, triangle))
+                        continue;
+
+                    // 只有「整个落在框里的路径对象 / 整串是数字的文本对象」能整删；
+                    // 与长表格线共用一个路径对象的（只部分相交）、图片、Form XObject、
+                    // 「100 1」这种混着尺寸的文本，一律不碰 —— 硬删会伤到别的内容
+                    if (FullyInside(obj, triangle) && IsDeletableObject(obj))
+                    {
+                        frame.Mine.Add(obj);
+
+                        if (!obj.Queued)
+                        {
+                            obj.Queued = true;
+                            toDelete.Add(obj);
+                        }
+                    }
+                    else
+                    {
+                        frame.Leftover = true;
+                    }
+                }
             }
 
-            if (covered > 0 && FPDFPage_GenerateContent(page) == 0)
-                o.Log("[WARN] 三角形注記符号：FPDFPage_GenerateContent 失败，白块可能没写进内容流。");
+            // 统一删除：遍历时删会让 FPDFPage_GetObject 的索引错位，所以先收集、后删
+            foreach (PageObjectInfo obj in toDelete)
+            {
+                if (obj.Removed)
+                    continue;
 
-            return covered;
+                if (FPDFPage_RemoveObject(page, obj.Handle) != 0)
+                {
+                    obj.Removed = true;
+                    deletedObjects++;
+                }
+            }
+
+            var pureDelete = new List<TriangleBox>();
+            var cover = new List<TriangleBox>();
+
+            foreach (Frame frame in frames)
+            {
+                bool allRemoved = !frame.Leftover && frame.Mine.Count > 0;
+
+                if (allRemoved)
+                {
+                    foreach (PageObjectInfo obj in frame.Mine)
+                    {
+                        if (!obj.Removed)
+                        {
+                            allRemoved = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (allRemoved)
+                    pureDelete.Add(frame.Box);
+                else
+                    cover.Add(frame.Box);   // 删不干净（或框里根本没有页面级对象）→ 白块
+            }
+
+            foreach (TriangleBox box in cover)
+            {
+                if (CoverWithWhiteRect(page, box))
+                    whiteRects++;
+            }
+
+            if (pureDelete.Count + whiteRects == 0)
+                return 0;
+
+            if (FPDFPage_GenerateContent(page) == 0)
+                o.Log("[WARN] 三角形注記符号：FPDFPage_GenerateContent 失败，删除 / 白块可能没写进内容流。");
+
+            return pureDelete.Count + whiteRects;
+        }
+
+        // ── PDFium 页面对象（物理删除用；常量取 FPDF_PAGEOBJECTTYPE 的定义值） ──
+
+        /// <summary>文本对象（<c>FPDF_PAGEOBJ_TEXT</c>）。</summary>
+        private const int PageObjText = 1;
+
+        /// <summary>路径对象（<c>FPDF_PAGEOBJ_PATH</c>）—— 三角形和它的边都是这种。</summary>
+        private const int PageObjPath = 2;
+
+        /// <summary>
+        /// 页面上的一个对象（PDFium 的 <c>FPDF_PAGEOBJECT</c>）：类型、包围盒（pt，原点在左下，
+        /// 与 PdfPig 的页面坐标一致），以及「整串是不是 1~4 位数字」（只对文本对象有意义）。
+        /// </summary>
+        private sealed class PageObjectInfo
+        {
+            public IntPtr Handle;
+            public int Index;
+            public int Type;
+            public double Left;
+            public double Bottom;
+            public double Right;
+            public double Top;
+            public bool IsDigitText;
+            public bool Queued;
+            public bool Removed;
+        }
+
+        /// <summary>
+        /// 读出该页所有页面级对象及其包围盒。这版 pdfium.dll 缺对象接口时返回 null，
+        /// 调用方退回「全部盖白块」（换回老 dll 也不会崩）。
+        /// Form XObject 在页面对象列表里只是一个 FORM 对象、看不到里面 ——
+        /// 画在 form 里的 △ 只能靠白块兜底。
+        /// </summary>
+        private static List<PageObjectInfo> ReadPageObjects(IntPtr page)
+        {
+            int count;
+
+            try
+            {
+                count = FPDFPage_CountObjects(page);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return null;
+            }
+
+            if (count <= 0)
+                return new List<PageObjectInfo>();
+
+            var list = new List<PageObjectInfo>(count);
+            IntPtr textPage = IntPtr.Zero;
+
+            // 文本对象的内容要靠「文本页」接口读（拿不到就只按类型处理，不删文本）
+            try
+            {
+                textPage = FPDFText_LoadPage(page);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                textPage = IntPtr.Zero;
+            }
+
+            try
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr handle = FPDFPage_GetObject(page, i);
+                    if (handle == IntPtr.Zero)
+                        continue;
+
+                    int type = FPDFPageObj_GetType(handle);
+
+                    float left, bottom, right, top;
+                    if (FPDFPageObj_GetBounds(handle, out left, out bottom, out right, out top) == 0)
+                        continue;
+
+                    var info = new PageObjectInfo
+                    {
+                        Handle = handle,
+                        Index = i,
+                        Type = type,
+                        Left = left,
+                        Bottom = bottom,
+                        Right = right,
+                        Top = top
+                    };
+
+                    if (type == PageObjText && textPage != IntPtr.Zero)
+                        info.IsDigitText = IsDigitOnlyTextObject(handle, textPage);
+
+                    list.Add(info);
+                }
+            }
+            finally
+            {
+                if (textPage != IntPtr.Zero)
+                {
+                    try
+                    {
+                        FPDFText_ClosePage(textPage);
+                    }
+                    catch (EntryPointNotFoundException)
+                    {
+                        // 没有这个入口：dll 里那个文本页句柄随文档一起结束，不用管
+                    }
+                }
+            }
+
+            return list;
+        }
+
+        /// <summary>
+        /// 文本对象的整串内容是不是 1~4 位数字（CAD 里一个数字常常就是一个独立文本对象）。
+        /// <c>100 1</c> 这种混着尺寸的返回 false —— 删掉整个对象会连尺寸一起丢。
+        /// </summary>
+        private static bool IsDigitOnlyTextObject(IntPtr handle, IntPtr textPage)
+        {
+            int bytes;
+
+            try
+            {
+                bytes = (int)FPDFTextObj_GetText(handle, textPage, IntPtr.Zero, 0);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return false;
+            }
+
+            // UTF-16LE：1~4 位数字最多 8 字节，更大的肯定不是编号
+            if (bytes <= 0 || bytes > 16)
+                return false;
+
+            IntPtr buffer = Marshal.AllocHGlobal(bytes + 2);
+
+            try
+            {
+                uint written = FPDFTextObj_GetText(handle, textPage, buffer, (uint)(bytes + 2));
+                if (written == 0)
+                    return false;
+
+                return IsDigitOnly(Marshal.PtrToStringUni(buffer));
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        /// <summary>整串就是 1~4 位数字（允许两端空白；全角数字也认）。</summary>
+        private static bool IsDigitOnly(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return false;
+
+            string value = text.Trim();
+
+            if (value.Length < 1 || value.Length > TextObjDigitMaxLength)
+                return false;
+
+            foreach (char c in value)
+            {
+                bool digit = (c >= '0' && c <= '9')
+                             || (c >= '\uFF10' && c <= '\uFF19');
+
+                if (!digit)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 这个对象能不能为了 △ 注記符号整删：路径对象可以；文本对象只有「整串就是数字」的可以。
+        /// 图片 / 阴影 / Form XObject（里面可能是别的图形）一律不动。
+        /// </summary>
+        private static bool IsDeletableObject(PageObjectInfo obj)
+        {
+            if (obj == null)
+                return false;
+
+            if (obj.Type == PageObjPath)
+                return true;
+
+            return obj.Type == PageObjText && obj.IsDigitText;
+        }
+
+        /// <summary>对象包围盒与三角形框是否相交（容差 <see cref="PathEraseTolerancePt"/>）。</summary>
+        private static bool Intersects(PageObjectInfo obj, TriangleBox box)
+        {
+            return obj.Right >= box.Left - PathEraseTolerancePt
+                   && obj.Left <= box.Right + PathEraseTolerancePt
+                   && obj.Top >= box.Bottom - PathEraseTolerancePt
+                   && obj.Bottom <= box.Top + PathEraseTolerancePt;
+        }
+
+        /// <summary>
+        /// 对象包围盒是不是整个落在三角形框里 —— py 的 <c>_should_remove_subpath</c> 的对象级版本。
+        /// 长表格线的包围盒远远超出三角形框，所以永远不会被这条判据选中。
+        /// </summary>
+        private static bool FullyInside(PageObjectInfo obj, TriangleBox box)
+        {
+            return obj.Left >= box.Left - PathEraseTolerancePt
+                   && obj.Right <= box.Right + PathEraseTolerancePt
+                   && obj.Bottom >= box.Bottom - PathEraseTolerancePt
+                   && obj.Top <= box.Top + PathEraseTolerancePt;
         }
 
         /// <summary>
@@ -876,10 +1540,45 @@ namespace CadPartSplitter
         [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
         private static extern int FPDF_SaveAsCopy(IntPtr document, IntPtr fileWrite, uint flags);
 
-        // ── 页面对象 / 内容流（只用到「插入白矩形 + 生成内容流」）──
+        // ── 页面对象 / 内容流（删对象 + 插白矩形 + 生成内容流）──
 
         [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
         private static extern int FPDFPage_InsertObject(IntPtr page, IntPtr pageObject);
+
+        /// <summary>页面上的对象个数（含 Form XObject，但看不到 form 内部的对象）。</summary>
+        [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int FPDFPage_CountObjects(IntPtr page);
+
+        [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr FPDFPage_GetObject(IntPtr page, int index);
+
+        /// <summary>对象类型，取值见 FPDF_PAGEOBJECTTYPE（1 = TEXT、2 = PATH、3 = IMAGE、5 = FORM）。</summary>
+        [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int FPDFPageObj_GetType(IntPtr pageObject);
+
+        /// <summary>对象包围盒（pt，原点在左下，与 PdfPig 的页面坐标一致），返回 1 表示成功。</summary>
+        [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int FPDFPageObj_GetBounds(
+            IntPtr pageObject, out float left, out float bottom, out float right, out float top);
+
+        /// <summary>从页面删掉一个对象，返回 1 表示成功（之后对象归 PDFium 管，不要再用这个句柄）。</summary>
+        [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int FPDFPage_RemoveObject(IntPtr page, IntPtr pageObject);
+
+        /// <summary>打开页面的文本页接口（读文本对象内容用），用完必须 <see cref="FPDFText_ClosePage"/>。</summary>
+        [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr FPDFText_LoadPage(IntPtr page);
+
+        [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern void FPDFText_ClosePage(IntPtr textPage);
+
+        /// <summary>
+        /// 文本对象的文字（UTF-16LE，带结尾 0）：<paramref name="buffer"/> 传 <see cref="IntPtr.Zero"/>、
+        /// <paramref name="length"/> 传 0 时返回需要的字节数。返回写入的字节数。
+        /// </summary>
+        [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern uint FPDFTextObj_GetText(
+            IntPtr textObject, IntPtr textPage, IntPtr buffer, uint length);
 
         [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
         private static extern int FPDFPage_GenerateContent(IntPtr page);

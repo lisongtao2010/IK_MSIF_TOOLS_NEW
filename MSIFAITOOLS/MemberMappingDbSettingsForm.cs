@@ -10,7 +10,7 @@ namespace MSIFAITOOLS
     /// <list type="bullet">
     /// <item><c>connJP1</c>（默认）= genpin 库：部材名置换表 <c>T_M_MergeName</c> /
     ///       【CMD 分析】第 6 步 <c>T_M_PartsMaster</c>；</item>
-    /// <item><c>connJP2</c> = MSIF 库：部材不材 mapping <c>DL_BuhinBuzaiMapping</c>。</item>
+    /// <item><c>connJP2</c> = MSIF 库：部材 mapping <c>DL_BuhinBuzaiMapping</c>。</item>
     /// </list>
     ///
     /// <para>
@@ -73,7 +73,7 @@ namespace MSIFAITOOLS
             LoadCurrentSettings();
         }
 
-        /// <summary>是否在维护 <c>connJP2</c>（部材不材 mapping / MSIF 库）。</summary>
+        /// <summary>是否在维护 <c>connJP2</c>（部材 mapping / MSIF 库）。</summary>
         private bool IsJp2
         {
             get
@@ -88,10 +88,10 @@ namespace MSIFAITOOLS
         {
             if (IsJp2)
             {
-                UiLocalization.SetText(this, "SQL Server 接続設定 ② · MSIF（部材不材 mapping）");
+                UiLocalization.SetText(this, "SQL Server 接続設定 ② · MSIF（部材 mapping）");
                 UiLocalization.SetText(lblTitle, "② MSIF · 数据库连接设置");
                 UiLocalization.SetText(lblHint,
-                    "部品基本信息【保存】时写 DL_BuhinBuzaiMapping（部材不材 mapping）。" +
+                    "部品基本信息【保存】时写 DL_BuhinBuzaiMapping（部材 mapping）。" +
                     "保存后下次保存部品信息时生效。");
                 return;
             }
@@ -143,7 +143,7 @@ namespace MSIFAITOOLS
             if (database.Length == 0)
             {
                 error = IsJp2
-                    ? "请填写 DB 名（部材不材 mapping 用 MSIF）。"
+                    ? "请填写 DB 名（部材 mapping 用 MSIF）。"
                     : "请填写 DB 名（部材名置换表 / CMD 分析用 genpin）。";
                 txtDatabase.Focus();
                 return null;

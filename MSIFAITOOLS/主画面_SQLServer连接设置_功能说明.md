@@ -6,8 +6,9 @@
 > `Services/MemberMappingDbSettings.cs`（解析 / 保存）
 > 相关：`Services/MemberNameReplacementRepository.cs`（① 置换表）、
 > `Services/BuhinBuzaiMappingRepository.cs`（② 部材不材 mapping）、
+> `Services/LocalBuhinBuzaiMappingRepository.cs`（② 的本机表：SQLite `DL_BuhinBuzaiMapping`）、
 > `Services/MemberNameReplacementCatalog.cs`（启动预读）
-> 更新日期：2026-11-16
+> 更新日期：2026-11-18
 
 ---
 
@@ -24,7 +25,7 @@
 | 按钮 | 具名连接 | 默认接続先 | 用到的表 | 影响的功能 |
 |------|----------|------------|----------|------------|
 | 接続① genpin | `connJP1` | `10.103.126.208` / `genpin` | `dbo.T_M_MergeName`（部材名置换表）<br>`dbo.T_M_PartsMaster`（CMD 分析第 6 步） | 【部材名面板】整表读取、程序启动预读、<br>【CMD 分析】第 6 步的分类表 |
-| 接続② MSIF | `connJP2` | `10.103.126.209` / `MSIF` | `dbo.DL_BuhinBuzaiMapping`（部材不材 mapping） | 部品基本信息画面点【保存】时写入<br>「部品名 / 部材名 / 部品コード」 |
+| 接続② MSIF | `connJP2` | `10.103.126.209` / `MSIF` | `dbo.DL_BuhinBuzaiMapping`（部材不材 mapping） | 部品基本信息画面点【保存】时写入<br>「部品名 / 部材名 / 部品コード」<br>【部材名面板】整表读取（当推荐项）<br>**连不上时改读本机表**（SQLite 同名表 `DL_BuhinBuzaiMapping`） |
 
 按钮上有鼠标悬停提示（ToolTip），写明各自对应的库和表。
 
@@ -100,3 +101,25 @@
 | `MemberMappingDbSettingsStore.ResolveJp1` / `ResolveJp2` | ① / ② 的固定入口 |
 | `MemberMappingDbSettingsStore.Load(name, out error)` / `Save(settings, name, out error)` | 分节读写 |
 | `MemberNameReplacementRepository.TestConnection` / `BuhinBuzaiMappingRepository.TestConnection` | 两边各自的【测试连接】 |
+| `Services/LocalBuhinBuzaiMappingRepository.cs` | ② 的**本机表**（SQLite 同名表 `DL_BuhinBuzaiMapping`）：读服务器成功时整表镜像、读失败时兜底、保存时同步 upsert |
+| `BuhinBuzaiMappingCatalog.IsLocalFallback` / `LocalDescription` / `LocalError` | 「选择部材名」窗口用它判断要不要提示「部材不材 mapping 用的是本机缓存」 |
+
+---
+
+## 7. ② 连不上时的降级（本机缓存）
+
+② MSIF 只影响「以前用过的部材名」这一段推荐项，连不上时**不改任何连接配置也能继续用**：
+
+| 时机 | 行为 |
+|------|------|
+| 读服务器**成功**（部品基本信息画面打开时的预读 / 【保存】后的刷新） | 把整表镜像到本机 SQLite 表 `DL_BuhinBuzaiMapping`（服务器为准，服务器上删掉的行本机也删掉） |
+| 读服务器**失败**（网络断 / 服务器停 / 表不存在 / 密码错） | 自动改读本机表 → 部材名面板照常推荐以前用过的部材名，状态行提示「部材不材 mapping 用的是本机缓存」 |
+| 部品基本信息【保存】 | 服务器写成功 → 同步 upsert 本机表；服务器**写失败也写本机表**，所以断网期间登录的组合不会丢 |
+| 两边都拿不到 | 面板少一段推荐项（状态行提示「部材不材 mapping 连不上」），置换表 / 部材部品マスタ 的候选照常可用 |
+
+- 本机表与服务器**同名同主键**（`BuhinName` + `BuzaiName`），`BuhinCd` 为空时保留原值（与服务器 `UPDATE` 规则一致）。
+- 本机表放在「部材部品」マスタ同一个 SQLite 库文件里（`MemberPartDatabasePath`，默认 `D:\MSIFDB\MSIF_MemberParts.db`），
+  自动建表、自动同步，**不需要单独配置路径**。
+- 读 / 写本机表都不抛异常（`TryReplaceAll` / `TryUpsert` 只返回原因文字），失败不会影响部品基本信息的保存和其它画面操作。
+- 想重建本机缓存：删掉本机表里的行（或删除数据库文件），下次连上服务器预读时会重新镜像。
+

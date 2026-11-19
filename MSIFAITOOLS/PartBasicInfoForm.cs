@@ -16,8 +16,16 @@ namespace MSIFAITOOLS
     /// 窗口可复用（<see cref="ShowDrawing"/> 切换显示内容）。
     ///
     /// <para>
+    /// <b>全局只保留一个</b>：主画面打开【部品信息】之前先用 <see cref="FindOpenInstance"/> 取已经打开的那一个，
+    /// 不同图番只切换显示内容、不再新建窗口；构造函数里也会先关掉还活着的旧画面
+    /// （见 <see cref="_currentInstance"/> / <c>Form1.ShowPartInfo</c>）。
+    /// </para>
+    ///
+    /// <para>
     /// <b>表格操作</b>：单击 = 只选中<b>这一格</b>（不再整行选中）并<b>直接进入编辑、内容全选</b>，
     /// 再打一次字就替换掉原来的值（见 <see cref="DgvParts_CellClick"/>）。
+    /// <b>「行号」列</b>（显示在最左侧、<c>colNo</c>、Excel 行号栏那样）：只读、追加 / 删除行后自动重排，
+    /// 点这一格 = <b>选中整行</b>（按住 Ctrl 可多选 → 【删除行】一次删多行）。
     /// 「部材名」这一格单击时改为打开「选择部材名」窗口 <see cref="MemberNamePickerForm"/>
     /// （<b>非模态</b>：开着也能操作本画面；候选列表像输入法那样每项带编号，按 1～9 / 0 或单击就立刻写进这一格）。
     /// 窗口里按同一行的「部品名」（<c>colPartName</c>）去置换表
@@ -31,6 +39,12 @@ namespace MSIFAITOOLS
     {
         /// <summary>本画面打开的 PDF 预览窗口（关闭本画面时一并关闭）。</summary>
         private PdfPreviewForm _previewForm;
+
+        /// <summary>
+        /// 上一次在 PDF 预览画面上闪红框的行号（<see cref="FlashSelectedRowSource"/>）。
+        /// 同一行只闪一次（连续点这一行的不同单元格不重复闪）；换图 / 重新载入后重置成 -1。
+        /// </summary>
+        private int _lastFlashRowIndex = -1;
 
         /// <summary>当前显示的図番（PDF 文件名去扩展名）。</summary>
         private string _drawingNo = string.Empty;
@@ -90,6 +104,33 @@ namespace MSIFAITOOLS
         private bool _partMasterLoaded;
 
         /// <summary>
+        /// 当前打开的部品基本信息画面（<b>全局只保留一个</b>）：构造函数里登记、<see cref="OnFormClosed"/> 里注销。
+        /// <para>
+        /// 主画面（<c>Form1.ShowPartInfo</c>）在打开【部品信息】之前先用 <see cref="FindOpenInstance"/> 取这一个，
+        /// 不同图番只调 <see cref="ShowDrawing"/> 切换显示内容，<b>不再新建第二个窗口</b>。
+        /// 这样不管点多少次【部品信息】、换多少张图（包括换了图纸文件夹 = 换了一份库），
+        /// 屏幕上始终只有一个部品基本信息画面。
+        /// </para>
+        /// </summary>
+        private static PartBasicInfoForm _currentInstance;
+
+        /// <summary>
+        /// 「行号」列的名字（<c>colNo</c>）：画面行号（Excel 最左侧那一列），显示在最前面（<c>DisplayIndex = 0</c>）
+        /// 且 <c>Frozen</c>；只读，追加 / 删除行后由 <see cref="RenumberRows"/> 重排。
+        /// 点这一格 = 选中整行（见 <see cref="SelectWholeRow"/>）。
+        /// </summary>
+        private const string RowNumberColumnName = "colNo";
+
+        /// <summary>
+        /// 「行号」列的背景色（浅灰）：和业务列以及「数据来源」的来源色区分开，
+        /// 一眼看出这一列不是数据（Excel 的行号栏那种感觉）。
+        /// </summary>
+        private static readonly Color RowNumberBackColor = Color.FromArgb(242, 242, 242);
+
+        /// <summary>「行号」列的文字颜色（深灰，比数据文字淡一点）。</summary>
+        private static readonly Color RowNumberForeColor = Color.FromArgb(112, 112, 112);
+
+        /// <summary>
         /// 「部材名」列的名字（<c>colMemberName</c>）：多值用 <c>|</c> 连接的那一列，
         /// 单击时打开「选择部材名」窗口（<see cref="MemberNamePickerForm"/>）。
         /// </summary>
@@ -98,14 +139,14 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 「部品名」列的名字（<c>colPartName</c>）：打开「选择部材名」窗口
         /// （<see cref="MemberNamePickerForm"/>）时传给窗口，
-        /// 用来去部材不材 mapping（<c>DL_BuhinBuzaiMapping</c> 的 <c>BuhinName</c>）和
+        /// 用来去部材 mapping（<c>DL_BuhinBuzaiMapping</c> 的 <c>BuhinName</c>）和
         /// 置换表（<c>T_M_MergeName</c> 的表示部材名 <c>MsifDevName</c>）查推荐项。
         /// </summary>
         private const string PartNameColumnName = "colPartName";
 
         /// <summary>
         /// 「部品コード」列的名字（<c>colPartCode</c>）：同样在打开「选择部材名」窗口时传给窗口，
-        /// 用来去部材不材 mapping 查<b>这个部品实际用过的部材名</b>
+        /// 用来去部材 mapping 查<b>这个部品实际用过的部材名</b>
         /// （<c>DL_BuhinBuzaiMapping.BuhinCd</c> = 这一列 → <c>BuzaiName</c>，推荐项里排最前）。
         /// </summary>
         private const string PartCodeColumnName = "colPartCode";
@@ -247,6 +288,18 @@ namespace MSIFAITOOLS
             UiLocalization.Attach(this);
 
             _databasePath = string.IsNullOrWhiteSpace(databasePath) ? null : databasePath.Trim();
+
+            // 部品基本信息画面全局只保留一个：若此前还有活着的旧画面（引用丢了 / 直接 new 过），
+            // 先把它关掉再登记这一个（旧画面有未保存的修改时由它自己询问；
+            // 用户选「取消」就保留旧画面，主画面那边也不会再新建第二个 —— 见 Form1.ShowPartInfo）
+            PartBasicInfoForm previous = FindOpenInstance();
+
+            if (previous != null && !ReferenceEquals(previous, this))
+            {
+                previous.Close();
+            }
+
+            _currentInstance = this;
         }
 
         /// <summary>当前显示的図番。</summary>
@@ -268,6 +321,47 @@ namespace MSIFAITOOLS
         public string DatabasePath
         {
             get { return _databasePath; }
+        }
+
+        /// <summary>
+        /// 取现在已经打开的部品基本信息画面（<b>全局只保留一个</b>）。
+        /// <para>
+        /// 先看 <see cref="_currentInstance"/>；引用丢了也能再从 <see cref="Application.OpenForms"/>
+        /// 里把活着的画面找回来（并重新记成当前画面）。
+        /// </para>
+        /// <para>
+        /// 主画面（<c>Form1.ShowPartInfo</c>）在打开【部品信息】之前先调这个方法：
+        /// 已经有窗口就<b>只切换图番</b>（<see cref="ShowDrawing"/>），
+        /// 只有真的没有窗口时才 <c>new</c> —— 所以不管点多少次、换多少张图，
+        /// 屏幕上始终只有一个部品基本信息画面。
+        /// </para>
+        /// </summary>
+        /// <returns>已打开的部品基本信息画面；没有打开时返回 <c>null</c>。</returns>
+        internal static PartBasicInfoForm FindOpenInstance()
+        {
+            PartBasicInfoForm current = _currentInstance;
+
+            if (current != null && !current.IsDisposed)
+            {
+                return current;
+            }
+
+            // 兜底：引用丢了（例如在别处直接 new 出来的）也扫一遍已经打开的窗口
+            foreach (Form open in Application.OpenForms)
+            {
+                PartBasicInfoForm candidate = open as PartBasicInfoForm;
+
+                if (candidate != null && !candidate.IsDisposed)
+                {
+                    _currentInstance = candidate;
+
+                    return candidate;
+                }
+            }
+
+            _currentInstance = null;
+
+            return null;
         }
 
         /// <summary>
@@ -435,12 +529,19 @@ namespace MSIFAITOOLS
             }
 
             RefreshGridSummary();
+
+            // 表格重填了：行号对应的还是别的记录 → 允许对新表的第一行也闪红框
+            _lastFlashRowIndex = -1;
         }
+
         /// <summary>
         /// 初始化部品明细表格的列（与 <see cref="PopulateParts"/> 的填充顺序一致）。
         /// 前 14 列是业务必需列，按「番号 / 部材名 / 部品名 / 区分 / 数量 / 切断寸法 / 部品コード /
         /// 参照元 / H下限 / H上限 / W下限 / W上限 / 使い分け / 特注」的顺序优先显示，其余为辅助列。
-        /// 除「No」「数据来源」「登录时间」以外均可编辑；「校验状态」为下拉选择。
+        /// 最前面还固定一列「行号」（<c>colNo</c>，Excel 的行号栏那样，只读、点一下选中整行）；
+        /// 它在列集合里仍放在最后（<see cref="PopulateParts"/> / <c>InsertBlankRow</c> 的位置参数不用改），
+        /// 只靠 <c>DisplayIndex = 0</c> + <c>Frozen</c> 显示在最左侧。
+        /// 除「行号」「数据来源」「登录时间」以外均可编辑；「校验状态」为下拉选择。
         /// 「参照元」画面上可以手工编辑，但<b>登录数据库时统一写成「図番」的前 10 位</b>
         /// （见 <see cref="PartBasicInfoRepository.ReferenceTagLength"/> 与 <c>ResolveReferenceTag</c>），
         /// 保存后画面重新载入会显示回「図番」的前 10 位。
@@ -497,13 +598,24 @@ namespace MSIFAITOOLS
                 "  白色 = 其它（特注品.json / AI 分析 / 手工追加）\n" +
                 "「部品コード」单元格的粉红色 = 按部品名 从部品マスタ 推定的值（需确认）";
             AddColumn("colLoginTime", "登录时间", 130, DataGridViewContentAlignment.MiddleCenter);
-            // No = 画面行号（追加 / 删除行后自动重排），放在最后不占必需列的位置
-            AddColumn("colNo", "No", 40, DataGridViewContentAlignment.MiddleCenter);
+            // 行号 = 画面行号（Excel 最左侧那一列）：只读，追加 / 删除行后自动重排（RenumberRows），
+            // 点这一格 = 选中整行（见 DgvParts_CellClick → SelectWholeRow）。
+            // 列集合里仍放在最后 —— Rows.Add / Rows.Insert 的位置参数是按「列集合顺序」传值的；
+            // 显示顺序单独用 DisplayIndex = 0 指定，再加 Frozen（横向滚动时行号不跟着跑掉）。
+            AddColumn(RowNumberColumnName, "行号", 46, DataGridViewContentAlignment.MiddleCenter);
+            DataGridViewColumn rowNumberColumn = dgvParts.Columns[RowNumberColumnName];
+            rowNumberColumn.DisplayIndex = 0;
+            rowNumberColumn.Frozen = true;
+            rowNumberColumn.DefaultCellStyle.BackColor = RowNumberBackColor;
+            rowNumberColumn.DefaultCellStyle.ForeColor = RowNumberForeColor;
+            rowNumberColumn.HeaderCell.ToolTipText =
+                "画面行号（追加 / 删除行后自动重排，不可编辑）。\n" +
+                "点这一格 = 选中整行；按住 Ctrl 点可以多选，【删除行】一次删多行。";
         }
 
         /// <summary>添加一个文本列。</summary>
         /// <param name="readOnly">
-        /// true = 只读（No、数据来源、登录时间等由程序维护的列）；
+        /// true = 只读（行号、数据来源、登录时间等由程序维护的列）；
         /// 「参照元」虽然登录数据库时由程序覆盖成「図番」前 10 位，但画面上允许手工编辑，所以传 false。
         /// </param>
         private void AddColumn(string name, string headerText, int width,
@@ -723,7 +835,7 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 当前「选中的行」：表格是单元格选中模式（<c>DataGridViewSelectionMode.CellSelect</c>）时
         /// <c>SelectedRows</c> 是空的，所以按<b>选中的单元格所在的行</b>收集（同一行只取一次）。
-        /// 整行选中模式（或用户点了行头）时退回 <c>SelectedRows</c>。
+        /// 整行选中模式（或用户点了「行号」列）时退回 <c>SelectedRows</c>。
         /// </summary>
         /// <returns>选中的行（不含新增行；一行都没选中时返回空列表）。</returns>
         private List<DataGridViewRow> GetSelectedRows()
@@ -1131,14 +1243,14 @@ namespace MSIFAITOOLS
             RefreshMemberNameCatalog();
 
             // 同一个时机，把画面上的「部品名 + 部材名 + 部品コード」登录 / 更新到 MSIF 库的
-            // 部材不材 mapping 表（SQL Server 10.103.126.209 / MSIF 的 dbo.DL_BuhinBuzaiMapping，
+            // 部材 mapping 表（SQL Server 10.103.126.209 / MSIF 的 dbo.DL_BuhinBuzaiMapping，
             // 连接名 connJP2）。表的主键是 BuhinName + BuzaiName，部品CD = 画面上的「部品コード」
             // （BuhinCd），所以更新时会把部品CD 一起刷新；BuhinCd 为空时保留表里原来的值。
             // 同样失败只提示（连不上 / 没权限 / 表不存在），不影响部品基本信息的保存。
             bool buhinBuzaiUpdated;
             string buhinBuzaiMessage = BuhinBuzaiMappingRepository.Register(parts, out buhinBuzaiUpdated);
 
-            // 部材不材 mapping 更新成功 → 重新读一次内存（部品名 / 部品CD → 部材名），
+            // 部材 mapping 更新成功 → 重新读一次内存（部品名 / 部品CD → 部材名），
             // 刚登录的「部品名 + 部材名」下一次点「部材名」就能在推荐项里选到（失败只影响推荐项，不弹提示）
             if (buhinBuzaiUpdated)
             {
@@ -1463,6 +1575,196 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
+        /// 表格的选择变了（点格子 / 方向键移动）：把这一行的来源位置在 PDF 预览画面上闪 3 次红框
+        /// （见 <see cref="FlashSelectedRowSource"/>）。
+        /// </summary>
+        private void DgvParts_SelectionChanged(object sender, EventArgs e)
+        {
+            if (_suppressGridEvents)
+            {
+                return;
+            }
+
+            FlashSelectedRowSource();
+        }
+
+        /// <summary>
+        /// 在 PDF 预览画面上闪 3 次红框，标出当前行在图纸上的来源位置。
+        /// <para>
+        /// 定位文字按「部品図番 → 部品コード → 部品名」的顺序找（第一个能在该页找到的就算命中；
+        /// 有部品図番 时它就是第 1 优先），
+        /// 位置取 <see cref="PartBasicInfo.Page"/> 那一页（页码为空 / 非法时不动）。
+        /// </para>
+        /// <para>
+        /// 只在本画面自己的预览窗口已经打开时闪（不主动创建新窗口）；<b>只改预览画面上的红框，
+        /// 不动窗口</b> —— 不把预览窗口提到最前、不激活、不抢焦点，
+        /// 窗口的前后关系与焦点完全保持原样（用户把预览窗口放在后面时也不会被拉到前面）。
+        /// 同一行只闪一次（<see cref="_lastFlashRowIndex"/>），换图 / 重新载入后重置。
+        /// </para>
+        /// <para>
+        /// <b>特注品的行不闪</b>（<see cref="IsSpecialOrderPartRow"/>：「特注」= 1，或「数据来源」= 特注品.json）：
+        /// 这些部品来自特注品 Excel（<c>AiAppData\&lt;図番&gt;\特注品.csv</c>）的部品表，
+        /// 图纸上不一定印着对应的部品コード / 部品名，闪了也多半找不到、或命中到别的部品上反而误导。
+        /// </para>
+        /// </summary>
+        private void FlashSelectedRowSource()
+        {
+            if (_previewForm == null || _previewForm.IsDisposed || !_previewForm.Visible)
+            {
+                return;
+            }
+
+            // 预览画面上显示的必须是这张图（换了图还没同步时不要闪到别的 PDF 上）
+            if (_pdfPath.Length == 0 ||
+                !string.Equals(_previewForm.CurrentPath, _pdfPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            DataGridViewCell cell = dgvParts.CurrentCell;
+            DataGridViewRow row = cell == null ? null : cell.OwningRow;
+
+            if (row == null || row.IsNewRow || row.Index == _lastFlashRowIndex)
+            {
+                return;
+            }
+
+            if (IsSpecialOrderPartRow(row))
+            {
+                // 特注品（「特注」= 1 / 数据来源 = 特注品.json）不在图纸上定位 → 不闪；
+                // 记成「已处理」，同一行里换格（SelectionChanged 会反复触发）时不再重复判断
+                _lastFlashRowIndex = row.Index;
+                return;
+            }
+
+            int pageIndex = ResolveRowPageIndex(row);
+
+            if (pageIndex < 0)
+            {
+                // 不知道这一行来自哪一页（老数据 / 手工追加的行）→ 不闪
+                return;
+            }
+
+            List<string> keywords = CollectRowSourceKeywords(row);
+
+            if (keywords.Count == 0)
+            {
+                return;
+            }
+
+            _lastFlashRowIndex = row.Index;
+
+            // 只闪红框，不动窗口的 z 顺序 / 焦点：
+            // 以前这里用 WindowLayoutHelper.BringToFrontWithoutActivate 把预览窗口提到最前，
+            // 每换一行提一次，窗口会在屏幕上跳一下（看起来像预览画面在闪），
+            // 也会把用户故意放到后面的预览窗口又拉到前面 —— 已去掉。
+            _previewForm.FlashTextHighlight(pageIndex, keywords);
+        }
+
+        /// <summary>
+        /// 行的「页码」列换算成 PDF 预览用的页索引（0 起）：
+        /// 空值 / 不是数字 / ≤ 0（手工追加的行）时返回 -1 = 不知道来自哪一页。
+        /// </summary>
+        private static int ResolveRowPageIndex(DataGridViewRow row)
+        {
+            int page;
+
+            if (!int.TryParse(GetCellText(row, "colPage"), out page) || page <= 0)
+            {
+                return -1;
+            }
+
+            return page - 1;
+        }
+
+        /// <summary>
+        /// 用来在 PDF 上定位这一行位置的候选文字（按优先级）：
+        /// <b>部品図番 → 部品CD（部品コード）→ 部品名</b>。
+        /// <para>
+        /// <b>部品図番 第 1 优先</b>：这一行有部品図番（<c>colPartDrawingNo</c>）就用它去图纸上找 ——
+        /// 图纸上印的是具体的图番，比部品CD 好认（部品CD 可能是 <c>MZA□968</c> 这种带可变位的模糊 CD，
+        /// 图纸上印的却是 <c>MZA1-968</c>；而且同一张图上多个部品可能共用一族 CD）。
+        /// 部品図番 在图纸上找不到时才退到部品CD，再找不到才退到部品名。
+        /// 太短（1 个字符）的文字会到处命中，不参与定位。
+        /// </para>
+        /// <para>
+        /// 同一个关键字在图纸上出现多处时，由 <see cref="PdfPreviewForm.FlashTextHighlight"/> 内部按
+        /// 「同一行里还含有其它关键字（部品CD / 部品名）的个数」打分，取最像部品表那一行。
+        /// </para>
+        /// <para>
+        /// 关键字里的 <c>□</c> / <c>○</c>（<c>〇</c> <c>◯</c> <c>△</c>）是<b>可变位</b>
+        /// （库里写 <c>MZA□968</c>，图纸上印 <c>MZA1-968</c>），所以每个关键字都由
+        /// <see cref="PdfPreviewForm.FlashTextHighlight"/> 再做一遍宽松匹配
+        /// （可变位 = 任意 0～1 个字符，字符之间允许夹 <c>-</c> 等分隔符，关键字自带的分隔符也可缺省 ——
+        /// 库 <c>HJ-1234</c> 能命中图纸 <c>HJ1234</c>）。
+        /// 含可变位的模糊 CD 连宽松匹配也找不到时<b>不再往下退化</b>到部品名 —— 同族部品的部品名是共用的，
+        /// 退过去只会闪到别的部品上。
+        /// </para>
+        /// </summary>
+        private static List<string> CollectRowSourceKeywords(DataGridViewRow row)
+        {
+            List<string> keywords = new List<string>();
+
+            // 部品図番 第 1 优先：图纸上印的是具体图番，比可能是模糊 CD（MZA□968）的部品CD 好认
+            AddSourceKeyword(keywords, GetCellText(row, "colPartDrawingNo"));
+            AddSourceKeyword(keywords, GetCellText(row, PartCodeColumnName));
+            AddSourceKeyword(keywords, GetCellText(row, PartNameColumnName));
+
+            return keywords;
+        }
+
+        /// <summary>把非空、长度 ≥ 2 的关键字加进列表（重复的不加）。</summary>
+        private static void AddSourceKeyword(List<string> keywords, string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            string keyword = value.Trim();
+
+            if (keyword.Length < 2 || keywords.Contains(keyword))
+            {
+                return;
+            }
+
+            keywords.Add(keyword);
+        }
+
+        /// <summary>
+        /// 该行是不是<b>特注品</b>（选到这种行时不在 PDF 上闪红框，见 <see cref="FlashSelectedRowSource"/>）：
+        /// <list type="bullet">
+        ///   <item>「特注」= <see cref="PartBasicInfo.SpecialNoteMark"/>（<c>1</c>）—— 画面上淡粉色的行
+        ///     （特注品.json 的追加対応特注寸法，判定同 <see cref="IsSpecialNoteRow"/>）；</item>
+        ///   <item>「数据来源」= <see cref="PartSourceKind.CmdTz"/>（<c>CMD分析・特注品.json</c>）或旧值
+        ///     <see cref="PartSourceKind.LegacyCmdTz"/>（<c>CMD分析・tz.json</c>，升级前写进库的行）。</item>
+        /// </list>
+        /// <para>
+        /// 特注品的部品来自特注品 Excel（<c>AiAppData\&lt;図番&gt;\特注品.csv</c>）的部品表，
+        /// 图纸（PDF）上不一定印着对应的部品コード / 部品名：闪红框要么找不到、要么命中到别的部品上反而误导，
+        /// 所以这种行直接不闪（和「找不到就不闪」的静默失败同一个思路）。
+        /// </para>
+        /// </summary>
+        /// <param name="row">要判断的行（<c>null</c> / 新增行时返回 false）。</param>
+        private static bool IsSpecialOrderPartRow(DataGridViewRow row)
+        {
+            if (row == null || row.IsNewRow)
+            {
+                return false;
+            }
+
+            if (IsSpecialNoteRow(row))
+            {
+                return true;
+            }
+
+            string sourceKind = GetCellText(row, "colSourceKind");
+
+            return string.Equals(sourceKind, PartSourceKind.CmdTz, StringComparison.Ordinal) ||
+                string.Equals(sourceKind, PartSourceKind.LegacyCmdTz, StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// 接管主画面已经打开的 PDF 预览窗口（避免同时存在两个预览窗口）。
         /// 接管后由本画面负责切换内容，并在本画面关闭时一并关闭。
         /// </summary>
@@ -1568,7 +1870,7 @@ namespace MSIFAITOOLS
                 _isDirty ? "　＊未保存" : string.Empty));
         }
 
-        /// <summary>重新编号「No」列（追加/删除行后保持连续）。</summary>
+        /// <summary>重新编号「行号」列（<see cref="RowNumberColumnName"/>：追加 / 删除行后保持连续）。</summary>
         private void RenumberRows()
         {
             _suppressGridEvents = true;
@@ -1584,7 +1886,7 @@ namespace MSIFAITOOLS
                         continue;
                     }
 
-                    row.Cells["colNo"].Value = (index + 1).ToString();
+                    row.Cells[RowNumberColumnName].Value = (index + 1).ToString();
                 }
             }
             finally
@@ -1620,6 +1922,15 @@ namespace MSIFAITOOLS
             }
 
             row.DefaultCellStyle.BackColor = ResolveRowBackColor(row);
+            // 行号格固定浅灰（Excel 的行号栏那样），不跟着「数据来源」的淡绿 / 淡蓝 / 特注淡粉变
+            DataGridViewCell rowNumberCell = row.Cells[RowNumberColumnName];
+
+            if (rowNumberCell != null)
+            {
+                rowNumberCell.Style.BackColor = RowNumberBackColor;
+                rowNumberCell.Style.ForeColor = RowNumberForeColor;
+            }
+
             ApplyVerifyStatusCellStyle(row);
             ApplySourceKindToolTip(row);
         }
@@ -1974,7 +2285,8 @@ namespace MSIFAITOOLS
         /// <list type="bullet">
         ///   <item><b>右键</b>（<see cref="_rightClickInProgress"/>）→ 只弹右键菜单（插入行 / 删除行），不进入编辑；</item>
         ///   <item>「部材名」→ 打开「选择部材名」窗口（<see cref="ShowMemberNamePicker"/>），不进入普通编辑；</item>
-        ///   <item>只读列（No / 数据来源 / 登录时间）→ 只选中单元格；</item>
+        ///   <item>「行号」（最左侧）→ <b>选中整行</b>（Excel 那样；按住 Ctrl 可多选），不进入编辑（见 <see cref="SelectWholeRow"/>）；</item>
+        ///   <item>其它只读列（数据来源 / 登录时间）→ 只选中单元格；</item>
         ///   <item>其它列 → 选中 + 进入编辑 + 全选（再打一个字就替换掉原来的值）。</item>
         /// </list>
         /// </summary>
@@ -1998,6 +2310,14 @@ namespace MSIFAITOOLS
 
             DataGridViewCell cell = dgvParts.Rows[e.RowIndex].Cells[e.ColumnIndex];
 
+            // 行号列（Excel 最左侧的行号栏）：点一下 = 选中整行，不进入编辑
+            // （列本身也是只读的，下面是普通「只读列」分支的前面）
+            if (cell != null && IsRowNumberColumn(cell.OwningColumn))
+            {
+                SelectWholeRow(cell.OwningRow);
+                return;
+            }
+
             if (cell == null || dgvParts.ReadOnly || cell.ReadOnly)
             {
                 return;
@@ -2017,6 +2337,52 @@ namespace MSIFAITOOLS
             }
 
             BeginCellEditAndSelectAll(cell);
+        }
+
+        /// <summary>这一列是不是「行号」（<see cref="RowNumberColumnName"/>：显示在最左侧的只读行号列）。</summary>
+        private static bool IsRowNumberColumn(DataGridViewColumn column)
+        {
+            return column != null && string.Equals(column.Name, RowNumberColumnName, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 点「行号」单元格：<b>整行选中</b>（和 Excel 点行号一样），不进入编辑。
+        /// <para>
+        /// 按住 Ctrl 时<b>追加</b>到当前选择（多选几行 →【删除行】一次删多行）；不按 Ctrl 时先清掉原来的选择。
+        /// 选中的仍然只是「单元格」（表格是 <c>CellSelect</c> 模式）—— 删除 / 插入行按「选中单元格所在的行」取，
+        /// 见 <see cref="GetSelectedRows"/>，那边不用改。
+        /// </para>
+        /// </summary>
+        /// <param name="row">要选中的行（<c>null</c> / 新增行时什么都不做）。</param>
+        private void SelectWholeRow(DataGridViewRow row)
+        {
+            if (row == null || row.IsNewRow)
+            {
+                return;
+            }
+
+            bool addToSelection = (Control.ModifierKeys & Keys.Control) == Keys.Control;
+
+            if (!addToSelection)
+            {
+                dgvParts.ClearSelection();
+            }
+
+            row.Selected = true;
+
+            // 当前单元格留在这一行的「行号」格：方向键从这一行继续走，
+            // 右键菜单 / Delete 的作用对象也还是这一行
+            if (dgvParts.CurrentCell == null || !ReferenceEquals(dgvParts.CurrentCell.OwningRow, row))
+            {
+                try
+                {
+                    dgvParts.CurrentCell = row.Cells[RowNumberColumnName];
+                }
+                catch (Exception)
+                {
+                    // 表格正在更新 / 这一格暂时不能成为当前格 → 只保留整行选中，不报错
+                }
+            }
         }
 
         /// <summary>
@@ -2114,8 +2480,8 @@ namespace MSIFAITOOLS
 
             string currentValue = GetCellText(cell.OwningRow, cell.OwningColumn.Name);
 
-            // 同一行的「部品名」= 部材不材 mapping 的 BuhinName / 置换表的 MsifDevName，
-            // 「部品コード」= 部材不材 mapping 的 BuhinCd：
+            // 同一行的「部品名」= 部材 mapping 的 BuhinName / 置换表的 MsifDevName，
+            // 「部品コード」= 部材 mapping 的 BuhinCd：
             // 窗口用它们查出部材名（以前用过的部材名 / 表示部材名）排在候选最前，按数字键就能直接写入
             string partName = GetCellText(cell.OwningRow, PartNameColumnName);
             string partCode = GetCellText(cell.OwningRow, PartCodeColumnName);
@@ -2128,6 +2494,10 @@ namespace MSIFAITOOLS
                 picker.MemberNamePicked += MemberNamePicker_MemberNamePicked;
                 picker.FormClosed += MemberNamePicker_FormClosed;
                 _memberNamePicker = picker;
+
+                // 先摆好位置再显示（StartPosition = Manual）：面板贴在点到的这一格下面那一行，
+                // 不遮挡选中的行，也不会先在画面中间闪一下再跳过来
+                PlaceMemberNamePicker(picker, cell);
 
                 // 非模态（Show 而不是 ShowDialog）：开着窗口也能操作本画面；
                 // Owned 窗口会跟着本画面一起关闭，省掉手工收尾。
@@ -2144,7 +2514,47 @@ namespace MSIFAITOOLS
                 _memberNamePicker.Show(this);
             }
 
+            // 换了一行 / 表格滚动过 → 重新贴到这一格下面那一行（面板不压在选中的行上）
+            PlaceMemberNamePicker(_memberNamePicker, cell);
+
             _memberNamePicker.Activate();
+        }
+
+        /// <summary>
+        /// 把「选择部材名」窗口摆到目标单元格<b>下面那一行</b>的位置：
+        /// 上边贴着这一格的下边（不遮挡选中的这一行）、左边和这一格对齐，
+        /// 下方放不下时改放到这一格上面（见 <see cref="WindowLayoutHelper.PlacePopupNextToCell"/>）。
+        /// <para>
+        /// 这一格现在不在画面上（被滚出去 / 表格还没布局）时退回「相对本画面居中」，
+        /// 面板至少不会跑到屏幕角落以外。
+        /// </para>
+        /// </summary>
+        /// <param name="picker">「选择部材名」窗口（<c>null</c> / 已释放时什么都不做）。</param>
+        /// <param name="cell">目标单元格（「部材名」列）。</param>
+        private void PlaceMemberNamePicker(MemberNamePickerForm picker, DataGridViewCell cell)
+        {
+            if (picker == null || picker.IsDisposed || cell == null || cell.OwningRow == null ||
+                !IsHandleCreated || !dgvParts.IsHandleCreated)
+            {
+                return;
+            }
+
+            // 这一格在表格里的位置（相对表格客户区）→ 换成屏幕坐标交给摆放方法
+            Rectangle cellBounds = dgvParts.GetCellDisplayRectangle(cell.ColumnIndex, cell.RowIndex, true);
+
+            if (cellBounds.Width > 0 && cellBounds.Height > 0)
+            {
+                WindowLayoutHelper.PlacePopupNextToCell(picker, dgvParts.RectangleToScreen(cellBounds));
+
+                return;
+            }
+
+            // 这一格现在看不见（滚出画面等）→ 相对本画面居中（原来的行为）
+            Rectangle ownerBounds = RectangleToScreen(ClientRectangle);
+
+            picker.Location = new Point(
+                ownerBounds.Left + (ownerBounds.Width - picker.Width) / 2,
+                ownerBounds.Top + (ownerBounds.Height - picker.Height) / 2);
         }
 
         /// <summary>
@@ -2255,6 +2665,10 @@ namespace MSIFAITOOLS
             {
                 // 该格暂时不能成为当前单元格（例如正在校验）→ 保持原选择，不报错
             }
+
+            // 写完自动跳到下一行：面板跟着贴到新的这一格下面那一行
+            // （放在设置 CurrentCell 之后 —— 表格可能为了显示这一行而滚动，先设位置会算错）
+            PlaceMemberNamePicker(_memberNamePicker, nextCell);
         }
 
         /// <summary>
@@ -2418,7 +2832,7 @@ namespace MSIFAITOOLS
                 ApplyPartCodeGuess(row, false);
             }
 
-            if (columnName != "colNo")
+            if (columnName != RowNumberColumnName)
             {
                 SetDirty(true);
             }
@@ -2497,7 +2911,7 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 画面打开时把「选择部材名」窗口要用的数据<b>一次性</b>读进内存：
-        /// ① 部材不材 mapping（SQL Server 的 <c>MSIF.dbo.DL_BuhinBuzaiMapping</c>：部品CD / 部品名 → 部材名，
+        /// ① 部材 mapping（SQL Server 的 <c>MSIF.dbo.DL_BuhinBuzaiMapping</c>：部品CD / 部品名 → 部材名，
         ///    推荐项里最靠前的一段）；
         /// ② 部材名置换表（SQL Server 的 <c>genpin.dbo.T_M_MergeName</c>；程序启动时已经预读过，
         ///    这里只在启动时没读成功的情况下用短超时补读一次）；
@@ -2512,7 +2926,7 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 预读「选择部材名」窗口的数据（部材不材 mapping + 置换表 + 部材部品マスタ）。
+        /// 预读「选择部材名」窗口的数据（部材 mapping + 置换表 + 部材部品マスタ）。
         /// 失败只影响候选项，不弹提示。
         /// </summary>
         private void PreloadMemberNamePickerData()
@@ -2567,9 +2981,18 @@ namespace MSIFAITOOLS
             }
         }
 
-        /// <summary>关闭本画面时一并关闭 PDF 预览窗口，释放文件句柄。</summary>
+        /// <summary>
+        /// 关闭本画面时：注销「当前画面」（全局只保留一个，见 <see cref="FindOpenInstance"/>）、
+        /// 一并关闭 PDF 预览窗口，释放文件句柄。
+        /// </summary>
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            // 注销「当前画面」：下次打开【部品信息】会新建一个
+            if (ReferenceEquals(_currentInstance, this))
+            {
+                _currentInstance = null;
+            }
+
             PdfPreviewForm preview = _previewForm;
             _previewForm = null;
 

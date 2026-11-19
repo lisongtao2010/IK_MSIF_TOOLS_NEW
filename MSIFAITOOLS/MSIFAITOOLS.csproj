@@ -182,6 +182,9 @@
          画面打开时整表读进内存（BuhinBuzaiMappingCatalog），当「选择部材名」窗口的推荐项 -->
     <Compile Include="Services\BuhinBuzaiMappingRepository.cs" />
     <Compile Include="Services\BuhinBuzaiMappingCatalog.cs" />
+    <!-- 本机表 DL_BuhinBuzaiMapping（SQLite）：SQL Server 连不上时部材名面板的推荐项用它兜底；
+         与「部材部品」マスタ同一个库文件（MemberPartDatabasePath / D:\MSIFDB\MSIF_MemberParts.db） -->
+    <Compile Include="Services\LocalBuhinBuzaiMappingRepository.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <!--

@@ -943,7 +943,7 @@ namespace MSIFAITOOLS
             //
             // btnDbJp2
             //
-            // ② MSIF（部材不材 mapping DL_BuhinBuzaiMapping）的连接设置
+            // ② MSIF（部材 mapping DL_BuhinBuzaiMapping）的连接设置
             this.btnDbJp2.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.btnDbJp2.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(37)))), ((int)(((byte)(74)))), ((int)(((byte)(118)))));
             this.btnDbJp2.Cursor = System.Windows.Forms.Cursors.Hand;
@@ -958,7 +958,7 @@ namespace MSIFAITOOLS
             this.btnDbJp2.Size = new System.Drawing.Size(114, 28);
             this.btnDbJp2.TabIndex = 7;
             this.btnDbJp2.Text = "接続② MSIF";
-            this.tipHeader.SetToolTip(this.btnDbJp2, "维护 ② MSIF 库的连接（部材不材 mapping DL_BuhinBuzaiMapping）");
+            this.tipHeader.SetToolTip(this.btnDbJp2, "维护 ② MSIF 库的连接（部材 mapping DL_BuhinBuzaiMapping）");
             this.btnDbJp2.UseVisualStyleBackColor = false;
             this.btnDbJp2.Click += new System.EventHandler(this.BtnDbJp2Settings_Click);
             // 

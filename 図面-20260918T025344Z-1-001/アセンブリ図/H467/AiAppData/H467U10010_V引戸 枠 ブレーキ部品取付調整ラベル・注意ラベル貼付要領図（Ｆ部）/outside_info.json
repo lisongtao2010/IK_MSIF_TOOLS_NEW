@@ -5,9 +5,9 @@
   "image": { "w": 9933, "h": 7016 },
   "table_start_x": 7142,
   "word_count": 98,
-  "outside_word_count": 46,
+  "outside_word_count": 47,
   "table_word_count": 30,
-  "other_word_count": 16,
+  "other_word_count": 17,
   "tables": [
     {
       "name": "table_1",
@@ -124,6 +124,9 @@
     }
   ],
   "other_words": [
+    { "text": "1",
+      "pixel": { "x": 3683, "y": 662, "w": 38, "h": 66 },
+      "pdf_mm": { "x": 311.83, "y": 56.05, "w": 3.22, "h": 5.59 } },
     { "text": "鬼目ﾅｯﾄ",
       "pixel": { "x": 2290, "y": 1071, "w": 257, "h": 78 },
       "pdf_mm": { "x": 193.89, "y": 90.68, "w": 21.76, "h": 6.60 } },

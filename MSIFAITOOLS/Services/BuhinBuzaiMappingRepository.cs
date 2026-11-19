@@ -6,7 +6,7 @@ using System.Data.SqlClient;
 namespace MSIFAITOOLS.Services
 {
     /// <summary>
-    /// 部材不材 mapping（SQL Server 表 <c>MSIF.dbo.DL_BuhinBuzaiMapping</c>）的一条明细：
+    /// 部材 mapping（SQL Server 表 <c>MSIF.dbo.DL_BuhinBuzaiMapping</c>）的一条明细：
     /// <b>部品名（<c>BuhinName</c>）→ 部材名（<c>BuzaiName</c>）</b>，并带上<b>部品CD（<c>BuhinCd</c>）</b>。
     ///
     /// <para>
@@ -44,7 +44,7 @@ namespace MSIFAITOOLS.Services
     }
 
     /// <summary>
-    /// 部材不材 mapping 表（SQL Server <c>[MSIF].[dbo].[DL_BuhinBuzaiMapping]</c>）的仓储。
+    /// 部材 mapping 表（SQL Server <c>[MSIF].[dbo].[DL_BuhinBuzaiMapping]</c>）的仓储。
     ///
     /// <para>
     /// <b>表结构</b>：<c>BuhinName</c>（部品名，<c>nvarchar(100)</c>，主键）/ <c>BuzaiName</c>
@@ -298,7 +298,7 @@ namespace MSIFAITOOLS.Services
                         ? "连接成功：" + settings.DescribeTarget() + " / 表 " + SchemaName + "." + TableName +
                           "（现有 " + rowCount + " 行）"
                         : "连接成功，但库 " + settings.Database + " 里没有表 " + SchemaName + "." + TableName +
-                          "。请确认 DB 名（部材不材 mapping 在 MSIF 库）以及该表是否存在。";
+                          "。请确认 DB 名（部材 mapping 在 MSIF 库）以及该表是否存在。";
 
                     return true;
                 }
@@ -367,7 +367,7 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 部品基本信息画面【保存】时调用：把画面上这一批行的「部品名 / 部材名 / 部品コード」
-        /// 登录 / 更新到部材不材 mapping 表（<see cref="TableName"/>）。
+        /// 登录 / 更新到部材 mapping 表（<see cref="TableName"/>）。
         /// <para>
         /// 跳过的行（与「部材部品」规则 <see cref="MemberPartCatalogLoader.RegisterRules"/> 同一套判断）：
         /// 部品名 / 部材名 为空、部材名 = 「その他」（<see cref="PartBasicInfo.MemberNameFallback"/>，
@@ -375,6 +375,11 @@ namespace MSIFAITOOLS.Services
         /// </para>
         /// <para>
         /// 同一个「部品名 + 部材名」在本次保存里出现多行时只写一次，<c>BuhinCd</c> 取第一个非空的值。
+        /// </para>
+        /// <para>
+        /// 同一批组合还会写进<b>本机表</b>（SQLite <c>DL_BuhinBuzaiMapping</c>，
+        /// <see cref="LocalBuhinBuzaiMappingRepository"/>）：SQL Server 写不进去时也写，
+        /// 这样下次连不上服务器时「选择部材名」窗口还能推荐这些组合。
         /// </para>
         /// <b>不抛异常</b>（连接不上 / 没有权限 / 表不存在都只返回提示文字），
         /// 规则登录失败不影响部品基本信息本身的保存。
@@ -416,12 +421,15 @@ namespace MSIFAITOOLS.Services
             }
             catch (Exception ex)
             {
-                return "部材不材 mapping 未登录（连接信息解析失败）：" + ex.Message;
+                return AppendLocalCacheNote("部材 mapping 未登录（连接信息解析失败）：" + ex.Message,
+                    LocalBuhinBuzaiMappingRepository.TryUpsert(entries));
             }
 
             if (settings == null || !settings.IsConfigured)
             {
-                return "部材不材 mapping 未登录：没有可用的连接信息。";
+                // 服务器没配置也照样记一份到本机表：部材名面板至少还能推荐以前登录过的组合
+                return AppendLocalCacheNote("部材 mapping 未登录：没有可用的连接信息。",
+                    LocalBuhinBuzaiMappingRepository.TryUpsert(entries));
             }
 
             int inserted;
@@ -431,6 +439,8 @@ namespace MSIFAITOOLS.Services
             MemberMappingDbSettings quickSettings = new MemberMappingDbSettings(
                 settings.Server, settings.Port, settings.Database, settings.UserId, settings.Password,
                 settings.ConfigurationSource, ShortConnectionTimeoutSeconds, settings.ConnectionName);
+
+            string localError;
 
             try
             {
@@ -442,17 +452,40 @@ namespace MSIFAITOOLS.Services
             }
             catch (Exception ex)
             {
-                return string.Format("部材不材 mapping 登录失败（{0}）：{1}", settings.DescribeTarget(), ex.Message);
+                // 服务器写不进去也把这批写进本机表：部材名面板下次照样能推荐（只在这台机器上有效）
+                localError = LocalBuhinBuzaiMappingRepository.TryUpsert(entries);
+
+                return AppendLocalCacheNote(
+                    string.Format("部材 mapping 登录失败（{0}）：{1}", settings.DescribeTarget(), ex.Message),
+                    localError);
             }
 
             succeeded = true;
 
-            return string.Format("部材不材 mapping（{0}）：新增 {1} 条 / 更新 {2} 条（本次确认 {3} 条）",
-                settings.DescribeTarget(), inserted, updated, entries.Count);
+            // 本机缓存也跟着更新：下次 SQL Server 连不上时，部材名面板还能推荐这次登录的组合
+            localError = LocalBuhinBuzaiMappingRepository.TryUpsert(entries);
+
+            return AppendLocalCacheNote(
+                string.Format("部材 mapping（{0}）：新增 {1} 条 / 更新 {2} 条（本次确认 {3} 条）",
+                    settings.DescribeTarget(), inserted, updated, entries.Count),
+                localError);
         }
 
         /// <summary>
-        /// 从部品基本信息的行里挑出要写进部材不材 mapping 的组合（部品名 + 部材名 去重，带上 部品CD）。
+        /// 本机表（SQLite <c>DL_BuhinBuzaiMapping</c>）没更新成功时，在返回的提示后面补一句原因；
+        /// 更新成功（<paramref name="localError"/> 为空串）时原样返回。
+        /// </summary>
+        /// <param name="message">给画面看的提示。</param>
+        /// <param name="localError">本机表写入失败的原因（成功时为空串）。</param>
+        private static string AppendLocalCacheNote(string message, string localError)
+        {
+            return string.IsNullOrEmpty(localError)
+                ? message
+                : message + "；本机表 " + LocalBuhinBuzaiMappingRepository.TableName + " 未更新：" + localError;
+        }
+
+        /// <summary>
+        /// 从部品基本信息的行里挑出要写进部材 mapping 的组合（部品名 + 部材名 去重，带上 部品CD）。
         /// </summary>
         /// <param name="parts">部品基本信息的行（可为 <c>null</c>）。</param>
         private static List<BuhinBuzaiMappingEntry> CollectEntries(IEnumerable<PartBasicInfo> parts)

@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Text;
 using System.Windows.Forms;
 using MSIFAITOOLS.Services;
 using PdfiumViewer;
@@ -35,6 +37,27 @@ namespace MSIFAITOOLS
         /// <summary>单页渲染的最大像素数（防止极端放大占用过多内存）。</summary>
         private const long MaxRenderPixels = 25000000L;
 
+        /// <summary>红框闪烁的间隔（毫秒）：一次亮 / 灭 = 2 × 该值，3 次约 1.2 秒。</summary>
+        private const int FlashInterval = 200;
+
+        /// <summary>红框闪烁的翻转次数（3 次亮灭 = 6 次翻转）。</summary>
+        private const int FlashToggleCount = 6;
+
+        /// <summary>用于红框定位的关键字最短长度（单个字符会到处命中，不能用来定位）。</summary>
+        private const int FlashKeywordMinLength = 2;
+
+        /// <summary>
+        /// 宽松匹配（部品CD / 部品図番）时，两个字符之间最多允许夹几个分隔符（<c>-</c> <c>_</c> <c>/</c> <c>・</c> 等）：
+        /// 图纸上的部品CD 常印成 <c>MZA1-968</c> / <c>MZB 2-963</c> 这种带分隔符的样子。
+        /// </summary>
+        private const int FlashMaxSeparatorSkip = 2;
+
+        /// <summary>
+        /// 宽松匹配的结果最长允许比关键字多几个字符
+        /// （防止一路跳过分隔符、把旁边的文字一起框进红框里）。
+        /// </summary>
+        private const int FlashMaxExtraLength = 8;
+
         private PdfDocument _document;
 
         private string _currentPath;
@@ -58,6 +81,25 @@ namespace MSIFAITOOLS
 
         /// <summary>文字选择模型对应的页索引（-1 表示尚未加载）。</summary>
         private int _selectionModelPage = -1;
+
+        /// <summary>
+        /// 闪烁红框的位置（PDF 坐标，左上角原点、单位 PDF 点）。<c>null</c> = 不显示。
+        /// 部品基本信息画面选中一行时用它在预览画面上标出这一行的来源位置
+        /// （见 <see cref="FlashTextHighlight"/>）。
+        /// </summary>
+        private PdfSelectionRectangle? _flashRectangle;
+
+        /// <summary>闪烁红框所在的页索引（-1 = 不显示）。</summary>
+        private int _flashPage = -1;
+
+        /// <summary>闪烁红框此刻是否可见（定时器每响一次翻转）。</summary>
+        private bool _flashVisible;
+
+        /// <summary>剩下的翻转次数（6 次 = 亮 / 灭各 3 次）。</summary>
+        private int _flashTogglesLeft;
+
+        /// <summary>红框闪烁定时器（间隔 <see cref="FlashInterval"/> 毫秒）。</summary>
+        private Timer _flashTimer;
 
         /// <summary>选择的起始插入符位置（0 ~ 字符总数，-1 表示没有选择）。</summary>
         private int _selectionAnchor = -1;
@@ -97,6 +139,7 @@ namespace MSIFAITOOLS
             InitializeComponent();
             ApplyButtonStyle();
             InitializeSelection();
+            InitializeFlashHighlight();
 
             // 按钮 / 状态栏 / 右键菜单的中日切换（见 Services\UiLocalization.cs）：
             // 右键菜单项要在这一步之前建好，挂接时才能一起记下中文原文
@@ -175,6 +218,76 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
+        /// 在指定页上找到 <paramref name="keywords"/> 里第一个出现的文字，用红框闪 <b>3 次</b>标出它的位置，
+        /// 并把画面滚到能看见它的地方。部品基本信息画面「选中记录时」用它指出这一行在图纸上的来源位置。
+        /// <para>
+        /// 找不到时（该页没有这些文字 / PDF 没有文字层 / 文档未打开）什么都不做，只返回 <c>false</c>：
+        /// 不弹提示、也不改状态栏，避免每选一行就报一次错。
+        /// </para>
+        /// </summary>
+        /// <param name="pageIndex">页索引（0 起；超出范围时夹到 0 ～ 页数-1）。</param>
+        /// <param name="keywords">
+        /// 要定位的文字（按顺序尝试，先用排在前面的；部品基本信息画面传的是
+        /// <b>部品図番 → 部品CD（部品コード）→ 部品名</b>，这一行有部品図番 时就是它第 1 优先）。
+        /// 只在同一行（竖排时同一列）内匹配，全角 / 半角与空白差异会被忽略（见 <see cref="NormalizeFlashKeyword"/>）。
+        /// 同一个关键字命中多行时，优先「同一行里还含有其它关键字」最多的那一行（同分取最前）。
+        /// 每个关键字按原样找不到时还会再走一遍<b>宽松匹配</b>（见 <see cref="TryMatchFlashPattern"/>）：
+        /// <c>□</c> <c>○</c> 之类的可变位当「任意 0～1 个字符」、字符之间容忍 <c>-</c> 等分隔符，
+        /// 因为库里的部品CD（<c>MZA□968</c>）和图纸上印的（<c>MZA1-968</c>）写法常常不一样，
+        /// 部品図番 在图上也可能少了 <c>-</c>（库 <c>HJ-1234</c>，图纸 <c>HJ1234</c>）。
+        /// 若某个含可变位的关键字（模糊 CD）宽松匹配也没命中，<b>不再退到后面的关键字</b>（直接返回 <c>false</c>）。
+        /// </param>
+        /// <returns>true = 找到并已开始闪烁；false = 没找到（或文档未打开）。</returns>
+        public bool FlashTextHighlight(int pageIndex, IList<string> keywords)
+        {
+            if (_document == null || keywords == null || keywords.Count == 0)
+            {
+                return false;
+            }
+
+            int target = pageIndex;
+
+            if (target < 0)
+            {
+                target = 0;
+            }
+
+            if (target > _document.PageCount - 1)
+            {
+                target = _document.PageCount - 1;
+            }
+
+            if (target != _pageIndex)
+            {
+                // 翻到那一页（换页时旧的闪烁红框会在 RenderPage 里清掉）
+                GoToPage(target);
+            }
+
+            if (_document == null)
+            {
+                return false;
+            }
+
+            PdfTextSelectionModel model = GetPageSelectionModel(_pageIndex);
+
+            if (model == null)
+            {
+                return false;
+            }
+
+            PdfSelectionRectangle rectangle;
+
+            if (!TryFindTextRectangle(model, keywords, out rectangle))
+            {
+                return false;
+            }
+
+            ShowFlashRectangle(rectangle);
+
+            return true;
+        }
+
+        /// <summary>
         /// 加载 PDF（失败时关闭旧文档并给出提示）。
         /// </summary>
         /// <param name="pdfFilePath">PDF 完整路径。</param>
@@ -240,6 +353,9 @@ namespace MSIFAITOOLS
         /// <summary>释放当前 PDF 与页面位图。</summary>
         private void CloseDocument()
         {
+            // 换文档 / 关闭窗口：闪烁红框立刻清掉
+            ClearFlashHighlight();
+
             Image image = picPage.Image;
 
             picPage.Image = null;
@@ -402,6 +518,12 @@ namespace MSIFAITOOLS
             if (_selectionModelPage != _pageIndex)
             {
                 ResetSelection();
+            }
+
+            // 闪烁红框只属于原来那一页，换页后丢掉（缩放时 PDF 坐标不变，保留即可）
+            if (_flashRectangle.HasValue && _flashPage != _pageIndex)
+            {
+                ClearFlashHighlight();
             }
 
             try
@@ -984,6 +1106,9 @@ namespace MSIFAITOOLS
         /// <summary>在页面位图之上绘制选择高亮与插入符竖线。</summary>
         private void PicPage_Paint(object sender, PaintEventArgs e)
         {
+            // 闪烁红框（部品基本信息画面选中记录时标出来源位置）
+            DrawFlashHighlight(e.Graphics);
+
             if (_selectionModel == null)
             {
                 return;
@@ -1277,6 +1402,563 @@ namespace MSIFAITOOLS
             return _selectionModel;
         }
 
+        /// <summary>初始化红框闪烁定时器（部品基本信息画面选中记录时用，见 <see cref="FlashTextHighlight"/>）。</summary>
+        private void InitializeFlashHighlight()
+        {
+            _flashTimer = new Timer(components);
+            _flashTimer.Interval = FlashInterval;
+            _flashTimer.Tick += FlashTimer_Tick;
+        }
+
+        /// <summary>
+        /// 取指定页的文字选择模型（<see cref="EnsureSelectionModel"/> 的静默版）：
+        /// 解析失败 / 该页没有文字时返回 <c>null</c>，<b>不写状态栏、不弹提示</b>。
+        /// </summary>
+        private PdfTextSelectionModel GetPageSelectionModel(int pageIndex)
+        {
+            if (_textDocument == null)
+            {
+                return null;
+            }
+
+            if (_selectionModel != null && _selectionModelPage == pageIndex)
+            {
+                return _selectionModel;
+            }
+
+            try
+            {
+                PdfPigPage page = _textDocument.GetPage(pageIndex + 1);
+                PdfTextSelectionModel model = PdfTextSelectionModel.Create(page);
+
+                if (model.Chars.Count == 0)
+                {
+                    return null;
+                }
+
+                // 换了页：原来的选择（字符下标）已经失效
+                ResetSelection();
+
+                _selectionModel = model;
+                _selectionModelPage = pageIndex;
+
+                return model;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 在页面上找 <paramref name="keywords"/> 里第一个出现的文字，返回它的外接矩形（PDF 坐标）。
+        /// <para>
+        /// 关键字按传入顺序优先 —— 部品基本信息画面传的是「部品図番 → 部品CD（部品コード）→ 部品名」，
+        /// 所以<b>部品図番 是第 1 优先</b>（这一行有部品図番时就用它定位）：只要它在页面上出现，
+        /// 就不会改用部品CD / 部品名；部品図番 在图上找不到时才退到部品CD。
+        /// 每个关键字逐行（竖排时逐列）匹配，不跨行。
+        /// </para>
+        /// <para>
+        /// 同一个关键字在页面上命中<b>多行</b>时按「这一行里还含有其它关键字的个数」打分，取分数最高的那一行
+        /// （部品図番 与部品CD / 部品名 同时出现的那一行 → 更像部品表里的那一行，见
+        /// <see cref="CountOtherNeedles"/>）；分数相同取最靠前的一行，结果稳定可复现。
+        /// </para>
+        /// <para>
+        /// 每个关键字都先按原样找，找不到再走一遍<b>宽松匹配</b>（见 <see cref="TryMatchFlashPattern"/>）：
+        /// 库里的部品CD 常写成 <c>MZA□968</c> / <c>MZB○○963</c>（<c>□</c> <c>○</c> = 可变位），
+        /// 图纸上印的却是 <c>MZA1-968</c> 这样的具体值；部品図番 在图上也可能不带 <c>-</c>
+        /// （库 <c>HJ-1234</c>，图纸 <c>HJ1234</c>）。宽松匹配把可变位当「任意 0～1 个字符」，
+        /// 并容忍字符之间夹 <c>-</c> 之类的分隔符。
+        /// 若某个含可变位的模糊 CD 连宽松匹配也没命中，就直接返回 <c>false</c>：
+        /// <b>不再往下退到部品名</b> —— 部品名是同一族部品共用的（例如「部品セット（フラットレール）」
+        /// 既是 <c>MZA□968</c> 又是 <c>MZB○○963</c>），退过去只会闪到别的部品上。
+        /// </para>
+        /// </summary>
+        private static bool TryFindTextRectangle(PdfTextSelectionModel model, IList<string> keywords,
+            out PdfSelectionRectangle rectangle)
+        {
+            rectangle = new PdfSelectionRectangle(0, 0, 0, 0);
+
+            List<string> needles = new List<string>(keywords.Count);
+
+            foreach (string keyword in keywords)
+            {
+                string needle = NormalizeFlashKeyword(keyword);
+
+                if (needle.Length >= FlashKeywordMinLength && !needles.Contains(needle))
+                {
+                    needles.Add(needle);
+                }
+            }
+
+            if (needles.Count == 0)
+            {
+                return false;
+            }
+
+            IList<PdfSelectableChar> chars = model.Chars;
+
+            // 先把每一行拼成一个字符串，同时记住每个字对应的原始字符下标
+            List<string> lineTexts = new List<string>(model.Lines.Count);
+            List<List<int>> lineCharIndexes = new List<List<int>>(model.Lines.Count);
+
+            foreach (PdfSelectableLine line in model.Lines)
+            {
+                int first = line.FirstCharIndex;
+                int count = line.Count;
+
+                if (count <= 0 || first < 0 || first + count > chars.Count)
+                {
+                    continue;
+                }
+
+                StringBuilder text = new StringBuilder(count);
+                List<int> charIndexes = new List<int>(count);
+
+                for (int offset = 0; offset < count; offset++)
+                {
+                    int charIndex = first + offset;
+                    string value = NormalizeFlashKeyword(chars[charIndex].Text);
+
+                    for (int index = 0; index < value.Length; index++)
+                    {
+                        text.Append(value[index]);
+                        charIndexes.Add(charIndex);
+                    }
+                }
+
+                lineTexts.Add(text.ToString());
+                lineCharIndexes.Add(charIndexes);
+            }
+
+            for (int needleIndex = 0; needleIndex < needles.Count; needleIndex++)
+            {
+                string needle = needles[needleIndex];
+
+                // 每个关键字都先按原样找一遍，找不到再用宽松匹配找一遍：
+                // 库里的部品CD（MZA□968）和图纸上（MZA1-968）写法常不一样，
+                // 部品図番 在图上也可能少了 '-'（库 HJ-1234，图纸 HJ1234）。
+                for (int pass = 0; pass < 2; pass++)
+                {
+                    bool useFuzzy = pass == 1;
+                    int bestLine = -1;
+                    int bestStart = -1;
+                    int bestLength = needle.Length;
+                    int bestScore = -1;
+
+                    for (int lineIndex = 0; lineIndex < lineTexts.Count; lineIndex++)
+                    {
+                        string lineText = lineTexts[lineIndex];
+                        int start;
+                        int length;
+
+                        if (useFuzzy)
+                        {
+                            if (!TryFindFlashPatternInLine(lineText, needle, out start, out length))
+                            {
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            start = lineText.IndexOf(needle, StringComparison.OrdinalIgnoreCase);
+                            length = needle.Length;
+
+                            if (start < 0)
+                            {
+                                continue;
+                            }
+                        }
+
+                        // 同一行里还含有别的关键字（部品図番 + 部品CD + 部品名 之类）越多 → 越像部品表里的一行。
+                        // 不能「碰到第一个含别的关键字的行就用」：同一页上关键字可能出现好几次，
+                        // 后面那一行往往才是同时印着部品CD / 部品名 的部品表行，所以这里按分数取最优。
+                        int score = CountOtherNeedles(lineText, needles, needle);
+
+                        if (score > bestScore)
+                        {
+                            bestLine = lineIndex;
+                            bestStart = start;
+                            bestLength = length;
+                            bestScore = score;
+
+                            // 含全部关键字 = 最高分，不会再更好了
+                            if (score >= needles.Count - 1)
+                            {
+                                break;
+                            }
+                        }
+                    }
+
+                    if (bestLine < 0)
+                    {
+                        continue;
+                    }
+
+                    rectangle = GetCharsRectangle(chars, lineCharIndexes[bestLine], bestStart, bestLength);
+
+                    return true;
+                }
+
+                if (ContainsFlashWildcard(needle))
+                {
+                    // 这个关键字本身是模糊 CD（含 □ / ○ = 可变位）而图纸上没找到对应具体值：
+                    // 再往下退到部品名只会命中同一族的别的部品（部品名共用的多行）→ 宁可不闪
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 这一行里还含有<b>其它</b>关键字的<b>个数</b>（用来在同一个关键字的多个命中行里挑最像部品表那一行的）：
+        /// 部品図番 命中多处时，同时印着部品CD / 部品名 的那一行得分更高。
+        /// </summary>
+        private static int CountOtherNeedles(string text, IList<string> needles, string current)
+        {
+            int count = 0;
+
+            for (int index = 0; index < needles.Count; index++)
+            {
+                string other = needles[index];
+
+                if (string.Equals(other, current, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (text.IndexOf(other, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// 部品CD 里的<b>可变位</b>记号：库里的部品CD 常写成 <c>MZA□968</c> / <c>MZB○○963</c>
+        /// （<c>□</c> <c>○</c> = 任意 1 个字符），图纸上印的却是 <c>MZA1-968</c> / <c>MZB2-963</c>
+        /// 这样的具体值，所以匹配时要当通配符处理。
+        /// </summary>
+        private static bool IsFlashWildcard(char value)
+        {
+            return value == '□' || value == '○' || value == '〇' || value == '◯' || value == '△';
+        }
+
+        /// <summary>部品CD 里是否含有可变位记号（见 <see cref="IsFlashWildcard"/>）。</summary>
+        private static bool ContainsFlashWildcard(string value)
+        {
+            for (int index = 0; index < value.Length; index++)
+            {
+                if (IsFlashWildcard(value[index]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>在一行文字里用宽松规则找 <paramref name="pattern"/>，返回最靠前的那一处。</summary>
+        private static bool TryFindFlashPatternInLine(string text, string pattern, out int start, out int length)
+        {
+            for (int index = 0; index < text.Length; index++)
+            {
+                if (TryMatchFlashPattern(text, index, pattern, out length))
+                {
+                    start = index;
+
+                    return true;
+                }
+            }
+
+            start = -1;
+            length = 0;
+
+            return false;
+        }
+
+        /// <summary>
+        /// 从 <paramref name="start"/> 起宽松匹配 <paramref name="pattern"/>（部品CD / 部品図番 用）：
+        /// <list type="bullet">
+        ///   <item>可变位记号（<c>□</c> <c>○</c> <c>〇</c> <c>◯</c> <c>△</c>）匹配 <b>0 或 1 个字符</b>
+        ///     （图纸上印成具体字符，也可能不印）；</item>
+        ///   <item>其余字符必须一致（不分大小写），但两者之间允许夹<b>分隔符</b>
+        ///     （<c>-</c> <c>_</c> <c>/</c> <c>・</c> 等，最多连续 <see cref="FlashMaxSeparatorSkip"/> 个）；</item>
+        ///   <item><b>关键字里自带的分隔符也可以缺省</b>：库 <c>HJ-1234</c> 能命中图纸上的 <c>HJ1234</c>；</item>
+        ///   <item>匹配长度不能超过「关键字长度 + <see cref="FlashMaxExtraLength"/>」，
+        ///     免得一路跳过分隔符把旁边的文字也框进红框里。</item>
+        /// </list>
+        /// </summary>
+        private static bool TryMatchFlashPattern(string text, int start, string pattern, out int length)
+        {
+            length = 0;
+
+            if (pattern.Length == 0 || start < 0 || start >= text.Length)
+            {
+                return false;
+            }
+
+            // 起点必须是真字符（除非关键字本身以可变位 / 分隔符开头），这样红框不会从分隔符起画
+            if (char.IsLetterOrDigit(pattern[0]) && !char.IsLetterOrDigit(text[start]))
+            {
+                return false;
+            }
+
+            int end;
+
+            if (!TryMatchFlashPatternAt(text, start, pattern, 0, out end))
+            {
+                return false;
+            }
+
+            length = end - start;
+
+            return length > 0 && length <= pattern.Length + FlashMaxExtraLength;
+        }
+
+        /// <summary><see cref="TryMatchFlashPattern"/> 的回溯部分（<paramref name="patternIndex"/> 之前的都已匹配）。</summary>
+        private static bool TryMatchFlashPatternAt(string text, int textIndex, string pattern, int patternIndex,
+            out int end)
+        {
+            end = textIndex;
+
+            if (patternIndex >= pattern.Length)
+            {
+                end = textIndex;
+
+                return true;
+            }
+
+            char patternChar = pattern[patternIndex];
+
+            if (IsFlashWildcard(patternChar))
+            {
+                // 可变位前面可能先夹着分隔符（MZA-1-968 里的第一个 '-'）：先跳过去，
+                // 否则可变位会把 '-' 当成那「1 个字符」吃掉，后面的数字就对不上了
+                int wildcardIndex = textIndex;
+                int wildcardSkipped = 0;
+
+                while (wildcardIndex < text.Length && wildcardSkipped < FlashMaxSeparatorSkip &&
+                    !char.IsLetterOrDigit(text[wildcardIndex]))
+                {
+                    wildcardIndex++;
+                    wildcardSkipped++;
+                }
+
+                // 可变位：图纸上可能印着 1 个字符…
+                if (wildcardIndex < text.Length && char.IsLetterOrDigit(text[wildcardIndex]) &&
+                    TryMatchFlashPatternAt(text, wildcardIndex + 1, pattern, patternIndex + 1, out end))
+                {
+                    return true;
+                }
+
+                // …也可能没印（0 个字符）
+                return TryMatchFlashPatternAt(text, wildcardIndex, pattern, patternIndex + 1, out end);
+            }
+
+            int index = textIndex;
+            int skipped = 0;
+
+            // 字符之间夹的分隔符跳过；分隔符本身就是关键字的字符时（例如 MZA-968 里的 '-'）不跳
+            while (index < text.Length && skipped < FlashMaxSeparatorSkip &&
+                !char.IsLetterOrDigit(text[index]) &&
+                char.ToUpperInvariant(text[index]) != char.ToUpperInvariant(patternChar))
+            {
+                index++;
+                skipped++;
+            }
+
+            if (index < text.Length &&
+                char.ToUpperInvariant(text[index]) == char.ToUpperInvariant(patternChar))
+            {
+                return TryMatchFlashPatternAt(text, index + 1, pattern, patternIndex + 1, out end);
+            }
+
+            // 关键字里的分隔符（'-' '_' '/' '・' 之类）图纸上可能没印：
+            // 允许「不消耗文字、直接跳过这个关键字字符」，这样库 HJ-1234 能命中图纸 HJ1234。
+            // 每次递归都往后一个 patternIndex，不会再回到同一状态，不会死循环。
+            if (!char.IsLetterOrDigit(patternChar))
+            {
+                return TryMatchFlashPatternAt(text, index, pattern, patternIndex + 1, out end);
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 把「行内归一化字符串」的一段换算成原始字符的外接矩形
+        /// （四周各留 1 点，红框不会紧贴着字）。
+        /// </summary>
+        private static PdfSelectionRectangle GetCharsRectangle(IList<PdfSelectableChar> chars,
+            IList<int> charIndexes, int start, int length)
+        {
+            double left = double.MaxValue;
+            double top = double.MaxValue;
+            double right = double.MinValue;
+            double bottom = double.MinValue;
+
+            int first = Math.Max(0, start);
+            int last = Math.Min(charIndexes.Count - 1, start + length - 1);
+
+            for (int index = first; index <= last; index++)
+            {
+                PdfSelectableChar item = chars[charIndexes[index]];
+
+                left = Math.Min(left, item.Left);
+                top = Math.Min(top, item.Top);
+                right = Math.Max(right, item.Right);
+                bottom = Math.Max(bottom, item.Bottom);
+            }
+
+            if (left > right || top > bottom)
+            {
+                return new PdfSelectionRectangle(0, 0, 0, 0);
+            }
+
+            const double padding = 1.0;
+
+            return new PdfSelectionRectangle(
+                left - padding, top - padding, right + padding, bottom + padding);
+        }
+
+        /// <summary>
+        /// 闪烁定位用的文字归一化：NFKC 兼容性归一化（全角英数 → 半角、半角片假名 → 全角）
+        /// ＋ 去掉全部空白，让「部品コード」之类在两边的写法差异不影响匹配。
+        /// </summary>
+        private static string NormalizeFlashKeyword(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            // 单个 ASCII 字符（PDF 里的英数 / 记号的绝大多数）本来就是归一化形式，直接返回，
+            // 省掉逐字 Normalize 的开销（每选一行都要把整页文字拼一遍）
+            if (value.Length == 1 && value[0] < 0x80 && !char.IsWhiteSpace(value[0]))
+            {
+                return value;
+            }
+
+            string normalized = JapaneseTextConverter.NormalizeWidth(value);
+
+            if (string.IsNullOrEmpty(normalized))
+            {
+                return string.Empty;
+            }
+
+            StringBuilder builder = new StringBuilder(normalized.Length);
+
+            for (int index = 0; index < normalized.Length; index++)
+            {
+                if (!char.IsWhiteSpace(normalized[index]))
+                {
+                    builder.Append(normalized[index]);
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        /// <summary>开始闪烁红框（亮 / 灭各 3 次），并把画面滚到能看见它的位置。</summary>
+        private void ShowFlashRectangle(PdfSelectionRectangle rectangle)
+        {
+            _flashRectangle = rectangle;
+            _flashPage = _pageIndex;
+            _flashVisible = true;
+            _flashTogglesLeft = FlashToggleCount;
+
+            if (_flashTimer != null)
+            {
+                _flashTimer.Stop();
+                _flashTimer.Start();
+            }
+
+            ScrollToFlashRectangle(rectangle);
+            picPage.Invalidate();
+        }
+
+        /// <summary>闪烁定时器：翻转红框的显示 / 隐藏，3 次后清除。</summary>
+        private void FlashTimer_Tick(object sender, EventArgs e)
+        {
+            _flashTogglesLeft--;
+
+            if (_flashTogglesLeft <= 0)
+            {
+                ClearFlashHighlight();
+                return;
+            }
+
+            _flashVisible = !_flashVisible;
+            picPage.Invalidate();
+        }
+
+        /// <summary>停止闪烁并清除红框。</summary>
+        private void ClearFlashHighlight()
+        {
+            if (_flashTimer != null)
+            {
+                _flashTimer.Stop();
+            }
+
+            _flashTogglesLeft = 0;
+            _flashVisible = false;
+            _flashRectangle = null;
+            _flashPage = -1;
+
+            if (!IsDisposed && picPage != null && picPage.IsHandleCreated)
+            {
+                picPage.Invalidate();
+            }
+        }
+
+        /// <summary>
+        /// 把画面滚到红框位置（尽量把它放在可见区域的中央；不需要滚动时不动）。
+        /// 计算方式与 Ctrl + 滚轮缩放一致：<c>picPage.Left / Top</c> 已经包含 AutoScroll 的位移。
+        /// </summary>
+        private void ScrollToFlashRectangle(PdfSelectionRectangle rectangle)
+        {
+            if (picPage.Image == null || _zoom <= 0F)
+            {
+                return;
+            }
+
+            Point scroll = GetCanvasScrollOffset();
+
+            // 页面左上角在「内容坐标」中的位置 = 显示位置 + 滚动偏移
+            int contentLeft = picPage.Left + scroll.X;
+            int contentTop = picPage.Top + scroll.Y;
+
+            int centerX = (int)Math.Round(contentLeft + (rectangle.Left + rectangle.Width / 2.0) * _zoom);
+            int centerY = (int)Math.Round(contentTop + (rectangle.Top + rectangle.Height / 2.0) * _zoom);
+
+            pnlCanvas.AutoScrollPosition = new Point(
+                Math.Max(0, centerX - pnlCanvas.ClientSize.Width / 2),
+                Math.Max(0, centerY - pnlCanvas.ClientSize.Height / 2));
+        }
+
+        /// <summary>在页面位图上画闪烁红框（红色 2.5 像素外框 + 淡红填充）。</summary>
+        private void DrawFlashHighlight(Graphics graphics)
+        {
+            if (!_flashVisible || !_flashRectangle.HasValue || _flashPage != _pageIndex)
+            {
+                return;
+            }
+
+            RectangleF rectangle = ToPixelRectangle(_flashRectangle.Value, _zoom);
+
+            rectangle.Inflate(2F, 2F);
+
+            using (SolidBrush fill = new SolidBrush(Color.FromArgb(45, 230, 30, 30)))
+            using (Pen pen = new Pen(Color.FromArgb(255, 220, 20, 20), 2.5F))
+            {
+                graphics.FillRectangle(fill, rectangle);
+                graphics.DrawRectangle(pen, rectangle.X, rectangle.Y, rectangle.Width, rectangle.Height);
+            }
+        }
+
         /// <summary>把鼠标位置换算成页面 PDF 坐标（左上角原点、单位 PDF 点）。</summary>
         private bool TryGetPdfPoint(MouseEventArgs e, out double x, out double y)
         {
@@ -1416,6 +2098,11 @@ namespace MSIFAITOOLS
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             resizeTimer.Stop();
+
+            if (_flashTimer != null)
+            {
+                _flashTimer.Stop();
+            }
 
             if (_wheelFilter != null)
             {

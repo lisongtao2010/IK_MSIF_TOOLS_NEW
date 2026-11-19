@@ -5,9 +5,9 @@
   "image": { "w": 9933, "h": 7016 },
   "table_start_x": 7232,
   "word_count": 287,
-  "outside_word_count": 220,
+  "outside_word_count": 221,
   "table_word_count": 212,
-  "other_word_count": 8,
+  "other_word_count": 9,
   "tables": [
     {
       "name": "table_1",
@@ -778,6 +778,9 @@
     { "text": "B部",
       "pixel": { "x": 3953, "y": 2041, "w": 117, "h": 77 },
       "pdf_mm": { "x": 334.69, "y": 172.80, "w": 9.91, "h": 6.52 } },
+    { "text": "6",
+      "pixel": { "x": 3544, "y": 2519, "w": 42, "h": 57 },
+      "pdf_mm": { "x": 300.06, "y": 213.28, "w": 3.56, "h": 4.83 } },
     { "text": "内は別梱包を示す。",
       "pixel": { "x": 1252, "y": 6244, "w": 807, "h": 77 },
       "pdf_mm": { "x": 106.00, "y": 528.66, "w": 68.33, "h": 6.52 } },

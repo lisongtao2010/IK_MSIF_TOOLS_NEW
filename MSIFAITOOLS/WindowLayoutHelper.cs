@@ -18,6 +18,10 @@ namespace MSIFAITOOLS
     /// 另外负责 <b>z 顺序</b>（<see cref="PlaceBehindMainWindowIfOverlapping"/>）：
     /// 两个辅助窗口都不能「一直保持在主画面前边」—— 主画面被点到 / 激活时必须能盖住它们。
     /// </para>
+    /// <para>
+    /// 还有一个「贴在表格单元格旁边」的小工具（<see cref="PlacePopupNextToCell"/>）：
+    /// 「选择部材名」面板用它摆到点到的「部材名」单元格<b>下面那一行</b>（不遮挡选中的行）。
+    /// </para>
     /// </summary>
     internal static class WindowLayoutHelper
     {
@@ -328,6 +332,97 @@ namespace MSIFAITOOLS
             // hWndInsertAfter = reference：窗口排在 reference 后面（reference 保持在最前）
             SetWindowPos(window.Handle, reference.Handle, 0, 0, 0, 0,
                 SwpNoMove | SwpNoSize | SwpNoActivate | SwpNoOwnerZOrder);
+        }
+
+        /// <summary>
+        /// 把辅助窗口（PDF 预览）提到<b>最前，但不激活</b>（焦点 / 键盘输入仍留在原来的窗口）。
+        /// <para>
+        /// 只在调用方<b>确实需要</b>把辅助窗口摆到前面时用。
+        /// 「部品基本信息画面选中记录 → PDF 预览闪红框」<b>不再调用本方法</b>：
+        /// 每换一行提一次最前，预览窗口会在屏幕上跳一下，也会把用户故意放到后面的窗口拉到前面。
+        /// </para>
+        /// <para>
+        /// 不用 <see cref="Control.BringToFront"/>：它内部是 <c>SetWindowPos(HWND_TOP)</c>，
+        /// 不带 <c>SWP_NOACTIVATE</c> 时会把预览窗口激活、抢走表格的焦点
+        /// （选中一行后方向键就跑不动了）。
+        /// </para>
+        /// </summary>
+        /// <param name="window">要提到最前的窗口（已释放 / 没有句柄时什么都不做）。</param>
+        internal static void BringToFrontWithoutActivate(Form window)
+        {
+            if (window == null || window.IsDisposed || !window.IsHandleCreated)
+            {
+                return;
+            }
+
+            // hWndInsertAfter = HWND_TOP(0)：排到最前；SWP_NOACTIVATE：不抢焦点
+            SetWindowPos(window.Handle, IntPtr.Zero, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
+        }
+
+        /// <summary>
+        /// 把浮动面板（「选择部材名」窗口等）摆到<b>目标单元格下面那一行</b>：
+        /// 面板上边贴着单元格的下边（留 <paramref name="gap"/> 像素空隙）、左边和这一格对齐，
+        /// 所以<b>不会盖住选中的这一行</b>，又离点到的格子很近。
+        /// <para>
+        /// 下方放不下（超出屏幕工作区）→ 改放到单元格<b>上面</b>（= 上面那一行）；
+        /// 上面也放不下 → 贴住工作区底部（尽量少压住这一行）。
+        /// 横向超出工作区时往左挪，仍然超出就贴住工作区。
+        /// </para>
+        /// </summary>
+        /// <param name="popup">要摆放的浮动面板（已释放 / 没有有效大小时什么都不做）。</param>
+        /// <param name="cellScreenBounds">
+        /// 目标单元格在<b>屏幕</b>坐标里的矩形（<c>DataGridView.RectangleToScreen</c> 的结果；
+        /// 宽 / 高 ≤ 0 时什么都不做）。
+        /// </param>
+        /// <param name="gap">面板与单元格之间的空隙（像素）。</param>
+        internal static void PlacePopupNextToCell(Form popup, Rectangle cellScreenBounds, int gap = 2)
+        {
+            if (popup == null || popup.IsDisposed ||
+                cellScreenBounds.Width <= 0 || cellScreenBounds.Height <= 0)
+            {
+                return;
+            }
+
+            Size size = popup.Size;
+
+            if (size.Width <= 0 || size.Height <= 0)
+            {
+                return;
+            }
+
+            Rectangle workArea = ResolveWorkArea(cellScreenBounds);
+
+            // 横向：优先和单元格左边对齐；右边超出工作区就往左挪，还超出就贴住工作区（面板比屏幕还宽时）
+            int left = cellScreenBounds.Left;
+
+            if (left + size.Width > workArea.Right)
+            {
+                left = cellScreenBounds.Right - size.Width;
+            }
+
+            left = Math.Max(workArea.Left, Math.Min(left, workArea.Right - size.Width));
+
+            // 纵向：先放下方（= 选择行的下一行）；放不下改放上方（= 上一行）；都放不下就贴住工作区底部
+            int top = cellScreenBounds.Bottom + gap;
+
+            if (top + size.Height > workArea.Bottom)
+            {
+                int above = cellScreenBounds.Top - gap - size.Height;
+
+                top = above >= workArea.Top
+                    ? above
+                    : Math.Max(workArea.Top, workArea.Bottom - size.Height);
+            }
+
+            popup.Location = new Point(left, top);
+        }
+
+        /// <summary>屏幕矩形所在的那块屏幕的工作区（拿不到屏幕信息时用兜底工作区）。</summary>
+        private static Rectangle ResolveWorkArea(Rectangle screenBounds)
+        {
+            Screen screen = Screen.FromRectangle(screenBounds);
+
+            return screen == null ? FallbackWorkingArea : screen.WorkingArea;
         }
 
         /// <summary>SetWindowPos：不改变位置。</summary>

@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace MSIFAITOOLS.Services
 {
     /// <summary>
-    /// 内存里的「部材不材 mapping」（SQL Server 表 <c>MSIF.dbo.DL_BuhinBuzaiMapping</c> 的只读缓存）。
+    /// 内存里的「部材 mapping」（SQL Server 表 <c>MSIF.dbo.DL_BuhinBuzaiMapping</c> 的只读缓存）。
     ///
     /// <para>
     /// <b>用途</b>：「选择部材名」窗口（<see cref="MSIFAITOOLS.MemberNamePickerForm"/>）的<b>推荐项</b> ——
@@ -12,6 +12,8 @@ namespace MSIFAITOOLS.Services
     /// 优先「部品CD（<c>BuhinCd</c>）一致」的行（<see cref="GetBuzaiNamesByBuhinCd"/>，最可信：
     /// 同一张零件图上的部品用的一定是同一个部材），
     /// 其次是「部品名（<c>BuhinName</c>）一致」的行（<see cref="GetBuzaiNamesByBuhinName"/>）。
+    /// 「选择部材名」窗口把这两段合成一次调用：<see cref="GetRecommendedBuzaiNames"/>
+    /// （第一优先 = 部品CD 一致 → 第二优先 = 部品名 一致，重复的只留一个）。
     /// </para>
     ///
     /// <para>
@@ -26,7 +28,10 @@ namespace MSIFAITOOLS.Services
     /// <b>查找键</b>：<see cref="MemberPartCatalogLoader.NormalizeKey"/>
     /// （NFKC + 去掉空白 + 统一大写），所以 <c>上ﾚｰﾙ</c> / <c>上レール</c>、
     /// 部品CD 的全角 / 半角差都算同一个值。
-    /// 连不上库时 <see cref="IsLoaded"/> = false、<see cref="LastError"/> 有原因：
+    /// 连不上 SQL Server 时<b>改用本机表</b> <c>DL_BuhinBuzaiMapping</c>
+    /// （<see cref="LocalBuhinBuzaiMappingRepository"/>，与「部材部品」マスタ同一个 SQLite 库）：
+    /// 读服务器成功就把整表镜像过去，读失败就从本机读回来（<see cref="IsLocalFallback"/> = true）。
+    /// 两边都拿不到时 <see cref="IsLoaded"/> = false、<see cref="LastError"/> 有原因：
     /// 窗口只是少一段「以前用过的部材名」，其余候选照常可用，不会因为连不上库把界面卡住。
     /// </para>
     /// </summary>
@@ -53,8 +58,20 @@ namespace MSIFAITOOLS.Services
         /// <summary>读进内存的行数（画面提示 / 日志用）。</summary>
         private static int _entryCount;
 
-        /// <summary>是否已经<b>成功</b>读过数据库（读进内存的是最新内容）。</summary>
+        /// <summary>
+        /// 是否已经有<b>可用的数据</b>：SQL Server 读成功，或者读失败但<b>本机表</b>
+        /// <c>DL_BuhinBuzaiMapping</c> 里有数据（见 <see cref="IsLocalFallback"/>）。
+        /// </summary>
         private static bool _loaded;
+
+        /// <summary>这次读进内存的数据是不是<b>本机表</b>的（SQL Server 连不上时的兜底）。</summary>
+        private static bool _loadedFromLocal;
+
+        /// <summary>本机表的位置说明（例：<c>D:\MSIFDB\MSIF_MemberParts.db / 表 DL_BuhinBuzaiMapping</c>）。</summary>
+        private static string _localDescription = string.Empty;
+
+        /// <summary>上一次写 / 读本机表失败的原因（成功时为空串；只做记录，不弹窗）。</summary>
+        private static string _localError = string.Empty;
 
         /// <summary>
         /// 这一次运行里是否已经<b>尝试</b>过读数据库（成功与否都算）：
@@ -82,7 +99,9 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 是否已经读进内存（画面打开时 <see cref="EnsurePreloaded"/> 或 <see cref="Reload"/> 成功）。
+        /// 是否已经有可用的数据（画面打开时 <see cref="EnsurePreloaded"/> 或 <see cref="Reload"/> 读到）：
+        /// SQL Server 读成功，或者读失败但本机表 <c>DL_BuhinBuzaiMapping</c> 里有数据
+        /// （<see cref="IsLocalFallback"/> = true）。
         /// <b>不会触发读库</b>：为 false 时只是没有这段推荐项，界面照常可用。
         /// </summary>
         public static bool IsLoaded
@@ -94,6 +113,28 @@ namespace MSIFAITOOLS.Services
         public static string LastError
         {
             get { return _lastError; }
+        }
+
+        /// <summary>
+        /// 现在用的数据是不是<b>本机表</b>（SQLite <c>DL_BuhinBuzaiMapping</c>）的：
+        /// true = SQL Server 连不上，改用本机缓存（部材名面板照样有推荐项，
+        /// 只是可能不是最新的）。<b>不会触发读库</b>。
+        /// </summary>
+        public static bool IsLocalFallback
+        {
+            get { return _loadedFromLocal; }
+        }
+
+        /// <summary>本机表的位置说明（没用本机兜底时为空串）；<b>不会触发读库</b>。</summary>
+        public static string LocalDescription
+        {
+            get { return _localDescription; }
+        }
+
+        /// <summary>上一次写 / 读本机表失败的原因（成功时为空串）；<b>不会触发读库</b>。</summary>
+        public static string LocalError
+        {
+            get { return _localError; }
         }
 
         /// <summary>当前使用的连接目标（画面提示用；<b>不会触发读库</b>）。</summary>
@@ -163,14 +204,74 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
+        /// 「选择部材名」窗口的推荐项：<b>第一优先 = 部品CD 一致</b>的部材名，
+        /// <b>第二优先 = 部品名 一致</b>的部材名，<b>去掉重复</b>（只查内存）。
+        /// <para>
+        /// 两段的先后顺序就是候选的先后顺序（面板里按 <c>1</c> 写入的永远是第 1 项）；
+        /// 同一个部材名 在两段里都出现时只留<b>前面那一个</b>（= 部品CD 那一侧，更可信）。
+        /// 判重不分全角 / 半角、忽略空白（<see cref="MemberPartCatalogLoader.NormalizeKey"/>），
+        /// 所以 <c>上レール</c> 和 <c>上ﾚｰﾙ</c> 不会同时出现两条。
+        /// </para>
+        /// </summary>
+        /// <param name="buhinCd">同一行的「部品コード」（可为 <c>null</c> / 空）。</param>
+        /// <param name="buhinName">同一行的「部品名」（可为 <c>null</c> / 空）。</param>
+        /// <returns>部材名（新列表；没有时为空列表）。</returns>
+        public static IList<string> GetRecommendedBuzaiNames(string buhinCd, string buhinName)
+        {
+            List<string> names = new List<string>();
+            HashSet<string> keys = new HashSet<string>(StringComparer.Ordinal);
+
+            AppendDistinct(names, keys, _byBuhinCd, buhinCd);
+            AppendDistinct(names, keys, _byBuhinName, buhinName);
+
+            return names;
+        }
+
+        /// <summary>把某个索引里查到的部材名按顺序加进去（按规整后的名字去重，先到先得）。</summary>
+        /// <param name="names">结果列表。</param>
+        /// <param name="keys">已经加过的名字（规整后）。</param>
+        /// <param name="index">索引（部品CD / 部品名 → 部材名）。</param>
+        /// <param name="value">部品CD / 部品名（可为 <c>null</c> / 空）。</param>
+        private static void AppendDistinct(List<string> names, HashSet<string> keys,
+            Dictionary<string, List<string>> index, string value)
+        {
+            string key = MemberPartCatalogLoader.NormalizeKey(value);
+
+            if (key.Length == 0)
+            {
+                return;
+            }
+
+            List<string> found;
+
+            if (!index.TryGetValue(key, out found))
+            {
+                return;
+            }
+
+            foreach (string name in found)
+            {
+                string text = (name ?? string.Empty).Trim();
+
+                if (text.Length > 0 && keys.Add(MemberPartCatalogLoader.NormalizeKey(text)))
+                {
+                    names.Add(text);
+                }
+            }
+        }
+
+        /// <summary>
         /// 读 SQL Server 表 <c>DL_BuhinBuzaiMapping</c>，建好两份索引（部品CD / 部品名 → 部材名）。
-        /// 失败只记 <see cref="LastError"/>，索引置空 → 推荐项为空（不影响其它候选）。
+        /// 读成功时顺便把整表镜像到<b>本机表</b>（同一个 SQLite 库里的 <c>DL_BuhinBuzaiMapping</c>）；
+        /// 读失败时改用本机表兜底（<see cref="IsLocalFallback"/> = true）。
+        /// 两边都失败只记 <see cref="LastError"/> / <see cref="LocalError"/>，索引置空
+        /// → 推荐项为空（不影响其它候选）。
         /// </summary>
         /// <param name="settings">
         /// 要用的连接信息；<c>null</c> = 按当前生效的配置（<see cref="MemberMappingDbSettingsStore.ResolveJp2"/>，
         /// 即 <c>connJP2</c> = 10.103.126.209 / MSIF）。
         /// </param>
-        /// <returns>是否读成功（失败时 <see cref="LastError"/> 有原因）。</returns>
+        /// <returns>是否有可用的数据（SQL Server 或本机表；两边都失败时 <see cref="LastError"/> 有原因）。</returns>
         private static bool Load(MemberMappingDbSettings settings)
         {
             MemberMappingDbSettings effective = settings ?? MemberMappingDbSettingsStore.ResolveJp2();
@@ -181,7 +282,10 @@ namespace MSIFAITOOLS.Services
             List<string> buzaiNames = new List<string>();
             string target = BuhinBuzaiMappingRepository.ResolveTargetDescription(effective);
             string error = string.Empty;
+            string localError = string.Empty;
+            string localDescription = string.Empty;
             int count = 0;
+            bool fromLocal = false;
 
             try
             {
@@ -190,34 +294,65 @@ namespace MSIFAITOOLS.Services
                     target = repository.Settings.DescribeTarget() + " / 表 " +
                         BuhinBuzaiMappingRepository.TableName;
 
-                    foreach (BuhinBuzaiMappingEntry entry in repository.Query())
+                    List<BuhinBuzaiMappingEntry> entries = repository.Query();
+
+                    foreach (BuhinBuzaiMappingEntry entry in entries)
                     {
                         count++;
 
-                        AddName(byBuhinCd, entry.BuhinCd, entry.BuzaiName);
-                        AddName(byBuhinName, entry.BuhinName, entry.BuzaiName);
-
-                        if (!buzaiNames.Contains(entry.BuzaiName))
-                        {
-                            buzaiNames.Add(entry.BuzaiName);
-                        }
+                        AddEntry(byBuhinCd, byBuhinName, buzaiNames, entry);
                     }
+
+                    // 读成功 → 整表镜像到本机表（SQL Server 连不上时用它兜底）；
+                    // 本机写不进去不影响这次读（原因为空串 = 没写 / 没失败）
+                    localError = LocalBuhinBuzaiMappingRepository.TryReplaceAll(entries);
                 }
             }
             catch (Exception ex)
             {
                 error = ex.Message;
+
+                // SQL Server 连不上 → 用本机表 DL_BuhinBuzaiMapping 兜底（可能不是最新，但比没有好）
+                try
+                {
+                    using (LocalBuhinBuzaiMappingRepository local = new LocalBuhinBuzaiMappingRepository())
+                    {
+                        List<BuhinBuzaiMappingEntry> localEntries = local.Query();
+
+                        foreach (BuhinBuzaiMappingEntry entry in localEntries)
+                        {
+                            AddEntry(byBuhinCd, byBuhinName, buzaiNames, entry);
+                        }
+
+                        count = localEntries.Count;
+                        fromLocal = count > 0;
+                        localDescription = local.DatabasePath + " / 表 " +
+                            LocalBuhinBuzaiMappingRepository.TableName;
+
+                        if (fromLocal)
+                        {
+                            target = localDescription + "（本机缓存）";
+                        }
+                    }
+                }
+                catch (Exception localEx)
+                {
+                    localError = localEx.Message;
+                }
             }
 
             buzaiNames.Sort(StringComparer.Ordinal);
 
             _targetDescription = target;
             _lastError = error;
+            _localError = localError;
+            _localDescription = localDescription;
             _byBuhinCd = byBuhinCd;
             _byBuhinName = byBuhinName;
             _buzaiNames = buzaiNames;
             _entryCount = count;
-            _loaded = error.Length == 0;
+            _loadedFromLocal = fromLocal;
+            _loaded = error.Length == 0 || fromLocal;
 
             return _loaded;
         }
@@ -247,6 +382,32 @@ namespace MSIFAITOOLS.Services
             if (!names.Contains(name))
             {
                 names.Add(name);
+            }
+        }
+
+        /// <summary>
+        /// 把一条 mapping（部品名 / 部材名 / 部品CD）加进两份索引和「全部部材名」一览。
+        /// 服务器整表读进来 / 本机表兜底读进来都走这里，保证两条来源建出来的缓存完全一样。
+        /// </summary>
+        /// <param name="byBuhinCd">部品CD → 部材名。</param>
+        /// <param name="byBuhinName">部品名 → 部材名。</param>
+        /// <param name="buzaiNames">全部部材名（去重，保持读到的顺序）。</param>
+        /// <param name="entry">一条 mapping（<c>null</c> 时跳过）。</param>
+        private static void AddEntry(Dictionary<string, List<string>> byBuhinCd,
+            Dictionary<string, List<string>> byBuhinName, List<string> buzaiNames,
+            BuhinBuzaiMappingEntry entry)
+        {
+            if (entry == null)
+            {
+                return;
+            }
+
+            AddName(byBuhinCd, entry.BuhinCd, entry.BuzaiName);
+            AddName(byBuhinName, entry.BuhinName, entry.BuzaiName);
+
+            if (!buzaiNames.Contains(entry.BuzaiName))
+            {
+                buzaiNames.Add(entry.BuzaiName);
             }
         }
 
