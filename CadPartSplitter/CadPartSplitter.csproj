@@ -114,6 +114,8 @@
     <Compile Include="RuledTableExtractor.cs" />
     <Compile Include="RuledTableWriter.cs" />
     <!-- 一页 PDF 的解析结果快照（词 + 矢量路径）：同一页只解析一次，供文字 / 圈号 / 表格 / 要領図 共用 -->
+    <!-- 识别前把「△1 / △2」改版注記符号（画在页面内容流里的矢量三角 + 数字）从 clean.pdf 里删掉 -->
+    <Compile Include="TriangleMarkEraser.cs" />
     <Compile Include="PdfPageContent.cs" />
     <Compile Include="CsvFile.cs" />
     <Compile Include="HeaderNames.cs" />

@@ -565,6 +565,11 @@ namespace CadPartSplitter
                         opts.StripPdfAnnotations = false;
                         break;
 
+                    case "--no-strip-triangle":
+                        // 关闭「△1 / △2 改版注記符号擦除」：clean.pdf 里保留三角形 + 框内数字
+                        opts.StripTriangleMarks = false;
+                        break;
+
                     case "--no-burn-text":
                         // 关闭「把文字层补画回零件图」：零件图里保持渲染原样（PDFium 画不出的日文仍是空白）
                         opts.BurnTextIntoParts = false;
@@ -648,13 +653,15 @@ namespace CadPartSplitter
             Console.WriteLine("  --no-irregular-split  关闭「不规则分割」兜底（矩形分割只出 1 块时按闭合轮廓拆开）");
             Console.WriteLine("  --irregular-reach <N> 不规则分割时每个视图外扩多少像素认领线框 / 标注（默认 100）");
             Console.WriteLine("  --no-strip-annot 关闭「PDF 批注 / 图章清理」（默认渲染前先删注释另存 <图纸名>_clean.pdf）");
+            Console.WriteLine("  --no-strip-triangle 关闭「△1 / △2 改版注記符号擦除」");
+            Console.WriteLine("                （默认在 clean.pdf 里把「3 顶点小三角 + 框内数字」的矢量对象删掉）");
             Console.WriteLine();
             Console.WriteLine("输出：");
             Console.WriteLine("  省略输出目录时写到 <输入文件所在目录>\\AiAppData\\<图纸名>\\");
             Console.WriteLine("  （第 2 页起为 <图纸名>_P页号，避免覆盖前一页结果）");
             Console.WriteLine("  批量模式（输入是文件夹）省略输出根目录时写到");
             Console.WriteLine("  <输入文件夹>\\AiAppData\\<图纸名>\\（每张图纸各自一个子文件夹）");
-            Console.WriteLine("  <输出目录>\\<图纸名>_clean.pdf（删掉批注 / 图章后的 PDF，渲染位图用的就是它）");
+            Console.WriteLine("  <输出目录>\\<图纸名>_clean.pdf（删掉批注 / 图章、△注記符号后的 PDF，渲染位图用的就是它）");
 
             Console.WriteLine("  <输出目录>\\Part_01.png / parts_info.json / parts_text.txt / callouts.txt");
             Console.WriteLine("              / outside_info.json / outside_text.txt");

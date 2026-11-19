@@ -5,9 +5,9 @@
   "image": { "w": 9933, "h": 7016 },
   "table_start_x": 6681,
   "word_count": 106,
-  "outside_word_count": 31,
+  "outside_word_count": 32,
   "table_word_count": 31,
-  "other_word_count": 0,
+  "other_word_count": 1,
   "tables": [
     {
       "name": "table_1",
@@ -138,5 +138,8 @@
     }
   ],
   "other_words": [
+    { "text": "2",
+      "pixel": { "x": 3988, "y": 648, "w": 38, "h": 65 },
+      "pdf_mm": { "x": 337.65, "y": 54.86, "w": 3.22, "h": 5.50 } }
   ]
 }

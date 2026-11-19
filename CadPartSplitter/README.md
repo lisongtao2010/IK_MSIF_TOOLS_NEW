@@ -455,14 +455,20 @@ var result = SplitApi.Split(filePath, opts);
 - 视图外接框被图章撑大后，按外接框归属的文字（`parts_text.txt`）会把邻近视图的尺寸数字也算进来。
 
 所以识别 PDF 之前，本工具先做一步预处理：**把页面上的注释全部删掉，另存一份干净 PDF，
-渲染位图时用这份新 PDF**（文字层 / 矢量图形仍读原 PDF，两者完全一致）。
+渲染位图时用这份新 PDF**；第二步再把图纸上的「△1 / △2」改版注記符号（CAD 画进内容流的矢量三角 + 数字，注释接口删不到）用白矩形盖住，覆盖同一份 `_clean.pdf`。文字层 / 矢量图形仍读原 PDF（annotation 不在内容流里；△ 里的数字由表格提取的 `MarkTriangleMarks` 剔除，两边结果一致）。
 
 ```
 原始 PDF（含批注 / 图章）
    ↓ PDFium：逐页 FPDFPage_GetAnnotCount → FPDFPage_RemoveAnnot（图章 Stamp、便签 Text / Popup、
    ↓         修订 Ink / Square / Circle / FreeText 等全部注释都算，一并删掉）
    ↓ 另存（FPDF_SaveAsCopy）→ <输出目录>\<图纸名>_clean.pdf   ← 落在 AiAppData\<图纸名>\ 里
-干净 PDF（仅删注释，页面内容 / 文字层与原 PDF 一致）
+   ↓ PdfPig 读一遍这份 PDF：矢量路径（含 Form XObject、坐标已应用 CTM）挑出斜边，
+   ↓         文字层挑 1~3 位数字，两条斜边共用顶点 + 底边水平 + 数字中心落在三角形内
+   ↓         → 认成 △1 / △2 注記符号（与表格提取的 MarkTriangleMarks 同一套判据）
+   ↓ PDFium 在这些位置插白矩形（FPDFPageObj_CreateNewRect + 实心填充）→ FPDFPage_GenerateContent
+   ↓         + FPDF_SaveAsCopy 覆盖同一份 _clean.pdf（白块在内容流末尾，画在 Form 里的三角也盖得住）
+
+干净 PDF（删注释 + 遮掉 △ 注記符号，页面内容 / 文字层其余部分与原 PDF 一致）
    ↓ 用这份干净 PDF 渲染位图（原 PDF 不再参与渲染：批注不会被画进来）
    ↓ 文字层 / 表格线 / 圈号仍读原 PDF（annotation 不在内容流里，结果与干净 PDF 完全相同）
 Part_01.png、parts_info.json、tables\ …
@@ -473,6 +479,8 @@ Part_01.png、parts_info.json、tables\ …
 ```
 [INFO] 批注清理：删除 3 个批注 / 图章 → H524U10002_clean.pdf
 [INFO] Rendering PDF page 1 at 300 DPI...          ← 渲染的是 _clean.pdf
+[INFO] 三角形注記符号：第 1 页遮掉 2 处（△数字），渲染用 → H524U10002_clean.pdf
+
 ```
 
 - **原 PDF 不会被修改**，`_clean.pdf` 只是输出目录里多出来的一份副本；
@@ -496,10 +504,11 @@ Part_01.png、parts_info.json、tables\ …
 「删除图章」后另存）。另外，PDF 表单域（widget annotation）也在注释之列，会一并删除 ——
 图纸一般没有表单域，若某张图依赖它，用 `--no-strip-annot` 关闭本步骤。
 
-**`_clean.pdf` 里为什么还看得到「△4」这类指名视图引用号 / 注記符号**：先看判别方法 ——
+**「△4」这类指名视图引用号 / 注記符号是怎么处理的**：先看判别方法 ——
 用 Acrobat / Reader 打开**原始 PDF**，右侧「注释」面板里能看到、点它有便签弹出 → 那就是 **PDF 注释**
 （图章 / 便签 / FreeText），本步骤**应当**把它删掉；面板里根本没有 → 那是**画在图面上**的内容
-（CAD 把「三角形框 + 里面的数字」当图形 / 符号插进内容流），本步骤按设计不动它。
+（CAD 把「三角形框 + 里面的数字」当图形 / 符号插进内容流），本步骤不动它，
+交给下一步 `TriangleMarkEraser` 盖白块（认不出来的情形见下面「是图面内容」一条）。
 
 - **是注释却没删掉**：这是本步骤的缺陷，已在 `PdfAnnotationStripper.TryStrip` 修掉 ——
   旧写法删完一个就按「个数没变小」判断停手（PDFium 注释表缓存导致误判），
@@ -507,11 +516,12 @@ Part_01.png、parts_info.json、tables\ …
   另存后还会重新打开复核（见上一条）。重跑时把老的 `_clean.pdf` 留着也没关系：
   复用前会复核，有残留就自动重做。若复核出来仍 `> 0`，日志会告警，
   那种（挂在图层 / 表单域上的）PDFium 摘不掉，只能人工删。
-- **是图面内容**：本步骤只调 `FPDFPage_RemoveAnnot` 删注释，内容流里的图形 / 文字一概不碰，
-  所以 `_clean.pdf` 会原样保留它们（`Part_01.png` 等渲染图里也照样有）。
-  要连图面内容一起去掉，需要另外做「删页面对象 / 白塗り」的一步（PDFium 的
-  `FPDFPage_GetObject` + `FPDFPage_RemoveObject` + `FPDFPage_GenerateContent`，
-  或渲染后按矢量轮廓涂白），**目前没有实现**。
+- **是图面内容**：本步骤只调 `FPDFPage_RemoveAnnot` 删注释，内容流里的图形 / 文字一概不碰。
+  **「三角形框里写着 1~3 位数字」这一类**（△1 / △2 改版注記符号）由下一步
+  `TriangleMarkEraser` 在这份 `_clean.pdf` 上盖白块（日志 `三角形注記符号：第 1 页遮掉 2 处`，
+  判据 / 开关见 `文件清单` 与 `--no-strip-triangle`），所以 `Part_01.png` 等渲染图里看不到它们了；
+  **其它**图面内容（指名视图引用号 `▲3` 这种不带三角框的数字、被 flatten 进内容流的图章、
+  直接压在图形上的注記文字）仍原样留着 —— 它们与图纸线条在内容流里分不开，程序不动，只能人工处理。
 
 ## 零件图里的文字补画（PDFium 画不出的日文）
 
@@ -1890,6 +1900,8 @@ No.,部品名称,部品番号
 | `PdfRenderer.cs` | PDF → OpenCV Mat（Docnet.Core / PDFium） |
 | `PdfPageContent.cs` | 一页 PDF 的「解析结果快照」：页面尺寸（`Width` / `Height`，pt）+ 文字层全部词（`Words`，PdfPig 切好的 `Word`）+ 全部矢量路径（`Paths`，`page.ExperimentalAccess.Paths`，坐标已应用 CTM）。`Load(路径, 页码, 日志)` 内部 `PdfDocument.Open` 一次就读完并把词 / 路径收进列表（`Word` 在构造时已算好文本与外接框、`PdfPath` 只是几何数据，所以返回后句柄即可关闭）；页码越界 / 尺寸无效 / 解析异常只写 WARN 并返回 `Empty`（`IsValid` = false，两个列表都非 null）。**为什么要这一层**：文字坐标（`PartTextExtractor`）、圈号（`CalloutExtractor`）、有线表格（`RuledTableExtractor`）、要領図一覧（`AssemblyYoryoBuilder`）原本各自 `PdfDocument.Open` 一遍，同一页在一次运行里被解析 4~5 次（PdfPig 的开销几乎全在「解析交叉引用表 + 内容流 + 切词」上）；现在由 `PartSplitterService.Run` 在渲染后 `Load` 一次、四个模块共用。四个模块保留原来的 `string` 重载（内部走 `Load`），单独调用 / 位图输入的行为不变 |
 | `PdfAnnotationStripper.cs` | 识别前的 PDF 预处理：用 PDFium 的 `FPDFPage_RemoveAnnot` 删掉页面上的批注 / 图章（按索引把该页注释全删一遍 —— 旧的「删一个再数个数的写法」在 PDFium 注释表缓存下会只删掉最后一个），`FPDF_SaveAsCopy` 另存 `<图纸名>_clean.pdf`（在 AiAppData 的该图纸文件夹里）；另存后 `TryCountAnnotations` 把文件重新打开复核注释数，残留则在日志里告警；复用上次那份 `_clean.pdf` 之前也复核（有残留就重做，不吃缓存）。把这份干净 PDF 交给 `PartSplitterService` 识别；没有批注时不生成副本，失败只告警并退回原 PDF |
+| `TriangleMarkEraser.cs` | 删图纸上的「△1 / △2」改版注記符号（做法参照 `triangle_eraser.py`，只是把 PyMuPDF 换成 PDFium）：这类符号是 CAD 画进页面内容流的矢量三角 + 文字，`PdfAnnotationStripper` 的注释接口删不到。检测全走 PdfPig（`PdfPageContent` 的快照：`page.ExperimentalAccess.Paths` 看得进 Form XObject、坐标已应用 CTM；文字层 `GetWords`）：路径扁平化后挑出「两个方向都超过容差、长度 ≥ 2 pt」的斜边，再拿 1~3 位纯数字的词框去配对 —— 两条斜边共用一个端点（容差 1/4 字高）当顶点、另两端近似等高（底边水平，容差 1/2 字高）、底宽 0.5~3 倍字高、高 0.8~4 倍字高、数字中心落在三角形内，全满足才算 △（不要求等边，也不要求三条边在同一个 path 对象里）。擦除用 PDFium：`FPDFPageObj_CreateNewRect` + `FPDFPageObj_SetFillColor(255,255,255,255)` + `FPDFPath_SetDrawMode(FPDF_FILLMODE_ALTERNATE, 描边 = 0)`（新建路径对象默认不填充，不设就画不出白块）+ `FPDFPage_InsertObject`，白块追加在内容流末尾，画在 Form XObject 里的三角形也盖得住（等价于 py 的 redaction）；`FPDFPage_GenerateContent` + `FPDF_SaveAsCopy` 覆盖同一份 `_clean.pdf`。开关 `StripTriangleMarks`（默认开，命令行 `--no-strip-triangle`）。扫描件（无文字层）认不出来（与 py 版相同），日志会写明「没找到」；`_clean.pdf` 的文字层里那个数字仍在（渲染时被白块盖住），表格提取的 `MarkTriangleMarks` 会把它剔掉；页面设了 `/Rotate`（PdfPig 的检测坐标与 PDFium 的页面坐标相差 90° 的倍数）时整页跳过、只告警，免得白块盖错位置 |
+
 | `PartDetector.cs` | 核心图像处理与零件裁切：二值化、图框擦除、表格遮蔽（块 / 列 / 固定比例）、视图聚合（`DilateForGrouping`：默认按「墨迹间距 ≤ `ClusterGapMm`（3 mm）算同一张零件图」的单链聚类；`--no-cluster-gap` 退回 60×10 px 像素核）、轮廓筛选、合并、文字行占比筛除（`DropTextHeavyRects`）、大块再拆（`TryRefineBlocks`：块里落进 ≥2 个闭合实体时换成多边形掩膜导出，没拆开的块仍整框裁切）（`MaskStartX` 对外暴露表格区起点） |
 | `IrregularSplitter.cs` | 「不规则分割」：填实闭合轮廓（断口桥接核放大到聚合间距）→ 开运算剥细桥 → 按 `ClusterGapMm` 归并碎片实体（`MergeNearBodies`，单链聚类 + 并查集）→ 每个实体外扩认领线框 / 标注 → 每块取多边形掩膜导出。两个入口：矩形分割只出 1 块时兜底（`IrregularSplitWhenSingle`）、多块时对够大的块再拆（`IrregularSplitLargeBlocks` / `IrregularSplitLargeAreaRatio`） |
 | `PartTextExtractor.cs` | 读 PDF 文字层：`DetectTableAreas` 推断表格 / 表題欄矩形；框内按重叠率归属各零件图 → 分行（`GroupIntoLines`）→ 逐词（`BuildWordLines`，默认）/ 按行（`BuildLines`）整理清单；框外分「表格区 / 其它」并重组成表→行→单元格；`ReadTextLineBoxes` 提供整页文字行框供占比筛除；`ReadTextLines` 返回整页文字行的文字 + 并集框（抽「A部詳細：H…」这种自由文字用，两者共用 `ReadTextLinesCore`） |

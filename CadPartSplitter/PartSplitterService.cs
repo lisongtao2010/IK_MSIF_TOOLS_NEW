@@ -82,6 +82,14 @@ namespace CadPartSplitter
             // 两者的文字层与矢量图形完全一致，这样产物里的 source / 文件名也不会变成 xxx_clean.pdf。
             string renderPath = PdfAnnotationStripper.PrepareInput(filePath, opts);
 
+            // 再盖一层：图纸上的「△1 / △2」改版注記符号是 CAD 画进页面内容流的矢量图形 + 文字，
+            // 不是 annotation，上一步删不到 —— 它渲染出来会把相邻视图连成一片，
+            // 三角形里的数字还会混进邻近表格格子的文字（`切断寸法` 读成 `100 1`）。
+            // 做法参照 triangle_eraser.py（py 用 redaction，这里用白矩形盖住）：
+            // PdfPig 的矢量层找「两条斜边共用顶点 + 水平底边」并把 1~3 位数字框在里面，
+            // 命中就在 PDFium 里插白矩形覆盖，结果写进同一份 _clean.pdf，下面渲染就用这份。
+            renderPath = TriangleMarkEraser.PrepareInput(renderPath, opts);
+
             List<PartInfo> parts;
             int imgWidth, imgHeight;
             int maskStartX = -1;

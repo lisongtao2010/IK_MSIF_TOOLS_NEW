@@ -5,8 +5,8 @@
   "image": { "w": 9933, "h": 7016 },
   "table_start_x": 4785,
   "word_count": 127,
-  "outside_word_count": 35,
-  "table_word_count": 16,
+  "outside_word_count": 36,
+  "table_word_count": 17,
   "other_word_count": 19,
   "tables": [
     {
@@ -89,6 +89,20 @@
           { "col": 1, "text": "(L用)",
             "pixel": { "x": 7381, "y": 1008, "w": 214, "h": 77 },
             "pdf_mm": { "x": 624.92, "y": 85.34, "w": 18.12, "h": 6.52 } }
+        ] }
+      ]
+    },
+    {
+      "name": "table_4",
+      "pixel": { "x": 4785, "y": 3027, "w": 3087, "h": 77 },
+      "pdf_mm": { "x": 405.13, "y": 256.29, "w": 261.37, "h": 6.52 },
+      "row_count": 1,
+      "cell_count": 1,
+      "rows": [
+        { "row": 1, "pixel": { "x": 7649, "y": 3027, "w": 223, "h": 77 }, "cells": [
+          { "col": 1, "text": "(Ｌ用)",
+            "pixel": { "x": 7649, "y": 3027, "w": 223, "h": 77 },
+            "pdf_mm": { "x": 647.62, "y": 256.29, "w": 18.88, "h": 6.52 } }
         ] }
       ]
     }

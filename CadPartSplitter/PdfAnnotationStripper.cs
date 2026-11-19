@@ -40,10 +40,11 @@ namespace CadPartSplitter
     /// 图纸上「△4 / △1」这类**指名视图引用号**（三角形框 + 里面的数字）有两种来源，处置不同：
     /// ① 在 PDF 里是注释（Acrobat / Reader 右侧「注释」面板能看到、点它弹便签）→ 属本步骤该删的，
     ///    删完另存后会重新打开复核（<see cref="TryCountAnnotations"/>），仍有残留就在日志里告警；
-    /// ② 已经被 CAD 画进页面内容（面板里没有）→ 只是普通矢量图形 / 文字，任何库都无法把它与图纸线条
-    ///    区分开，<c>&lt;图纸名&gt;_clean.pdf</c> 与渲染出的 <c>Part_NN.png</c> 里照样在，
-    ///    要另加一步「删页面对象 / 白塗り」才能去掉（PDFium 的 <c>FPDFPage_GetObject</c> /
-    ///    <c>FPDFPage_RemoveObject</c> / <c>FPDFPage_GenerateContent</c>），目前没有实现。
+    /// ② 已经被 CAD 画进页面内容（面板里没有）→ 只是普通矢量图形 / 文字，注释接口删不到它。
+    ///    这一半交给 <see cref="TriangleMarkEraser"/>（做法参照 <c>triangle_eraser.py</c>）：
+    ///    在本步骤另存出的 <c>_clean.pdf</c> 上用 PdfPig 找「两条斜边共用顶点 + 水平底边、
+    ///    1~3 位纯数字落在三角形内」的图形，命中就在 PDFium 里插白矩形盖住，
+    ///    最后 <c>FPDFPage_GenerateContent</c> + <c>FPDF_SaveAsCopy</c> 覆盖同一份 <c>_clean.pdf</c>。
     /// </para>
     /// </summary>
     internal static class PdfAnnotationStripper
@@ -498,5 +499,8 @@ namespace CadPartSplitter
 
         [DllImport(PdfiumDll, CallingConvention = CallingConvention.Cdecl)]
         private static extern int FPDF_SaveAsCopy(IntPtr document, IntPtr fileWrite, uint flags);
+
+        // 注：页面对象级操作（删三角形注記符号）在 TriangleMarkEraser 里，
+        // 它对 PrepareInput 的输出再做一次「读 → 删对象 → 另存」，两步互不依赖。
     }
 }

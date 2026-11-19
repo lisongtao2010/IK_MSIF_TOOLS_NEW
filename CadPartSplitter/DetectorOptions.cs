@@ -31,6 +31,27 @@ namespace CadPartSplitter
         /// </summary>
         public bool StripPdfAnnotations { get; set; } = true;
 
+        /// <summary>
+        /// 是否删除图纸上的三角形注記符号（△1 / △2 … 改版标记，默认开启）。
+        ///
+        /// 这类符号是 CAD <b>画进页面内容流的普通矢量图形 + 文字</b>，不是 PDF 注释，
+        /// <see cref="StripPdfAnnotations"/> 的 <c>FPDFPage_RemoveAnnot</c> 删不到它们，
+        /// 渲染出来就是一块小三角加一位数字，会把相邻视图连成一片、三角形里的数字
+        /// 还会混进邻近表格格子的文字（<c>切断寸法</c> 读成 <c>100 1</c>）。
+        ///
+        /// 做法参照 <c>triangle_eraser.py</c>（见 <see cref="TriangleMarkEraser"/>）：
+        /// PdfPig 读矢量层（含 Form XObject）与文字层 —— 两条斜边共用一个端点当顶点、
+        /// 另两端近似等高（底边水平）、底宽 / 高与字框成比例、数字中心落在三角形内，
+        /// 几条同时成立才算符号；命中就在 PDFium 里插一块白色实心矩形盖住
+        /// （等价于 py 的 redaction），另存覆盖同一份 <c>_clean.pdf</c>。
+        /// 文字层里的数字仍在，渲染时被白块盖住，表格提取的 <c>MarkTriangleMarks</c>
+        /// 本来就会把它剔掉。
+        ///
+        /// 无文字层（扫描件）认不出来（与 py 版相同），日志里会写明「没找到」。
+        /// 关闭：命令行 `--no-strip-triangle`。
+        /// </summary>
+        public bool StripTriangleMarks { get; set; } = true;
+
         // ── 输出：把文字层补画回零件图 ────────────────────────────────────────
 
         /// <summary>
