@@ -20,6 +20,16 @@ namespace MSIFAITOOLS
 
         private IList<PdfClassification> _classifications;
 
+        /// <summary>
+        /// 【分类结果】一览里的 Excel 文件（图纸文件夹第一层的 .xlsx / .xlsm / .xlsb / .xls）。
+        /// <para>
+        /// 与 <see cref="_classifications"/>（PDF）<b>分开保存</b>：Excel 没有分解产物、也没有分类清单
+        /// （PdfInfoList.txt）的记录，只用于显示与预览，<b>不参与</b> CMD 分析 / AI 分析，
+        /// 也不计入「未知 PDF」的数量。行按 PdfClassification 存放只是为了复用表格的 Tag / 着色逻辑。
+        /// </para>
+        /// </summary>
+        private readonly List<PdfClassification> _excelClassifications = new List<PdfClassification>();
+
         private bool _isRunning;
 
         private string _startButtonText;
@@ -1669,7 +1679,11 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 用分解结果刷新分类表格（必须调用：清空旧行 → 逐行填充 → 刷新统计）。
+        /// 用分解结果刷新分类表格（必须调用：清空旧行 → 逐行填充 → 追加 Excel 行 → 刷新统计）。
+        /// <para>
+        /// PDF 行来自分类清单（<c>PdfInfoList.txt</c>）；Excel 行来自同一个图纸文件夹的第一层，
+        /// 只用于显示 / 预览（见 <see cref="PopulateExcelRows"/>）。
+        /// </para>
         /// </summary>
         private void PopulateClassification(IList<PdfClassification> items)
         {
@@ -1695,6 +1709,9 @@ namespace MSIFAITOOLS
                     dgvClassify.Rows[rowIndex].Tag = item;
                     ApplyRowStyle(rowIndex);
                 }
+
+                // Excel 文件接在 PDF 后面（同一份一览里一起显示，双击 / Enter 时用本机 Excel 打开）
+                PopulateExcelRows(_classifications);
             }
             finally
             {
@@ -1705,6 +1722,90 @@ namespace MSIFAITOOLS
             ClearClassifySelection();
 
             RefreshClassifySummary();
+        }
+
+        /// <summary>
+        /// 把图纸文件夹第一层的 Excel 文件追加到【分类结果】一览（接在 PDF 行后面）。
+        /// <para>
+        /// 分类列固定显示「Excel」，判定依据写明「不参与分析」；行用淡蓝底区分于 PDF 的白底 /
+        /// 未知的淡黄底（见 <see cref="ApplyRowStyle"/>）。行 Tag 同样是 <see cref="PdfClassification"/>：
+        /// 选中 / 双击 / Enter 时按扩展名分派到「用本机 Excel 打开并置前」（见 <see cref="ShowPreview"/>）。
+        /// </para>
+        /// <para>清单先清空再扫描：换文件夹后不会残留上一份文件夹里的 Excel。</para>
+        /// </summary>
+        /// <param name="items">本次的 PDF 分类结果（只用来推断「图纸文件夹」是哪一个）。</param>
+        private void PopulateExcelRows(IList<PdfClassification> items)
+        {
+            _excelClassifications.Clear();
+
+            string folder = ResolveClassifyFolder(items);
+
+            if (folder.Length == 0)
+            {
+                return;
+            }
+
+            foreach (string fileName in ExcelFileCatalog.FindExcelFiles(folder))
+            {
+                string path = Path.Combine(folder, fileName);
+
+                PdfClassification item = new PdfClassification(
+                    path,
+                    PdfCategory.Unknown,
+                    UiText.T("Excel 文件：双击 / Enter 用 Excel 打开（已经打开时只把窗口放到最前，不参与 CMD / AI 分析）"),
+                    false);
+
+                _excelClassifications.Add(item);
+
+                int rowIndex = dgvClassify.Rows.Add(
+                    (dgvClassify.Rows.Count + 1).ToString(),
+                    item.FileName,
+                    "Excel",
+                    item.Evidence);
+
+                dgvClassify.Rows[rowIndex].Tag = item;
+                ApplyRowStyle(rowIndex);
+            }
+        }
+
+        /// <summary>
+        /// 取「分类一览对应的图纸文件夹」：优先用 PDF 分类结果里的文件路径反推（PDF 与 Excel 都在
+        /// 同一个文件夹的第一层），没有 PDF 时退回 ① 输入设置里填的文件夹。
+        /// </summary>
+        /// <param name="items">本次的 PDF 分类结果。</param>
+        /// <returns>存在的文件夹路径；取不到时返回空字符串。</returns>
+        private string ResolveClassifyFolder(IList<PdfClassification> items)
+        {
+            if (items != null)
+            {
+                foreach (PdfClassification item in items)
+                {
+                    if (item == null || string.IsNullOrEmpty(item.FilePath))
+                    {
+                        continue;
+                    }
+
+                    string directory;
+
+                    try
+                    {
+                        directory = Path.GetDirectoryName(item.FilePath);
+                    }
+                    catch (ArgumentException)
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+                    {
+                        return directory;
+                    }
+                }
+            }
+
+            string folder = txtFolder == null ? string.Empty : txtFolder.Text.Trim();
+
+            return folder.Length > 0 && Directory.Exists(folder) ? folder : string.Empty;
         }
 
         /// <summary>
@@ -1746,7 +1847,7 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 按分类状态给行着色：未知（分类清单里没有该图的记录）为淡黄色，其余为白底。
+        /// 按分类状态给行着色：Excel 为淡蓝色，未知（分类清单里没有该图的记录）为淡黄色，其余为白底。
         /// </summary>
         private void ApplyRowStyle(int rowIndex)
         {
@@ -1760,6 +1861,15 @@ namespace MSIFAITOOLS
 
             if (item == null)
             {
+                return;
+            }
+
+            // Excel 行（淡蓝底）：与 PDF 的白底 / 未知的淡黄底区分开，一眼能看出它不是图纸
+            if (ExcelFileCatalog.IsExcelFile(item.FilePath))
+            {
+                row.DefaultCellStyle.BackColor = Color.FromArgb(232, 240, 254);
+                row.DefaultCellStyle.ForeColor = Color.FromArgb(21, 101, 192);
+                row.Cells["colEvidence"].Value = item.Evidence;
                 return;
             }
 
@@ -1835,11 +1945,12 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            ShowPdfPreview(item, false);
+            // PDF / Excel 按扩展名分派（Excel 行直接调起本机 Excel，见 OpenExcelFile）
+            ShowPreview(item, false);
         }
 
         /// <summary>
-        /// 双击分类列表中的某一行：显示该 PDF 并前置预览窗口。
+        /// 双击分类列表中的某一行：显示该文件（PDF → 预览窗口，Excel → 用本机 Excel 打开并置前）。
         /// </summary>
         private void DgvClassify_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
         {
@@ -1848,7 +1959,7 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            ShowPdfPreview(GetSelectedClassification(), true);
+            ShowPreview(GetSelectedClassification(), true);
         }
 
         /// <summary>
@@ -1860,7 +1971,7 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 分类结果表格的快捷键：按 Enter 打开当前行的部品基本信息；
+        /// 分类结果表格的快捷键：按 Enter 打开当前行的部品基本信息（Excel 行则用 Excel 打开）；
         /// 全画面显示时按 Esc 退回【运行日志】标签并还原布局。
         /// </summary>
         private void DgvClassify_KeyDown(object sender, KeyEventArgs e)
@@ -1897,7 +2008,17 @@ namespace MSIFAITOOLS
 
             e.Handled = true;
             e.SuppressKeyPress = true;
-            ShowPartInfo(GetSelectedClassification(), true);
+
+            PdfClassification selected = GetSelectedClassification();
+
+            // Excel 行没有部品基本信息：Enter 直接用 Excel 打开（已经打开时只把窗口放到最前）
+            if (selected != null && ExcelFileCatalog.IsExcelFile(selected.FilePath))
+            {
+                ShowPreview(selected, true);
+                return;
+            }
+
+            ShowPartInfo(selected, true);
         }
 
         /// <summary>
@@ -1916,7 +2037,8 @@ namespace MSIFAITOOLS
             PdfClassification item = GetSelectedClassification();
             bool hasItem = item != null && !string.IsNullOrEmpty(item.FilePath);
 
-            mnuShowPartInfo.Enabled = hasItem;
+            // Excel 行没有部品基本信息（只有 PDF 图纸才有），这一项置灰
+            mnuShowPartInfo.Enabled = hasItem && !ExcelFileCatalog.IsExcelFile(item.FilePath);
             mnuPreviewPdf.Enabled = hasItem;
         }
 
@@ -1926,14 +2048,14 @@ namespace MSIFAITOOLS
             ShowPartInfo(GetSelectedClassification(), true);
         }
 
-        /// <summary>右键菜单「预览 PDF」。</summary>
+        /// <summary>右键菜单「预览」（PDF → PDF 预览窗口，Excel → 用本机 Excel 打开并置前）。</summary>
         private void MnuPreviewPdf_Click(object sender, EventArgs e)
         {
-            ShowPdfPreview(GetSelectedClassification(), true);
+            ShowPreview(GetSelectedClassification(), true);
         }
 
         /// <summary>
-        /// 点击「预览 PDF」按钮：显示当前选中行的 PDF。
+        /// 点击【预览 PDF】按钮：PDF → 预览窗口；Excel → 用本机 Excel 打开并放到最前。
         /// </summary>
         private void BtnPreviewPdf_Click(object sender, EventArgs e)
         {
@@ -1945,7 +2067,7 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            ShowPdfPreview(item, true);
+            ShowPreview(item, true);
         }
 
         /// <summary>
@@ -1956,8 +2078,8 @@ namespace MSIFAITOOLS
             _lastAutoPreviewKey = null;
 
             AppendLog(chkAutoPreview.Checked
-                    ? "已开启自动预览：在【分类结果】中选中一行即显示该 PDF。"
-                    : "已关闭自动预览：可双击行或点击「预览 PDF」按钮显示。",
+                    ? "已开启自动预览：选中一行即预览该 PDF（Excel 行只在状态栏提示，双击 / Enter 用 Excel 打开）。"
+                    : "已关闭自动预览：可双击行或点击「预览 PDF」按钮显示（Excel 行同样可用 Excel 打开）。",
                 Color.FromArgb(150, 200, 255));
         }
 
@@ -1972,6 +2094,107 @@ namespace MSIFAITOOLS
             }
 
             return dgvClassify.CurrentRow.Tag as PdfClassification;
+        }
+
+        /// <summary>
+        /// 显示 / 打开选中行：按扩展名分派 —— PDF → <see cref="PdfPreviewForm"/> 预览窗口，
+        /// Excel（.xlsx / .xlsm / .xlsb / .xls）→ 用本机 Excel 打开并放到最前（见 <see cref="OpenExcelFile"/>）。
+        /// 「选中即预览」、双击行、【预览】按钮、右键菜单、Enter 都走这里。
+        /// </summary>
+        /// <param name="item">要预览的分类结果。</param>
+        /// <param name="bringToFront">是否把预览窗口提到最前（自动预览传 false）。</param>
+        private void ShowPreview(PdfClassification item, bool bringToFront)
+        {
+            if (item == null || string.IsNullOrEmpty(item.FilePath))
+            {
+                if (bringToFront)
+                {
+                    SetStatus("请先在分类结果列表中选择一行", Color.FromArgb(198, 40, 40));
+                }
+
+                return;
+            }
+
+            // Excel 行不再用本工具的预览窗口：直接调起本机 Excel 并把它放到最前
+            if (ExcelFileCatalog.IsExcelFile(item.FilePath))
+            {
+                OpenExcelFile(item, bringToFront);
+                return;
+            }
+
+            ShowPdfPreview(item, bringToFront);
+        }
+
+        /// <summary>
+        /// 用本机 Excel 打开这一行的 Excel 文件，并把 Excel 窗口放到最前。
+        /// <para>
+        /// 【分类结果】里的 Excel 行不再用本工具的预览窗口显示（公式 / 图片 / 图表 / 多个工作表
+        /// 由 Excel 自己显示最准确）：该文件已经在 Excel 里打开时<b>只激活那个窗口</b>，
+        /// 不会再打开第二份（见 <see cref="ExcelLauncher"/>）。
+        /// </para>
+        /// </summary>
+        /// <param name="item">要打开的 Excel 行（FilePath 为 Excel 文件）。</param>
+        /// <param name="bringToFront">
+        /// 是否由用户显式操作触发（双击 / Enter /【预览】/ 右键「预览」= <c>true</c>）。
+        /// 「选中即预览」传 <c>false</c>：只更新状态栏、不打开 Excel —— 否则每换一行 Excel 就跳到最前，
+        /// 表格没法用方向键连续浏览。
+        /// </param>
+        private void OpenExcelFile(PdfClassification item, bool bringToFront)
+        {
+            if (item == null || string.IsNullOrEmpty(item.FilePath))
+            {
+                if (bringToFront)
+                {
+                    SetStatus("请先在分类结果列表中选择一行", Color.FromArgb(198, 40, 40));
+                }
+
+                return;
+            }
+
+            // 记下「这一行已经处理过」：同一行不会再重复触发（PDF 预览用同一个字段）
+            _lastAutoPreviewKey = item.FilePath;
+
+            if (!File.Exists(item.FilePath))
+            {
+                SetStatus("文件不存在：" + item.FileName, Color.FromArgb(198, 40, 40));
+
+                if (bringToFront)
+                {
+                    ShowMessage("文件不存在：\n" + item.FilePath, "提示",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+
+                return;
+            }
+
+            if (!bringToFront)
+            {
+                // 选中即预览：只用状态栏提示，不抢焦点
+                SetStatus(UiText.F("Excel 文件：双击 / Enter /【预览】用 Excel 打开：{0}", item.FileName),
+                    Color.FromArgb(21, 101, 192));
+                return;
+            }
+
+            ExcelOpenResult result = ExcelLauncher.OpenOrActivate(item.FilePath);
+
+            if (!result.Success)
+            {
+                string failure = UiText.F("打开 Excel 失败：{0}", result.Error);
+
+                AppendLog(failure, Color.FromArgb(255, 140, 140));
+                SetStatus(failure, Color.FromArgb(198, 40, 40));
+                ShowMessage(failure, "异常", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string message = result.Outcome == ExcelOpenOutcome.Activated
+                ? UiText.F("该文件已在 Excel 中打开，已把它放到最前：{0}", item.FileName)
+                : result.Outcome == ExcelOpenOutcome.Opened
+                    ? UiText.F("已用 Excel 打开：{0}", item.FileName)
+                    : UiText.F("已用系统默认程序打开：{0}", item.FileName);
+
+            AppendLog(message, Color.FromArgb(150, 220, 150));
+            SetStatus(message, Color.FromArgb(46, 125, 50));
         }
 
         /// <summary>
@@ -2112,6 +2335,16 @@ namespace MSIFAITOOLS
                 return;
             }
 
+            // Excel 文件没有「部品基本信息」（那是按 PDF 图纸解析登录的）：先在【运行日志】里说明一句，
+            // 状态栏留给下面的 ExcelLauncher 写「已用 Excel 打开 / 已把它放到最前」。
+            // 用户点【部品信息】多半只是想知道这一行是什么内容，所以直接调起 Excel。
+            if (ExcelFileCatalog.IsExcelFile(item.FilePath))
+            {
+                AppendLog(UiText.T("Excel 文件没有部品基本信息：已用 Excel 打开"), Color.FromArgb(239, 108, 0));
+                OpenExcelFile(item, bringToFront);
+                return;
+            }
+
             string databasePath = ResolvePartDatabasePath();
 
             // 部品基本信息画面全局只保留一个：先取现在已经打开的那个
@@ -2249,7 +2482,13 @@ namespace MSIFAITOOLS
             AppendLog(e.ToLogText(), Color.FromArgb(170, 200, 255));
         }
 
-        /// <summary>主窗口关闭时一并关闭预览窗口，释放 PDF 文件句柄。</summary>
+        /// <summary>
+        /// 主窗口关闭时一并关闭 PDF 预览窗口与部品基本信息窗口，释放文件句柄。
+        /// <para>
+        /// Excel 不在这里处理：Excel 行是「用本机 Excel 打开」的（见 <see cref="ExcelLauncher"/>），
+        /// Excel 进程与工作簿归用户自己管，本工具不去关闭 / 退出它。
+        /// </para>
+        /// </summary>
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             // 取消 AI 用量事件的订阅（主画面是单实例，这里只是保持订阅关系对称）
@@ -2645,20 +2884,33 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 刷新分类统计标签（显示各类数量与未知数量）。
+        /// 刷新分类统计标签（显示各类数量与未知数量；一览里有 Excel 时在末尾追加「Excel N」）。
         /// </summary>
         private void RefreshClassifySummary()
         {
-            if (_classifications == null || _classifications.Count == 0)
+            bool hasPdf = _classifications != null && _classifications.Count > 0;
+            int excelCount = _excelClassifications.Count;
+
+            if (!hasPdf && excelCount == 0)
             {
                 lblClassifySummary.Text = UiText.T("尚未执行分类");
                 lblClassifySummary.ForeColor = Color.FromArgb(52, 73, 94);
                 return;
             }
 
-            int unknown = PdfClassifier.Count(_classifications, PdfCategory.Unknown);
+            int unknown = hasPdf ? PdfClassifier.Count(_classifications, PdfCategory.Unknown) : 0;
 
-            lblClassifySummary.Text = PdfClassifier.BuildSummaryText(_classifications) + "\n" +
+            string summary = hasPdf
+                ? PdfClassifier.BuildSummaryText(_classifications)
+                : UiText.T("PDF：0 个");
+
+            // Excel 没有分类清单的记录，也不参与分析：单独接在后面显示数量
+            if (excelCount > 0)
+            {
+                summary += UiText.F(" / Excel {0}", excelCount);
+            }
+
+            lblClassifySummary.Text = summary + "\n" +
                 (unknown > 0
                     ? UiText.F("未知 {0} 个：分类清单（PdfInfoList.txt）里没有记录", unknown)
                     : UiText.T("全部已确定"));

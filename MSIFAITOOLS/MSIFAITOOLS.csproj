@@ -71,6 +71,8 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Excel 行（.xlsx / .xlsm / .xlsb / .xls）不再用本工具的预览窗口显示：
+         选中 / 双击时直接调起本机 Excel 并把窗口放到最前（见 Services\ExcelLauncher.cs）。 -->
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -87,6 +89,7 @@
     <Compile Include="PdfPreviewForm.Designer.cs">
       <DependentUpon>PdfPreviewForm.cs</DependentUpon>
     </Compile>
+    <!-- Excel 预览窗口（【分类结果】一览里选中 Excel 行时显示，无 Designer：界面用代码建） -->
     <Compile Include="AiSettingsForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -133,6 +136,14 @@
     <Compile Include="Services\PdfLayoutAnalyzer.cs" />
     <Compile Include="Services\PdfTextSelection.cs" />
     <Compile Include="Services\PdfClassifier.cs" />
+    <!-- 图纸文件夹里 Excel 文件的识别 / 枚举（【分类结果】一览用：Excel 只显示与预览，不参与分析） -->
+    <Compile Include="Services\ExcelFileCatalog.cs" />
+    <!-- Excel 预览里的图片：按 OpenXML 包结构从 .xlsx / .xlsm 取 xl/media + 锚点单元格 -->
+    <Compile Include="Services\XlsxImageCatalog.cs" />
+    <!-- Excel 预览的【PDF 视图】：用本机 Excel（COM，late binding）把工作簿导出成 PDF 缓存到 %TEMP%，再由 pdfium 渲染；
+         只读导出、不引用 Interop、没装 Excel 时预览窗口自动退回表格预览 -->
+    <!-- Excel 行：直接用本机 Excel 打开并放到最前（COM late binding，没装 Excel 也能启动本程序） -->
+    <Compile Include="Services\ExcelLauncher.cs" />
     <Compile Include="Services\PartBasicInfo.cs" />
     <Compile Include="Services\XyCoordinateIndex.cs" />
     <Compile Include="Services\AiApiOptions.cs" />

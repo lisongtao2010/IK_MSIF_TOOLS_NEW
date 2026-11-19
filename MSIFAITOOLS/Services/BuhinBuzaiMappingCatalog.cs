@@ -34,6 +34,12 @@ namespace MSIFAITOOLS.Services
     /// 两边都拿不到时 <see cref="IsLoaded"/> = false、<see cref="LastError"/> 有原因：
     /// 窗口只是少一段「以前用过的部材名」，其余候选照常可用，不会因为连不上库把界面卡住。
     /// </para>
+    ///
+    /// <para>
+    /// <b>重复行</b>：表的主键是三列（<c>BuhinName</c> + <c>BuzaiName</c> + <c>BuhinCd</c>），
+    /// 同一个「部品名 + 部材名」按不同的部品CD 会有好几行；建索引时按部材名<b>去重</b>
+    /// （<see cref="AddName"/>），所以推荐项里不会出现重复的部材名。
+    /// </para>
     /// </summary>
     internal static class BuhinBuzaiMappingCatalog
     {

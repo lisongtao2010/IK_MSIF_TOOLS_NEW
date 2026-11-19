@@ -14,7 +14,8 @@ namespace MSIFAITOOLS.Services
     /// <para>
     /// <b>表结构</b>（列名与服务器一致，方便对照 / 导出）：
     /// <c>BuhinName</c>（部品名）/ <c>BuzaiName</c>（部材名）/ <c>BuhinCd</c>（部品CD）/ <c>UpdatedAt</c>（更新日時），
-    /// 主键 = <c>BuhinName</c> + <c>BuzaiName</c>（与服务器的主键相同，所以不会出现重复行）。
+    /// 主键 = <c>BuhinName</c> + <c>BuzaiName</c> + <c>BuhinCd</c>（与服务器的主键相同，所以不会出现重复行）。
+    /// 老版本的本机库是两列主键，打开时会自动升级成三列主键（见 <c>UpgradeFromTwoColumnKey</c>）。
     /// </para>
     ///
     /// <para>
@@ -49,7 +50,7 @@ namespace MSIFAITOOLS.Services
         /// <summary>「部材名」列名（主键的一部分）。</summary>
         public const string BuzaiNameColumnName = "BuzaiName";
 
-        /// <summary>「部品CD」列名（可空，= 画面上的「部品コード」）。</summary>
+        /// <summary>「部品CD」列名（主键的一部分，= 画面上的「部品コード」；没填时为空串）。</summary>
         public const string BuhinCdColumnName = "BuhinCd";
 
         /// <summary>「更新日時」列名（本机最后一次写入的时间，排查用）。</summary>
@@ -70,20 +71,45 @@ namespace MSIFAITOOLS.Services
         /// <summary>整表替换时先清空。</summary>
         private const string DeleteAllSql = "DELETE FROM [" + TableName + "];";
 
-        /// <summary>插入一行（整表替换时用：清空以后不会有重复，直接 INSERT）。</summary>
+        /// <summary>
+        /// 插入一行（整表替换 / 更新 0 行时用）：<c>BuhinCd</c> 是主键的一部分（<c>NOT NULL</c>），
+        /// 没填部品コード时直接写空串（以前是 <c>NULLIF(@BuhinCd, '')</c>）。
+        /// </summary>
         private const string InsertSql =
             "INSERT INTO [" + TableName + "] ([" + BuhinNameColumnName + "], [" + BuzaiNameColumnName + "], [" +
             BuhinCdColumnName + "], [" + UpdatedAtColumnName + "]) " +
-            "VALUES (@BuhinName, @BuzaiName, NULLIF(@BuhinCd, ''), @UpdatedAt);";
+            "VALUES (@BuhinName, @BuzaiName, @BuhinCd, @UpdatedAt);";
 
         /// <summary>
-        /// 更新已有的一行（<see cref="Upsert"/>）：<c>BuhinCd</c> 为空时<b>保留原来的值</b>
+        /// 更新已有的一行（<see cref="Upsert"/>）：按主键三列定位，只刷新 <c>UpdatedAt</c>
         /// —— 与服务器 <see cref="BuhinBuzaiMappingRepository"/> 的更新规则一致。
+        /// <c>BuhinCd</c> 用 <c>IFNULL(..., '')</c> 比较：老本机库里这一列可能是 <c>NULL</c>。
         /// </summary>
         private const string UpdateSql =
-            "UPDATE [" + TableName + "] SET [" + BuhinCdColumnName + "] = COALESCE(NULLIF(@BuhinCd, ''), [" +
-            BuhinCdColumnName + "]), [" + UpdatedAtColumnName + "] = @UpdatedAt " +
-            "WHERE [" + BuhinNameColumnName + "] = @BuhinName AND [" + BuzaiNameColumnName + "] = @BuzaiName;";
+            "UPDATE [" + TableName + "] SET [" + UpdatedAtColumnName + "] = @UpdatedAt " +
+            "WHERE [" + BuhinNameColumnName + "] = @BuhinName AND [" + BuzaiNameColumnName + "] = @BuzaiName AND " +
+            "IFNULL([" + BuhinCdColumnName + "], '') = @BuhinCd;";
+
+        /// <summary>
+        /// 建表用的 DDL（已存在时什么都不做）：主键是三列（与服务器的表一致），
+        /// 所以同一个「部品名 + 部材名」按不同的部品CD 可以有好几行。
+        /// 老本机库是两列主键，见 <see cref="UpgradeFromTwoColumnKey"/>。
+        /// </summary>
+        private const string CreateTableSql =
+            "CREATE TABLE IF NOT EXISTS [" + TableName + "] (" +
+            "[" + BuhinNameColumnName + "] TEXT NOT NULL, " +
+            "[" + BuzaiNameColumnName + "] TEXT NOT NULL, " +
+            "[" + BuhinCdColumnName + "] TEXT NOT NULL DEFAULT '', " +
+            "[" + UpdatedAtColumnName + "] TEXT, " +
+            "PRIMARY KEY ([" + BuhinNameColumnName + "], [" + BuzaiNameColumnName + "], [" + BuhinCdColumnName + "])" +
+            ");";
+
+        /// <summary>「部品CD」索引（主键首列是 BuhinName，按部品CD 查的时候用这个索引）。</summary>
+        private const string CreateBuhinCdIndexSql = "CREATE INDEX IF NOT EXISTS [" + BuhinCdIndexName + "] ON [" +
+            TableName + "] ([" + BuhinCdColumnName + "]);";
+
+        /// <summary>升级两列主键时，老表临时改成的名字。</summary>
+        private const string LegacyTableName = TableName + "_legacy";
 
         private readonly string _databasePath;
         private readonly SQLiteConnection _connection;
@@ -223,8 +249,8 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 登录 / 更新一批行（一个事务）：先按 <c>BuhinName</c> + <c>BuzaiName</c> 更新
-        /// （<c>BuhinCd</c> 为空时保留原值），更新 0 行时才 INSERT —— 与服务器的写法一致。
+        /// 登录 / 更新一批行（一个事务）：先按主键三列 <c>BuhinName</c> + <c>BuzaiName</c> +
+        /// <c>BuhinCd</c> 更新（只刷新 <c>UpdatedAt</c>），更新 0 行时才 INSERT —— 与服务器的写法一致。
         /// </summary>
         /// <param name="entries">要写的行（<c>null</c> / 空集合时什么都不做）。</param>
         /// <returns>写入的行数（更新 + 新增）。</returns>
@@ -253,8 +279,8 @@ namespace MSIFAITOOLS.Services
                         continue;
                     }
 
-                    // 同一次保存里重复出现的组合只写一次（用 \u0001 分隔：名字本身不会含这个字符）
-                    string key = buhinName + "\u0001" + buzaiName;
+                    // 同一次保存里主键完全相同的行只写一次（\u0001 分隔：这些值本身不会含这个字符）
+                    string key = buhinName + "\u0001" + buzaiName + "\u0001" + buhinCd;
 
                     if (!writtenKeys.Add(key))
                     {
@@ -317,27 +343,77 @@ namespace MSIFAITOOLS.Services
             }
         }
 
-        /// <summary>建表（已存在则跳过）并创建「部品CD」索引。</summary>
+        /// <summary>建表（已存在则跳过；老的两列主键会自动升级）并创建「部品CD」索引。</summary>
         private void EnsureSchema()
         {
-            string createTable =
-                "CREATE TABLE IF NOT EXISTS [" + TableName + "] (" +
-                "[" + BuhinNameColumnName + "] TEXT NOT NULL, " +
-                "[" + BuzaiNameColumnName + "] TEXT NOT NULL, " +
-                "[" + BuhinCdColumnName + "] TEXT, " +
-                "[" + UpdatedAtColumnName + "] TEXT, " +
-                "PRIMARY KEY ([" + BuhinNameColumnName + "], [" + BuzaiNameColumnName + "])" +
-                ");";
-
-            string createBuhinCdIndex = "CREATE INDEX IF NOT EXISTS [" + BuhinCdIndexName + "] ON [" +
-                TableName + "] ([" + BuhinCdColumnName + "]);";
-
             using (SQLiteTransaction transaction = _connection.BeginTransaction())
             {
-                Execute(createTable, transaction);
-                Execute(createBuhinCdIndex, transaction);
+                Execute(CreateTableSql, transaction);
+
+                // 老版本的本机库是两列主键（BuhinName + BuzaiName）：升级成三列（+ BuhinCd）
+                if (CountPrimaryKeyColumns(transaction) < 3)
+                {
+                    UpgradeFromTwoColumnKey(transaction);
+                }
+
+                Execute(CreateBuhinCdIndexSql, transaction);
                 transaction.Commit();
             }
+        }
+
+        /// <summary>
+        /// 数一下本机表的主键有几列（<c>PRAGMA table_info</c> 的第 6 列 = 主键里的顺序，0 = 不是主键）。
+        /// </summary>
+        /// <param name="transaction">本次的事务（建表也在里面，看到的是同一份结构）。</param>
+        private int CountPrimaryKeyColumns(SQLiteTransaction transaction)
+        {
+            int count = 0;
+
+            using (SQLiteCommand command = new SQLiteCommand(
+                "PRAGMA table_info(\"" + TableName + "\");", _connection, transaction))
+            {
+                using (SQLiteDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        if (reader.IsDBNull(5))
+                        {
+                            continue;
+                        }
+
+                        if (Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture) > 0)
+                        {
+                            count++;
+                        }
+                    }
+                }
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// 把老本机库的两列主键表（<c>BuhinName</c> + <c>BuzaiName</c>）升级成三列主键（+ <c>BuhinCd</c>）：
+        /// 老表改名 → 建新表 → 数据搬过去（<c>NULL</c> 的部品CD 变空串）→ 删老表。
+        /// 老表的主键本身没有重复，所以搬过去不会撞主键。
+        /// </summary>
+        /// <param name="transaction">本次的事务。</param>
+        private void UpgradeFromTwoColumnKey(SQLiteTransaction transaction)
+        {
+            // 上一次升级中途失败留下的临时表先清掉（服务器那份是准的，下次整表镜像会补回来）
+            Execute("DROP TABLE IF EXISTS [" + LegacyTableName + "];", transaction);
+            Execute("ALTER TABLE [" + TableName + "] RENAME TO [" + LegacyTableName + "];", transaction);
+            Execute(CreateTableSql, transaction);
+
+            // 老结构允许 BuhinCd 为 NULL，新结构是主键的一部分（NOT NULL）：统一成空串
+            Execute(
+                "INSERT OR REPLACE INTO [" + TableName + "] ([" + BuhinNameColumnName + "], [" +
+                BuzaiNameColumnName + "], [" + BuhinCdColumnName + "], [" + UpdatedAtColumnName + "]) " +
+                "SELECT [" + BuhinNameColumnName + "], [" + BuzaiNameColumnName + "], IFNULL([" +
+                BuhinCdColumnName + "], ''), [" + UpdatedAtColumnName + "] FROM [" + LegacyTableName + "];",
+                transaction);
+
+            Execute("DROP TABLE [" + LegacyTableName + "];", transaction);
         }
 
         /// <summary>执行一条不返回结果的 SQL（自动提交）。</summary>
@@ -379,7 +455,7 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 取出一行要写的值（去空白 + 截断）；部品名 / 部材名 为空时返回 false
-        /// （主键两列都不能为空，服务器那张表也是 NOT NULL）。
+        /// （两者都是主键的一部分，服务器那张表也是 NOT NULL；部品CD 没填时为空串）。
         /// </summary>
         /// <param name="entry">要写的行（可为 <c>null</c>）。</param>
         /// <param name="buhinName">部品名（去空白 / 截断后）。</param>

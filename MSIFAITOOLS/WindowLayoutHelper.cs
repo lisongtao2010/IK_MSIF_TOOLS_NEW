@@ -20,7 +20,8 @@ namespace MSIFAITOOLS
     /// </para>
     /// <para>
     /// 还有一个「贴在表格单元格旁边」的小工具（<see cref="PlacePopupNextToCell"/>）：
-    /// 「选择部材名」面板用它摆到点到的「部材名」单元格<b>下面那一行</b>（不遮挡选中的行）。
+    /// 「选择部材名」面板用它摆到点到的「部材名」单元格的<b>右下方</b>（斜着离开这一格，
+    /// 既不遮挡选中的行，也不贴着格子边）。
     /// </para>
     /// </summary>
     internal static class WindowLayoutHelper
@@ -360,13 +361,28 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 把浮动面板（「选择部材名」窗口等）摆到<b>目标单元格下面那一行</b>：
-        /// 面板上边贴着单元格的下边（留 <paramref name="gap"/> 像素空隙）、左边和这一格对齐，
-        /// 所以<b>不会盖住选中的这一行</b>，又离点到的格子很近。
+        /// 「选择部材名」面板离目标单元格的<b>最小</b>空隙（像素）：面板上边 = 单元格下边 + 这个值。
+        /// 以前是 2px（几乎贴着格子），改大一点让它离选中的行远一些，看得更清楚。
+        /// </summary>
+        internal const int PopupMinVerticalGap = 24;
+
+        /// <summary>
+        /// 面板左边相对单元格左边的<b>最小</b>右移量（像素）：单元格比这个窄时也至少右移这么多，
+        /// 让面板明显落在格子的<b>右下</b>方向（单元格更宽时取半个格宽）。
+        /// </summary>
+        private const int PopupMinRightOffset = 32;
+
+        /// <summary>
+        /// 把浮动面板（「选择部材名」窗口等）摆到<b>目标单元格的右下方</b>：
+        /// 左边比单元格左边再往右半个格宽（至少 <see cref="PopupMinRightOffset"/> 像素），
+        /// 上边落在单元格下边再往下 <paramref name="gap"/> 像素
+        /// （不小于 <see cref="PopupMinVerticalGap"/>），所以面板斜着落在点到的格子右下角、
+        /// 和这一格留出一段空隙，<b>不会盖住选中的这一行</b>。
         /// <para>
-        /// 下方放不下（超出屏幕工作区）→ 改放到单元格<b>上面</b>（= 上面那一行）；
+        /// 右边放不下（超出屏幕工作区）→ 尽量贴住工作区右边（保持「在右侧」的观感；
+        /// 面板比工作区还宽时贴住工作区左边）；
+        /// 下方放不下（靠近屏幕底部）→ 改放到单元格<b>上面</b>（= 上面那一行）；
         /// 上面也放不下 → 贴住工作区底部（尽量少压住这一行）。
-        /// 横向超出工作区时往左挪，仍然超出就贴住工作区。
         /// </para>
         /// </summary>
         /// <param name="popup">要摆放的浮动面板（已释放 / 没有有效大小时什么都不做）。</param>
@@ -374,7 +390,10 @@ namespace MSIFAITOOLS
         /// 目标单元格在<b>屏幕</b>坐标里的矩形（<c>DataGridView.RectangleToScreen</c> 的结果；
         /// 宽 / 高 ≤ 0 时什么都不做）。
         /// </param>
-        /// <param name="gap">面板与单元格之间的空隙（像素）。</param>
+        /// <param name="gap">
+        /// 面板与单元格之间的<b>最小</b>空隙（像素）：比 <see cref="PopupMinVerticalGap"/> 小时
+        /// 按 <see cref="PopupMinVerticalGap"/> 算（调用方传 2px 也不会再贴着格子）。
+        /// </param>
         internal static void PlacePopupNextToCell(Form popup, Rectangle cellScreenBounds, int gap = 2)
         {
             if (popup == null || popup.IsDisposed ||
@@ -392,22 +411,27 @@ namespace MSIFAITOOLS
 
             Rectangle workArea = ResolveWorkArea(cellScreenBounds);
 
-            // 横向：优先和单元格左边对齐；右边超出工作区就往左挪，还超出就贴住工作区（面板比屏幕还宽时）
-            int left = cellScreenBounds.Left;
+            // 面板落在单元格的「右下」方向：
+            //   横向 = 单元格左边再往右（半个格宽 / 至少 PopupMinRightOffset）
+            //   纵向 = 单元格下边再往下（gap 至少 PopupMinVerticalGap，免得贴着格子）
+            int distance = Math.Max(gap, PopupMinVerticalGap);
+            int left = cellScreenBounds.Left + Math.Max(cellScreenBounds.Width / 2, PopupMinRightOffset);
 
+            // 右边放不下 → 尽量贴住工作区右边（保持「在右侧」的观感）；
+            // 面板比工作区还宽时贴住工作区左边
             if (left + size.Width > workArea.Right)
             {
-                left = cellScreenBounds.Right - size.Width;
+                left = workArea.Right - size.Width;
             }
 
             left = Math.Max(workArea.Left, Math.Min(left, workArea.Right - size.Width));
 
-            // 纵向：先放下方（= 选择行的下一行）；放不下改放上方（= 上一行）；都放不下就贴住工作区底部
-            int top = cellScreenBounds.Bottom + gap;
+            // 纵向：先放下方（= 选择行的下一行再往下 distance）；放不下改放上方（= 上面那一行）；都放不下就贴住工作区底部
+            int top = cellScreenBounds.Bottom + distance;
 
             if (top + size.Height > workArea.Bottom)
             {
-                int above = cellScreenBounds.Top - gap - size.Height;
+                int above = cellScreenBounds.Top - distance - size.Height;
 
                 top = above >= workArea.Top
                     ? above

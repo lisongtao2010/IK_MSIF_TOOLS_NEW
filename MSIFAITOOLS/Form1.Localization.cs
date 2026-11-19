@@ -122,10 +122,10 @@ namespace MSIFAITOOLS
                 mnuLogCopyAll.Text = UiText.T("复制全部日志");
                 mnuLogSelectAll.Text = UiText.T("全选");
                 mnuShowPartInfo.Text = UiText.T("查看部品基本信息");
-                mnuPreviewPdf.Text = UiText.T("预览 PDF");
+                mnuPreviewPdf.Text = UiText.T("预览（PDF / Excel）");
                 chkAutoPreview.Text = UiText.T("选中即预览");
                 btnPartInfo.Text = UiText.T("部品信息");
-                btnPreviewPdf.Text = UiText.T("预览 PDF");
+                btnPreviewPdf.Text = UiText.T("预览（PDF / Excel）");
                 btnOpenClassifyDir.Text = UiText.T("打开分类目录");
 
                 if (dgvClassify != null)

@@ -10,8 +10,10 @@ namespace MSIFAITOOLS.Services
     /// <b>部品名（<c>BuhinName</c>）→ 部材名（<c>BuzaiName</c>）</b>，并带上<b>部品CD（<c>BuhinCd</c>）</b>。
     ///
     /// <para>
-    /// 表的主键是 <c>BuhinName</c> + <c>BuzaiName</c>（两者都不能为空），<c>BuhinCd</c> 是后加的
-    /// <c>nvarchar(100)</c> 可空列（= 部品基本信息画面上的「部品コード」）。
+    /// 表的主键是三列 <c>BuhinName</c> + <c>BuzaiName</c> + <c>BuhinCd</c>
+    /// （三列都是 <c>nvarchar(100)</c>、都不能为空）。<c>BuhinCd</c> = 部品基本信息画面上的「部品コード」，
+    /// 画面上没填时用<b>空串</b>表示（主键列不能是 <c>NULL</c>）。
+    /// 所以同一个「部品名 + 部材名」可以按不同的部品CD 存成多行。
     /// </para>
     /// </summary>
     internal sealed class BuhinBuzaiMappingEntry
@@ -29,18 +31,8 @@ namespace MSIFAITOOLS.Services
         /// <summary>部材名（<c>BuzaiName</c>，主键的一部分，<c>nvarchar(100)</c>）。</summary>
         public string BuzaiName { get; private set; }
 
-        /// <summary>部品CD（<c>BuhinCd</c>，<c>nvarchar(100)</c>，可空）= 画面上的「部品コード」。</summary>
+        /// <summary>部品CD（<c>BuhinCd</c>，<c>nvarchar(100)</c>，主键的一部分，画面上没填时为空串）= 画面上的「部品コード」。</summary>
         public string BuhinCd { get; private set; }
-
-        /// <summary>
-        /// 本次保存里同一个「部品名 + 部材名」出现多行时，用这一行补上还空着的 <see cref="BuhinCd"/>
-        /// （先到的空值不覆盖已有的值，见 <see cref="BuhinBuzaiMappingRepository.Register"/>）。
-        /// </summary>
-        /// <param name="buhinCd">部品CD（<c>null</c> 视为空）。</param>
-        internal void OverrideBuhinCd(string buhinCd)
-        {
-            BuhinCd = buhinCd ?? string.Empty;
-        }
     }
 
     /// <summary>
@@ -48,9 +40,10 @@ namespace MSIFAITOOLS.Services
     ///
     /// <para>
     /// <b>表结构</b>：<c>BuhinName</c>（部品名，<c>nvarchar(100)</c>，主键）/ <c>BuzaiName</c>
-    /// （部材名，<c>nvarchar(100)</c>，主键）/ <c>BuhinCd</c>（部品CD，<c>nvarchar(100)</c>，可空）/
+    /// （部材名，<c>nvarchar(100)</c>，主键）/ <c>BuhinCd</c>（部品CD，<c>nvarchar(100)</c>，主键）/
     /// <c>Remarks</c>（<c>nvarchar(255)</c>，可空）/ <c>UpdatedAt</c>（<c>datetime2(7)</c>，可空）。
-    /// 主键 = <c>BuhinName</c> + <c>BuzaiName</c>，所以登录 / 更新都按这两个值定位。
+    /// 主键 = <c>BuhinName</c> + <c>BuzaiName</c> + <c>BuhinCd</c>（三列都不能为空；画面上没填
+    /// 部品コード时写<b>空串</b>），所以登录 / 更新都按这三个值定位。
     /// </para>
     ///
     /// <para>
@@ -84,7 +77,7 @@ namespace MSIFAITOOLS.Services
         /// <summary>「部材名」列名（主键的一部分）。</summary>
         public const string BuzaiNameColumnName = "BuzaiName";
 
-        /// <summary>「部品CD」列名（后加的列，本工具保存时一起写）。</summary>
+        /// <summary>「部品CD」列名（主键的一部分，本工具保存时一起写；没填时写空串）。</summary>
         public const string BuhinCdColumnName = "BuhinCd";
 
         /// <summary>「備考」列名（本表维护侧的备注：本工具新建行时留 <c>NULL</c>，更新时不改动这一列）。</summary>
@@ -109,23 +102,29 @@ namespace MSIFAITOOLS.Services
         private const string QualifiedTableName = "[" + SchemaName + "].[" + TableName + "]";
 
         /// <summary>
-        /// 更新已有的一行：<c>BuhinCd</c> 为空时<b>保留原来的值</b>（画面上没填部品コード时
-        /// 不把表里已有的部品CD 冲成空），<c>UpdatedAt</c> 每次刷新。
+        /// 更新已有的一行：主键三列（<c>BuhinName</c> / <c>BuzaiName</c> / <c>BuhinCd</c>）都是定位条件，
+        /// 所以这里只刷新 <c>UpdatedAt</c>（主键列本身不会被改）。
+        /// <para>
+        /// <c>BuhinCd</c> 用 <c>ISNULL(..., N'')</c> 比较：主键列现在不能为空，但加主键前留下的老数据里
+        /// 这一列可能是 <c>NULL</c>，空串也要能命中那些行（否则会多登录一条重复的行）。
+        /// </para>
         /// </summary>
         private const string UpdateSql =
             "UPDATE " + QualifiedTableName + " SET " +
-            "[" + BuhinCdColumnName + "] = COALESCE(NULLIF(@BuhinCd, N''), [" + BuhinCdColumnName + "]), " +
             "[" + UpdatedAtColumnName + "] = @UpdatedAt " +
-            "WHERE [" + BuhinNameColumnName + "] = @BuhinName AND [" + BuzaiNameColumnName + "] = @BuzaiName;";
+            "WHERE [" + BuhinNameColumnName + "] = @BuhinName AND [" + BuzaiNameColumnName + "] = @BuzaiName AND " +
+            "ISNULL([" + BuhinCdColumnName + "], N'') = @BuhinCd;";
 
         /// <summary>
         /// 登录新的一行（更新 0 行时才执行）：<c>Remarks</c> 不写（留 <c>NULL</c>，那是维护侧的备注）。
+        /// <c>BuhinCd</c> 是主键的一部分（不能为 <c>NULL</c>）：画面上没填部品コード时<b>直接写空串</b>，
+        /// 所以这里不再用以前的 <c>NULLIF(@BuhinCd, N'')</c>。
         /// </summary>
         private const string InsertSql =
             "INSERT INTO " + QualifiedTableName + " ([" + BuhinNameColumnName + "], [" +
             BuzaiNameColumnName + "], [" + BuhinCdColumnName + "], [" + RemarksColumnName + "], [" +
             UpdatedAtColumnName + "]) VALUES " +
-            "(@BuhinName, @BuzaiName, NULLIF(@BuhinCd, N''), NULL, @UpdatedAt);";
+            "(@BuhinName, @BuzaiName, @BuhinCd, NULL, @UpdatedAt);";
 
         /// <summary>
         /// 整表读出（「选择部材名」窗口的推荐项用，<see cref="BuhinBuzaiMappingCatalog"/> 在
@@ -172,11 +171,11 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 登录 / 更新一批行（同一事务内，一条 SQL 一次往返）：
-        /// 先按 <c>BuhinName</c> + <c>BuzaiName</c> 更新（同时写 <c>BuhinCd</c> / <c>UpdatedAt</c>），
+        /// 先按主键三列 <c>BuhinName</c> + <c>BuzaiName</c> + <c>BuhinCd</c> 更新（只刷新 <c>UpdatedAt</c>），
         /// 更新 0 行时才 INSERT。
         /// <para>
-        /// <c>BuhinCd</c> 的规则：本次有值就覆盖；本次为空时<b>保留表里原来的值</b>
-        /// （避免画面上没填部品コード的行把人家维护的部品CD 冲掉）。
+        /// 三列都是主键，所以不再出现「本次没填部品コード就把已有值冲掉」的情况：
+        /// 部品CD 不同就是<b>不同的行</b>（同一个「部品名 + 部材名」可以有多个部品CD）。
         /// </para>
         /// </summary>
         /// <param name="entries">要写的行（<c>null</c> / 空集合时什么都不做）。</param>
@@ -210,7 +209,8 @@ namespace MSIFAITOOLS.Services
                             string buhinName = Normalize(entry.BuhinName, NameMaxLength);
                             string buzaiName = Normalize(entry.BuzaiName, NameMaxLength);
 
-                            // 主键两列都不能为空（表上 NOT NULL）
+                            // 部品名 / 部材名 是主键的一部分，都不能为空（表上 NOT NULL）；
+                            // 部品CD 没填时是空串（主键列也不能是 NULL）
                             if (buhinName.Length == 0 || buzaiName.Length == 0)
                             {
                                 continue;
@@ -374,7 +374,8 @@ namespace MSIFAITOOLS.Services
         /// 意思是「不属于任何部材」）、部材名里含 <c>|</c>（多个候选、还没确定）。
         /// </para>
         /// <para>
-        /// 同一个「部品名 + 部材名」在本次保存里出现多行时只写一次，<c>BuhinCd</c> 取第一个非空的值。
+        /// 同一个「部品名 + 部材名 + 部品CD」在本次保存里出现多行时只写一次
+        /// （主键是这三列，部品CD 不同的行算不同的 mapping）。
         /// </para>
         /// <para>
         /// 同一批组合还会写进<b>本机表</b>（SQLite <c>DL_BuhinBuzaiMapping</c>，
@@ -485,7 +486,8 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 从部品基本信息的行里挑出要写进部材 mapping 的组合（部品名 + 部材名 去重，带上 部品CD）。
+        /// 从部品基本信息的行里挑出要写进部材 mapping 的组合
+        /// （<b>部品名 + 部材名 + 部品CD</b> 三列去重 —— 这三列就是表的主键）。
         /// </summary>
         /// <param name="parts">部品基本信息的行（可为 <c>null</c>）。</param>
         private static List<BuhinBuzaiMappingEntry> CollectEntries(IEnumerable<PartBasicInfo> parts)
@@ -497,8 +499,7 @@ namespace MSIFAITOOLS.Services
                 return entries;
             }
 
-            Dictionary<string, BuhinBuzaiMappingEntry> byKey =
-                new Dictionary<string, BuhinBuzaiMappingEntry>(StringComparer.Ordinal);
+            HashSet<string> keys = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (PartBasicInfo part in parts)
             {
@@ -517,26 +518,16 @@ namespace MSIFAITOOLS.Services
 
                 string buhinCd = Normalize(part.PartCode, NameMaxLength);
 
-                // 键里用 \u0001 分隔：部品名 / 部材名 本身不会含这个字符，不会拼出同一个键
-                string key = buhinName + "\u0001" + buzaiName;
+                // 主键三列都进键里（\u0001 分隔：部品名 / 部材名 / 部品CD 本身不会含这个字符）
+                string key = buhinName + "\u0001" + buzaiName + "\u0001" + buhinCd;
 
-                BuhinBuzaiMappingEntry existing;
-
-                if (byKey.TryGetValue(key, out existing))
+                if (!keys.Add(key))
                 {
-                    // 画面里重复的行：部品CD 只补第一个非空的值
-                    if (existing.BuhinCd.Length == 0)
-                    {
-                        existing.OverrideBuhinCd(buhinCd);
-                    }
-
+                    // 本次保存里主键完全相同的行只写一次
                     continue;
                 }
 
-                BuhinBuzaiMappingEntry created = new BuhinBuzaiMappingEntry(buhinName, buzaiName, buhinCd);
-
-                byKey.Add(key, created);
-                entries.Add(created);
+                entries.Add(new BuhinBuzaiMappingEntry(buhinName, buzaiName, buhinCd));
             }
 
             return entries;
@@ -587,7 +578,7 @@ namespace MSIFAITOOLS.Services
         /// <param name="command">已建好参数的命令。</param>
         /// <param name="buhinName">部品名（已去空白、已截断）。</param>
         /// <param name="buzaiName">部材名（已去空白、已截断）。</param>
-        /// <param name="buhinCd">部品CD（已去空白、已截断；空串由 SQL 的 <c>NULLIF</c> 变成 <c>NULL</c>）。</param>
+        /// <param name="buhinCd">部品CD（已去空白、已截断；没填时为空串 —— 主键列不能是 <c>NULL</c>）。</param>
         /// <param name="updatedAt">更新日時。</param>
         private static void BindParameters(SqlCommand command, string buhinName, string buzaiName, string buhinCd,
             DateTime updatedAt)

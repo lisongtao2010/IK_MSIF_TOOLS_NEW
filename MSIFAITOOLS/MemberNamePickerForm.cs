@@ -30,10 +30,11 @@ namespace MSIFAITOOLS
     ///
     /// <para>
     /// <b>位置</b>：由主画面（<see cref="PartBasicInfoForm"/>）按点到的「部材名」单元格摆放
-    /// （<see cref="WindowLayoutHelper.PlacePopupNextToCell"/>）——面板上边贴着这一格的下边
-    /// （= 选中行的<b>下一行</b>，不遮挡选中的行），左边和这一格对齐，离点到的格子尽量近；
-    /// 下方放不下（靠近屏幕底部）时改放到这一格上面（= 上一行）。
-    /// 手动拖动过的位置，会在下一次点「部材名」（或写完自动跳到下一行）时重新贴到那一行。
+    /// （<see cref="WindowLayoutHelper.PlacePopupNextToCell"/>）——面板落在这一格的<b>右下方</b>：
+    /// 左边比这一格的左边再往右半个格宽（至少 32px），上边在这一格的下边再往下 24px，
+    /// 所以斜着离开选中的行、也不贴着格子边（<b>不遮挡选中的行</b>）；
+    /// 右边放不下时尽量贴住屏幕右侧，下方放不下（靠近屏幕底部）时改放到这一格上面（= 上一行）。
+    /// 手动拖动过的位置，会在下一次点「部材名」（或写完自动跳到下一行）时重新贴到那一行的右下方。
     /// </para>
     ///
     /// <para>
@@ -206,7 +207,7 @@ namespace MSIFAITOOLS
             InitializeComponent();
 
             // 位置由主画面按点到的「部材名」单元格算（WindowLayoutHelper.PlacePopupNextToCell）：
-            // 不遮挡选中的那一行、贴在它下面那一行，所以不用 CenterParent（CenterParent 会压住选中的行）
+            // 不遮挡选中的那一行、落在它的右下方（半格宽 + 24px 空隙），所以不用 CenterParent（CenterParent 会压住选中的行）
             StartPosition = FormStartPosition.Manual;
 
             // 按钮 / 标签等文字的中日切换（见 Services\UiLocalization.cs）
