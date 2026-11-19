@@ -14,13 +14,13 @@ namespace MSIFAITOOLS
 
     /// <summary>
     /// 「选择部材名」窗口：由部品基本信息画面（<see cref="PartBasicInfoForm"/>）
-    /// 点「部材名」单元格时打开，做成输入法候选面板那样——只有一列部材名，前面带编号。
+    /// 点「部材名」单元格时打开，做成输入法候选面板那样——部材名带编号、分两列显示。
     ///
     /// <para>
     /// <b>外观</b>（<c>MemberNamePickerForm.Style.cs</c>）：贴近 Google 日语输入法的候补面板——
     /// 无标题栏的白色浮窗（1px 细边框 + 系统投影）、顶部灰色圆角检索框（放大镜 + 灰色提示文字）、
-    /// 中间是带编号的部材名一览（选中行浅蓝、悬停行浅灰）、底部一行状态和关闭。
-    /// 拖动窗口 = 按住检索框 / 底部空白处拖；改大小 = 拖右下角的手柄。
+    /// 中间是带编号的部材名一览（<b>双列、每列 10 行</b>，选中行浅蓝、悬停行浅灰）、底部一行状态和关闭。
+    /// 拖动窗口 = 按住检索框 / 底部空白处拖；改大小 = 拖右下角的手柄（高度固定，只改宽度）。
     /// </para>
     ///
     /// <para>
@@ -38,17 +38,25 @@ namespace MSIFAITOOLS
     /// </para>
     ///
     /// <para>
-    /// <b>按编号写入 / 分页</b>：候选项前面都带编号（1～9，第 10 项是 0），
-    /// 直接按数字键就把对应编号的部材名写进主画面当前的「部材名」单元格
+    /// <b>按编号写入 / 分页</b>：两列候选项前面都带<b>连续序号</b>，编号就是这条记录的<b>整体位置</b>：
+    /// 第 1 页左列 1～10、右列 11～20；第 2 页左列 11～20、右列 21～30……
+    /// 直接按数字键 <c>1</c>～<c>9</c>（<c>0</c> = 本页左列第 10 项）就把<b>本页左列</b>
+    /// 对应位置的部材名写进主画面当前的「部材名」单元格
     /// （触发 <see cref="MemberNamePicked"/>；单元格原来的 <c>|</c> 多值会被整体替换）。
-    /// 鼠标单击哪一项也一样。
+    /// 数字键始终作用于本页左列，和显示编号 / 鼠标 / <c>←</c> <c>→</c> 选到哪一列无关
+    /// （第 2 页左列显示 11～20 时，按 <c>1</c> 仍选这一列第 1 项 = 显示 11 的那一项）。
+    /// 右列的项请用鼠标单击，或按 <c>←</c> / <c>→</c> 移过去再按 <c>Enter</c>。
     /// </para>
     ///
     /// <para>
-    /// <b>每页 10 项</b>：数字键只有 1～9 和 0，所以一页固定显示 10 项，编号每页都从 1 重新开始，
-    /// 第 11 项以后翻到下一页（<c>PageUp</c> / <c>PageDown</c>、<c>↑</c> 到页首再按一次 / <c>↓</c> 到页尾再按一次、
+    /// <b>双列、每页 20 项、翻页前进 10 项</b>：一览分<b>两列</b>，每列 10 行，一页共 20 项。
+    /// 翻页只前进 / 后退 10 项（半页），所以上一页右列的 10 项在下一页左列还能看到：
+    /// 第 1 页 1～20、第 2 页 11～30、第 3 页 21～40……（同一条记录在不同页上编号不变）。
+    /// <c>←</c> / <c>→</c> 在两列之间移动选中项，<c>↑</c> / <c>↓</c> 上下换项
+    /// （到本页最后一个 / 第一个再按就翻页）。
+    /// 记录超过 20 条就能翻到下一页（<c>PageUp</c> / <c>PageDown</c>、<c>↑</c> 到页首再按一次 / <c>↓</c> 到页尾再按一次、
     /// 鼠标滚轮、底部「‹ 1/3 ›」按钮）。过滤条件一变就回到第 1 页，
-    /// 所以按 <c>1</c> 永远是当前页的第 1 项（打开窗口时就是这一行的推荐项：
+    /// 所以按 <c>1</c> 永远是本页左列的第 1 项（打开窗口时按 <c>1</c> = 左列第 1 项：就是这一行的推荐项：
     /// 部品CD 一致 → 部品名 一致 → 表示部材名，见下面的候选顺序）。
     /// </para>
     ///
@@ -90,11 +98,24 @@ namespace MSIFAITOOLS
         /// <summary>能用数字键选的最多项数（1～9；第 10 项用 <c>0</c>）。</summary>
         private const int MaxShortcutNumber = 9;
 
+        /// <summary>双列显示：一列放 10 行（左列正好对应数字键 1～9 / 0）。</summary>
+        private const int RowsPerColumn = MaxShortcutNumber + 1;
+
+        /// <summary>一览固定两列（左列 = 第 1～10 项，右列 = 第 11～20 项）。</summary>
+        private const int ColumnCount = 2;
+
         /// <summary>
-        /// 一页最多显示几项：数字键只有 <c>1</c>～<c>9</c> 和 <c>0</c>（10 个），
-        /// 所以一页固定 10 项，编号每页都从 <c>1</c> 重新开始。
+        /// 一页最多显示几项：<see cref="ColumnCount"/> 列 × 每列 <see cref="RowsPerColumn"/> 项 = 20 项。
+        /// 两列都显示编号（跨页连续的整体位置：第 1 页 1～20、第 2 页 11～30……）；
+        /// 数字键 1～9 / 0 始终对应本页左列第 1～10 项。
         /// </summary>
-        private const int PageSize = MaxShortcutNumber + 1;
+        private const int PageSize = RowsPerColumn * ColumnCount;
+
+        /// <summary>
+        /// 翻页步长：每次只前进 / 后退 10 项（半页）。上一页右列的 10 项会出现在下一页左列，
+        /// 所以第 1 页是 1～20、第 2 页是 11～30、第 3 页是 21～40……（编号仍按整体位置连续）。
+        /// </summary>
+        private const int PageStep = RowsPerColumn;
 
         /// <summary>「已写入」那行文字的正常颜色（Google 输入法面板的灰字）。</summary>
         private static readonly Color PreviewNormalColor = Color.FromArgb(95, 99, 104);
@@ -110,12 +131,20 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 按过滤关键字筛出来的候选项（<see cref="_items"/> 的子集，顺序不变）——
-        /// 分页就是按这一份切成每页 <see cref="PageSize"/> 项。
+        /// 分页就是按这一份切出每页最多 <see cref="PageSize"/> 项（每翻一页起点前进 <see cref="PageStep"/> 项）。
         /// </summary>
         private readonly List<string> _filtered = new List<string>();
 
-        /// <summary>现在显示的是第几页（从 0 开始；0 = 前 10 项）。</summary>
+        /// <summary>现在显示的是第几页（从 0 开始；0 = 第 1～20 项，1 = 第 11～30 项）。</summary>
         private int _pageIndex;
+
+        /// <summary>
+        /// 选中项现在在左列还是右列（0 = 左列，1 = 右列），只给 <c>←</c> / <c>→</c> 换列用；
+        /// 数字键始终选本页左列，和这个值无关。
+        /// 每次换页 / 改过滤条件 / 换目标格都回到左列；
+        /// 鼠标点过右列的项、<c>←</c> / <c>→</c> 移过去之后才变成右列。
+        /// </summary>
+        private int _activeColumn;
 
         /// <summary>部材部品マスタ（可能为 <c>null</c>：候选列表只剩推荐项和原值）。</summary>
         private readonly MemberPartCatalog _catalog;
@@ -206,6 +235,9 @@ namespace MSIFAITOOLS
         {
             InitializeComponent();
 
+            // 高度固定（一览正好两列 × 每列 10 行，下面不留空白）：只允许左右拖宽（见 PnlResize_MouseMove）
+            MinimumSize = new Size(MinimumSize.Width, Height);
+
             // 位置由主画面按点到的「部材名」单元格算（WindowLayoutHelper.PlacePopupNextToCell）：
             // 不遮挡选中的那一行、落在它的右下方（半格宽 + 24px 空隙），所以不用 CenterParent（CenterParent 会压住选中的行）
             StartPosition = FormStartPosition.Manual;
@@ -219,8 +251,8 @@ namespace MSIFAITOOLS
             _partCode = partCode == null ? string.Empty : partCode.Trim();
 
             UiLocalization.SetToolTip(_hintToolTip, txtFilter,
-                "输入关键字过滤部材名；按 1～9（0 = 第 10 项）直接写入；↑↓ 换候选项，Enter 写入。\n" +
-                "一页 10 项：PageUp / PageDown（或 ↑↓ 走到页首 / 页尾、鼠标滚轮、底部 ‹ ›）翻页。");
+                "输入关键字过滤部材名；按 1～9（0 = 第 10 项）写入本页左列；←→ 移动选中项，↑↓ 换候选项，Enter 写入。\n" +
+                "每页 20 项（两列 × 10 行），翻页前进 10 项（第 2 页从第 11 项开始）：PageUp / PageDown（或 ↑↓ 走到页首 / 页尾、鼠标滚轮、底部 ‹ ›）翻页。");
             UiLocalization.SetToolTip(_hintToolTip, btnPrevPage, "上一页（PageUp / 滚轮往上 / 在页首再按 ↑）");
             UiLocalization.SetToolTip(_hintToolTip, btnNextPage, "下一页（PageDown / 滚轮往下 / 在页尾再按 ↓）");
 
@@ -365,14 +397,19 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 按编号写入（<c>1</c>～<c>9</c> → 这一页的第 1～9 项，<c>0</c> → 这一页的第 10 项）：
-        /// 编号对得上当前页时就写入并返回 true；这一页没有这一项时返回 false（这次按键当普通输入处理）。
+        /// 按编号写入（<c>1</c>～<c>9</c> → <b>本页左列</b>第 1～9 项，<c>0</c> → 第 10 项）：
+        /// 这一页左列没有这一项时返回 false（这次按键当普通输入处理）。
+        /// <para>
+        /// 数字键只按「本页左列第几项」算，和显示编号 / 选中项现在在左列还是右列无关
+        /// （例如第 2 页左列显示 11～20，按 <c>1</c> 仍选这一列第 1 项 = 显示 11 的那一项）。
+        /// </para>
         /// </summary>
         /// <param name="number">数字键的数值（0～9）。</param>
-        /// <returns>true = 已写入；false = 这一页没有这个编号的项。</returns>
+        /// <returns>true = 已写入；false = 本页左列没有这个位置的项。</returns>
         private bool PickByNumber(int number)
         {
-            int index = number == 0 ? MaxShortcutNumber : number - 1;
+            int row = number == 0 ? MaxShortcutNumber : number - 1;
+            int index = row;
 
             if (index < 0 || index >= lstNames.Items.Count)
             {
@@ -380,11 +417,25 @@ namespace MSIFAITOOLS
             }
 
             lstNames.SelectedIndex = index;
+            _activeColumn = 0;
             EnsureRowVisible(index);
 
             Pick(GetItemValue(lstNames.Items[index]));
 
             return true;
+        }
+
+        /// <summary>
+        /// 选中项现在在哪一列（0 = 左列，1 = 右列），给 <c>←</c> / <c>→</c> 换列用：
+        /// 默认左列，鼠标点过右列的项 / 按过 <c>→</c> 之后变成右列（见 <see cref="_activeColumn"/>）。
+        /// <b>数字键不看这个值</b>（始终选本页左列第 1～10 项）。
+        /// </summary>
+        private int SelectedColumn
+        {
+            get
+            {
+                return _activeColumn < 0 ? 0 : (_activeColumn >= ColumnCount ? ColumnCount - 1 : _activeColumn);
+            }
         }
 
         /// <summary>
@@ -533,7 +584,7 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 按过滤关键字重新筛候选项（关键字为空时就是全部），然后从第 1 页开始显示；
-        /// 编号只是画出来的（页内第几项 = 数字键几），列表里存的始终是部材名本身。
+        /// 编号只是画出来的（左列第几项 = 数字键几），列表里存的始终是部材名本身。
         /// </summary>
         private void ApplyFilter(string keyword)
         {
@@ -559,20 +610,28 @@ namespace MSIFAITOOLS
             ShowPage();
         }
 
-        /// <summary>一共几页（至少 1 页：没有候选项时显示「1/1」）。</summary>
+        /// <summary>
+        /// 一共几页（至少 1 页：没有候选项时显示「1/1」）。
+        /// 翻页只前进 <see cref="PageStep"/> 项，所以最后一页要能覆盖到最后一条：
+        /// 20 条以内 1 页，21～30 条 2 页，31～40 条 3 页……
+        /// </summary>
         private int PageCount
         {
             get
             {
-                int pages = (_filtered.Count + PageSize - 1) / PageSize;
+                if (_filtered.Count <= PageSize)
+                {
+                    return 1;
+                }
 
-                return pages < 1 ? 1 : pages;
+                return 1 + ((_filtered.Count - PageSize + PageStep - 1) / PageStep);
             }
         }
 
         /// <summary>
-        /// 把当前页的候选项放进列表（最多 <see cref="PageSize"/> 项），并刷新底部的页码和翻页按钮。
-        /// 编号是<b>页内编号</b>：每页都从 1 开始（第 10 项是 0），所以数字键永远对应看得见的这 10 项。
+        /// 把当前页的候选项放进列表（最多 <see cref="PageSize"/> 项 = 两列 × 每列 10 项），并刷新底部的页码和翻页按钮。
+        /// 这一页从整体第 <c>_pageIndex * <see cref="PageStep"/> + 1</c> 项开始（第 1 页 1～20、第 2 页 11～30……）；
+        /// 两列都显示编号，编号 = 这一项的整体位置。数字键 1～9 / 0 对应本页左列第 1～10 项。
         /// </summary>
         private void ShowPage()
         {
@@ -588,7 +647,7 @@ namespace MSIFAITOOLS
                 _pageIndex = 0;
             }
 
-            int start = _pageIndex * PageSize;
+            int start = _pageIndex * PageStep;
 
             lstNames.BeginUpdate();
 
@@ -599,6 +658,7 @@ namespace MSIFAITOOLS
                 // 换页时把上一页的选中项清掉（否则 SelectedIndex 会留在同一个行号上，看着像选中了别的项）
                 lstNames.SelectedIndex = -1;
                 _hoverIndex = -1;
+                _activeColumn = 0;
 
                 for (int index = start; index < _filtered.Count && index < start + PageSize; index++)
                 {
@@ -610,7 +670,7 @@ namespace MSIFAITOOLS
                 lstNames.EndUpdate();
             }
 
-            // 每页不超过 10 项，列表高度够放（最小窗口也放得下）→ 不需要滚动
+            // 每页不超过 20 项（两列 × 10 行），列表高度正好放得下 → 不需要上下滚动
             lstNames.TopIndex = 0;
 
             lblPage.Text = (_pageIndex + 1).ToString() + "/" + pages.ToString();
@@ -622,8 +682,9 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 翻页（<c>PageUp</c> / <c>PageDown</c>、<c>↑</c> 到页首 / <c>↓</c> 到页尾时，鼠标滚轮、底部 ‹ ›）。
-        /// 翻过去之后选中项落在新页的第 1 项（往下翻）/ 最后一项（往上翻），
-        /// 这样接着按 <c>↑</c> <c>↓</c> 的方向感不会断。
+        /// 翻页只前进 / 后退 10 项，前后两页有 10 项重叠，所以选中项落在<b>新出现的那一半</b>：
+        /// 往下翻 = 新页左列第 1 项（上一页右列之后的下一项），往上翻 = 新页左列最后一项
+        /// （下一页左列之前的上一项），这样接着按 <c>↑</c> <c>↓</c> 的方向感不会断。
         /// </summary>
         /// <param name="delta">-1 = 上一页，+1 = 下一页。</param>
         /// <returns>true = 真的翻页了（已经到第一页 / 最后一页时返回 false，什么都不做）。</returns>
@@ -649,9 +710,14 @@ namespace MSIFAITOOLS
                 return true;
             }
 
-            // 往下翻选这一页的第 1 项、往上翻选最后一项（不沿用「目标格现在的值」的选中，
-            // 那个只在打开窗口 / 改过滤条件时用，翻页时按方向走更顺）
-            lstNames.SelectedIndex = delta > 0 ? 0 : lstNames.Items.Count - 1;
+            // 往下翻选新页左列第 1 项（= 上一页右列之后的下一项），往上翻选新页左列最后一项
+            // （= 下一页左列之前的上一项）：翻页只走 10 项，前后两页有 10 项重叠，不能选重叠的那一半
+            int selected = delta > 0
+                ? (lstNames.Items.Count > PageStep ? PageStep : 0)
+                : (lstNames.Items.Count > PageStep ? PageStep - 1 : lstNames.Items.Count - 1);
+
+            lstNames.SelectedIndex = selected;
+            _activeColumn = lstNames.SelectedIndex / RowsPerColumn;
             EnsureRowVisible(lstNames.SelectedIndex);
 
             return true;
@@ -674,24 +740,19 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 这一页里第 <paramref name="index"/> 项（从 0 开始）前面的编号：
-        /// 前 9 项是 <c>1</c>～<c>9</c>，第 10 项是 <c>0</c>（一页正好 10 项，所以每项都有编号）。
+        /// 这一项前面的编号：<b>两列都有</b>，是<b>整体位置</b>（跨页连续、同一条记录编号不变）：
+        /// 第 1 页左列 1～10 / 右列 11～20；第 2 页左列 11～20 / 右列 21～30……
         /// </summary>
-        /// <param name="index">这一项在<b>当前页</b>里的位置（从 0 开始）。</param>
-        /// <returns>编号文字。</returns>
-        private static string ShortcutNumber(int index)
+        /// <param name="index">这一项在<b>当前页</b>里的位置（从 0 开始，0～19）。</param>
+        /// <returns>编号文字；超出这一页范围时为空串。</returns>
+        private string ShortcutNumber(int index)
         {
-            if (index < MaxShortcutNumber)
+            if (index < 0 || index >= PageSize)
             {
-                return (index + 1).ToString();
+                return string.Empty;
             }
 
-            if (index == MaxShortcutNumber)
-            {
-                return "0";
-            }
-
-            return string.Empty;
+            return ((_pageIndex * PageStep) + index + 1).ToString();
         }
 
         /// <summary>取一项对应的部材名（列表里存的就是部材名本身）。</summary>
@@ -779,6 +840,7 @@ namespace MSIFAITOOLS
 
             // 让这一行处于选中状态，用户能看清刚写进去的是哪一项
             lstNames.SelectedIndex = index;
+            _activeColumn = index / RowsPerColumn;
 
             Pick(GetItemValue(lstNames.Items[index]));
 
@@ -787,7 +849,8 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 键盘：<c>1</c>～<c>9</c> / <c>0</c> 按编号写入（当前页），<c>↑</c> / <c>↓</c> 换候选项（到页首 / 页尾再按就翻页），
+        /// 键盘：<c>1</c>～<c>9</c> / <c>0</c> 按编号写入（<b>始终是本页左列</b>第 1～10 项），
+        /// <c>←</c> / <c>→</c> 在两列之间移动选中项，<c>↑</c> / <c>↓</c> 换候选项（到页首 / 页尾再按就翻页），
         /// <c>PageUp</c> / <c>PageDown</c> 翻页，<c>Enter</c> 写入。
         /// 按住 <c>Ctrl</c> 的数字不拦截（想把它当关键字打进输入框时用）。
         /// </summary>
@@ -815,6 +878,13 @@ namespace MSIFAITOOLS
             if (keyCode == Keys.PageUp || keyCode == Keys.PageDown)
             {
                 ChangePage(keyCode == Keys.PageDown ? 1 : -1);
+
+                return true;
+            }
+
+            if (keyCode == Keys.Left || keyCode == Keys.Right)
+            {
+                MoveColumn(keyCode == Keys.Right ? 1 : -1);
 
                 return true;
             }
@@ -857,6 +927,7 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 在列表里上下移动选中项（在输入框里按 <c>↑</c> / <c>↓</c> 时用）；
         /// 已经在页首再按 <c>↑</c> → 翻到上一页的最后一项，页尾再按 <c>↓</c> → 翻到下一页的第 1 项。
+        /// 双列时按列表顺序走：左列第 10 项再往下 = 右列第 1 项（和阅读顺序一致）。
         /// </summary>
         /// <param name="delta">+1 = 下一项，-1 = 上一项。</param>
         private void MoveSelection(int delta)
@@ -889,7 +960,42 @@ namespace MSIFAITOOLS
             }
 
             lstNames.SelectedIndex = next;
+            _activeColumn = next / RowsPerColumn;
             EnsureRowVisible(next);
+        }
+
+        /// <summary>
+        /// 在双列之间左右移动选中项（<c>←</c> / <c>→</c>）：行号不变，只换列；
+        /// 目标列没有这么多种项时落到那一列的最后一项。到了最左 / 最右列时什么都不做。
+        /// 移动只影响选中项，数字键仍作用于本页左列第 1～10 项（不跟着换列）。
+        /// </summary>
+        /// <param name="delta">+1 = 右列，-1 = 左列。</param>
+        private void MoveColumn(int delta)
+        {
+            int targetColumn = SelectedColumn + delta;
+
+            if (targetColumn < 0 || targetColumn >= ColumnCount)
+            {
+                return;
+            }
+
+            int current = lstNames.SelectedIndex;
+            int row = current < 0 ? 0 : current % RowsPerColumn;
+            int index = (targetColumn * RowsPerColumn) + row;
+
+            if (index >= lstNames.Items.Count)
+            {
+                index = lstNames.Items.Count - 1;
+            }
+
+            if (index < 0)
+            {
+                return;
+            }
+
+            lstNames.SelectedIndex = index;
+            _activeColumn = targetColumn;
+            EnsureRowVisible(index);
         }
 
         /// <summary>【关闭】：关掉本窗口（已经写入的值留在主画面的单元格里）。</summary>

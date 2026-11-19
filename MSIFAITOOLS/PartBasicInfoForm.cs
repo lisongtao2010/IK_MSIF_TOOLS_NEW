@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Text;
 using System.Windows.Forms;
 using MSIFAITOOLS.Services;
 
@@ -27,7 +28,7 @@ namespace MSIFAITOOLS
     /// <b>「行号」列</b>（显示在最左侧、<c>colNo</c>、Excel 行号栏那样）：只读、追加 / 删除行后自动重排，
     /// 点这一格 = <b>选中整行</b>（按住 Ctrl 可多选 → 【删除行】一次删多行）。
     /// 「部材名」这一格单击时改为打开「选择部材名」窗口 <see cref="MemberNamePickerForm"/>
-    /// （<b>非模态</b>：开着也能操作本画面；候选列表像输入法那样每项带编号，按 1～9 / 0 或单击就立刻写进这一格）。
+    /// （<b>非模态</b>：开着也能操作本画面；选中别的格子时自动收起。候选列表像输入法那样每项带编号，按 1～9 / 0 或单击就立刻写进这一格）。
     /// 窗口里按同一行的「部品名」（<c>colPartName</c>）去置换表
     /// （SQL Server 表 <c>genpin.dbo.T_M_MergeName</c>）查到的部材名排在<b>第 1 号</b>，按 <c>1</c> 就写入。
     /// 删除 / 追加行以<b>选中单元格所在的行</b>为基准（<see cref="GetSelectedRows"/>）。
@@ -131,6 +132,17 @@ namespace MSIFAITOOLS
         private static readonly Color RowNumberForeColor = Color.FromArgb(112, 112, 112);
 
         /// <summary>
+        /// 选中「アセンブリ図」行时，它关联的「要領図」行的「行号」文字：红色（见 <see cref="ApplyRelatedYoryoHighlight"/>）。
+        /// </summary>
+        private static readonly Color RelatedYoryoNumberForeColor = Color.FromArgb(192, 0, 0);
+
+        /// <summary>
+        /// 「行号」加粗字体（整个画面共用一个，<see cref="OnFormClosed"/> 里释放；第一次用到时按表格字体生成）：
+        /// 选中「アセンブリ図」行时，关联的「要領図」行用它，见 <see cref="ApplyRelatedYoryoHighlight"/>。
+        /// </summary>
+        private Font _relatedYoryoBoldFont;
+
+        /// <summary>
         /// 「部材名」列的名字（<c>colMemberName</c>）：多值用 <c>|</c> 连接的那一列，
         /// 单击时打开「选择部材名」窗口（<see cref="MemberNamePickerForm"/>）。
         /// </summary>
@@ -163,6 +175,7 @@ namespace MSIFAITOOLS
         /// <summary>
         /// 「选择部材名」窗口（<see cref="MemberNamePickerForm"/>，<b>非模态</b>）：
         /// 窗口打开期间本画面照常操作（不会被挡住）；单击里面的一项就立刻写回当前「部材名」单元格。
+        /// 当前格换成「部材名」以外的单元格时自动隐藏（见 <see cref="DgvParts_CurrentCellChanged"/>）。
         /// </summary>
         private MemberNamePickerForm _memberNamePicker;
 
@@ -532,6 +545,9 @@ namespace MSIFAITOOLS
 
             // 表格重填了：行号对应的还是别的记录 → 允许对新表的第一行也闪红框
             _lastFlashRowIndex = -1;
+
+            // 重填后当前选中的行可能还是「アセンブリ図」→ 关联的要領図行 行号重新标红加粗
+            ApplyRelatedYoryoHighlight();
         }
 
         /// <summary>
@@ -610,7 +626,9 @@ namespace MSIFAITOOLS
             rowNumberColumn.DefaultCellStyle.ForeColor = RowNumberForeColor;
             rowNumberColumn.HeaderCell.ToolTipText =
                 "画面行号（追加 / 删除行后自动重排，不可编辑）。\n" +
-                "点这一格 = 选中整行；按住 Ctrl 点可以多选，【删除行】一次删多行。";
+                "点这一格 = 选中整行；按住 Ctrl 点可以多选，【删除行】一次删多行。\n" +
+                "选中「データ来源 = CMD分析・アッセンブリ図」的行时，与它关联的「CMD分析・要領図」的行\n" +
+                "（部品名相同，含右 / 左 等位置拆分的行）行号会变成红色 + 加粗。";
         }
 
         /// <summary>添加一个文本列。</summary>
@@ -794,6 +812,9 @@ namespace MSIFAITOOLS
             SetDirty(true);
             RenumberRows();
 
+            // 新插入的空白行成了当前行（不是アセンブリ図）→ 清掉上一次的行号标红
+            ApplyRelatedYoryoHighlight();
+
             if (dgvParts.IsHandleCreated)
             {
                 dgvParts.BeginEdit(true);
@@ -930,6 +951,9 @@ namespace MSIFAITOOLS
 
             RenumberRows();
             SetDirty(true);
+
+            // 删掉的行里可能有「アセンブリ図」的选中行 → 重新计算关联的要領図行标红
+            ApplyRelatedYoryoHighlight();
         }
 
         /// <summary>右键菜单「在上方插入行」：在右键那一行的上面插一行空白行。</summary>
@@ -1586,6 +1610,30 @@ namespace MSIFAITOOLS
             }
 
             FlashSelectedRowSource();
+
+            // 选中的是「アセンブリ図」的行时，把它关联的「要領図」行的行号标红加粗
+            ApplyRelatedYoryoHighlight();
+        }
+
+        /// <summary>
+        /// 表格的当前格换了（点格子 / 方向键 / 整行选中 / 重新填表都算）：
+        /// <b>不是「部材名」列</b>时把「选择部材名」窗口收起（<see cref="HideMemberNamePicker"/>）——
+        /// 面板只在点「部材名」时显示，选到别的格子就不再留在画面上，免得挡住视线、
+        /// 或让面板上的数字键误写到上一次的「部材名」格。只 <c>Hide</c> 不 <c>Close</c>，
+        /// 再点「部材名」会原样恢复（候选列表 / 检索内容都留着）。
+        /// <para>
+        /// 用 <c>CurrentCellChanged</c> 而不是 <c>SelectionChanged</c>：按住 Ctrl 点一个<b>已经选中</b>的格子时，
+        /// 选中集合没变、<c>SelectionChanged</c> 不一定触发，但当前格确实换了。
+        /// </para>
+        /// </summary>
+        private void DgvParts_CurrentCellChanged(object sender, EventArgs e)
+        {
+            DataGridViewCell currentCell = dgvParts.CurrentCell;
+
+            if (currentCell == null || !IsMemberNameColumn(currentCell.OwningColumn))
+            {
+                HideMemberNamePicker();
+            }
         }
 
         /// <summary>
@@ -1912,9 +1960,13 @@ namespace MSIFAITOOLS
         /// 「部品コード」单元格的粉红色（推定值）由 <see cref="ApplyPartCodeGuess"/> 单独设置，
         /// 单元格样式优先于行样式，所以两种颜色可以同时看到。
         /// </para>
+        /// <para>
+        /// 同时给这一行的所有单元格设置同一个悬停提示（数据来源 / 处理流程 / 来源 PDF / 是否分割，
+        /// 见 <see cref="ApplyRowToolTip"/>）。
+        /// </para>
         /// </summary>
         /// <param name="row">要处理的行（<c>null</c> / 新增行时忽略）。</param>
-        private static void ApplyRowStyle(DataGridViewRow row)
+        private void ApplyRowStyle(DataGridViewRow row)
         {
             if (row == null || row.IsNewRow)
             {
@@ -1932,7 +1984,10 @@ namespace MSIFAITOOLS
             }
 
             ApplyVerifyStatusCellStyle(row);
-            ApplySourceKindToolTip(row);
+            ApplyRowToolTip(row);
+            // ApplyRowToolTip 刚把整行来源提示写进了「部品コード」格；空白部品コード 的行原本还有
+            // 「怎么从部品マスタ 推定」的说明，这里重设一次，避免被整行提示盖掉（见 ApplyPartCodeGuess）
+            ApplyPartCodeGuess(row, false);
         }
 
         /// <summary>
@@ -1987,48 +2042,335 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 给「数据来源」单元格设置 ToolTip，说明这一行为什么用这个背景色
-        /// （颜色含义见 <see cref="ApplyRowStyle"/>）。
+        /// 给整行的每个单元格设置同一个悬停提示（鼠标停在明细行任意位置都会显示）：
+        /// 数据来源、处理流程、来源 PDF / 表格文件、図番 / 页码 / 番号、是否被按位置分割、
+        /// 校验状态、备注、登录时间，以及该行背景色的含义（见 <see cref="ResolveRowColorDescription"/>）。
+        /// <para>
+        /// 来源 PDF / 表格文件不在表格列里，从 <see cref="DataGridViewRow.Tag"/> 的
+        /// <see cref="PartBasicInfo"/> 取（<see cref="PopulateParts"/> 填入）；新追加、尚未保存的行
+        /// （<c>Tag == null</c>）退回画面当前打开的 PDF。
+        /// </para>
         /// </summary>
-        private static void ApplySourceKindToolTip(DataGridViewRow row)
+        private void ApplyRowToolTip(DataGridViewRow row)
         {
-            DataGridViewCell cell = row.Cells["colSourceKind"];
-
-            if (cell == null)
+            if (row == null || row.IsNewRow)
             {
                 return;
             }
 
+            string toolTip = BuildRowToolTip(row);
+
+            foreach (DataGridViewCell cell in row.Cells)
+            {
+                if (cell != null)
+                {
+                    cell.ToolTipText = toolTip;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 生成一行的悬停提示正文（多行文本，见 <see cref="ApplyRowToolTip"/>）。
+        /// 「部品コード」单元格的提示会由 <see cref="ApplyPartCodeGuess"/> 在前面追加推定说明，
+        /// 后面仍是这段整行来源提示。
+        /// </summary>
+        private string BuildRowToolTip(DataGridViewRow row)
+        {
+            PartBasicInfo part = row.Tag as PartBasicInfo;
+            string sourceKind = GetCellText(row, "colSourceKind");
+            string pageText = GetCellText(row, "colPage");
+            string numberText = GetCellText(row, "colNumber");
+            string remark = GetCellText(row, "colRemark");
+            string drawingNo = _drawingNo.Length > 0
+                ? _drawingNo
+                : (part == null ? string.Empty : part.DrawingNo);
+            string pdfFile = part == null ? string.Empty : (part.PdfFile ?? string.Empty);
+            string sourceFile = part == null ? string.Empty : (part.SourceFile ?? string.Empty);
+            string loginTime = GetCellText(row, "colLoginTime");
+            string verifyStatus = GetCellText(row, "colVerifyStatus");
+
+            if (pdfFile.Length == 0)
+            {
+                pdfFile = _pdfPath;
+            }
+
+            int page;
+            int.TryParse(pageText, out page);
+
+            StringBuilder builder = new StringBuilder();
+
+            builder.AppendLine(sourceKind.Length == 0
+                ? UiText.T("数据来源：（空）")
+                : UiText.F("数据来源：{0}", sourceKind));
+            builder.AppendLine(UiText.F("流程：{0}", ResolveSourceFlow(sourceKind)));
+
+            if (pdfFile.Length == 0)
+            {
+                builder.AppendLine(UiText.T("来源 PDF：（未记录）"));
+            }
+            else if (page > 0)
+            {
+                builder.AppendLine(UiText.F("来源 PDF：{0}（第 {1} 页）", pdfFile, page));
+            }
+            else
+            {
+                builder.AppendLine(UiText.F("来源 PDF：{0}", pdfFile));
+            }
+
+            if (sourceFile.Length > 0)
+            {
+                builder.AppendLine(UiText.F("来源表格文件：{0}", sourceFile));
+            }
+
+            builder.AppendLine(UiText.F("図番：{0}　页码：{1}　番号：{2}",
+                drawingNo.Length == 0 ? UiText.P("（未记录）", "（未記録）") : drawingNo,
+                pageText.Length == 0 ? "-" : pageText,
+                numberText.Length == 0 ? "-" : numberText));
+
+            if (IsSplitRow(row))
+            {
+                builder.AppendLine(UiText.F(
+                    "是否分割：是（备注含「{0}」→ 第 2 / 3 步按圈号 / 項目位置把原始 1 行拆成多条）",
+                    CmdCalloutPartSplitter.RemarkPositionPrefix));
+
+                string position = ExtractSplitPosition(remark);
+
+                if (position.Length > 0)
+                {
+                    builder.AppendLine(UiText.F("分割位置：{0}", position));
+                }
+            }
+            else
+            {
+                builder.AppendLine(UiText.T("是否分割：否（原始 1 行，未按圈号 / 位置拆分）"));
+            }
+
+            builder.AppendLine(UiText.F("校验状态：{0}",
+                verifyStatus.Length == 0 ? PartVerifyStatus.NotChecked : verifyStatus));
+
+            if (remark.Length > 0)
+            {
+                builder.AppendLine(UiText.F("备注：{0}", remark));
+            }
+
+            if (loginTime.Length > 0)
+            {
+                builder.AppendLine(UiText.F("登录时间：{0}", loginTime));
+            }
+
+            builder.AppendLine(ResolveRowColorDescription(row));
+
+            return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// 把「部品コード」专用的说明放在前面，后面接整行来源提示（<see cref="BuildRowToolTip"/>）：
+        /// 悬停「部品コード」时既能看推定理由，也能看数据来源 / 来源 PDF。
+        /// </summary>
+        private string AppendRowToolTip(DataGridViewRow row, string specificToolTip)
+        {
+            string rowToolTip = BuildRowToolTip(row);
+
+            return string.IsNullOrEmpty(specificToolTip)
+                ? rowToolTip
+                : specificToolTip + Environment.NewLine + Environment.NewLine + rowToolTip;
+        }
+
+        /// <summary>
+        /// 这一行的「数据来源」对应哪条处理流程（见 <see cref="PartSourceKind"/>）。
+        /// 不认识的来源（老数据 / 未保存的新行）返回无法还原流程的说明。
+        /// </summary>
+        private static string ResolveSourceFlow(string sourceKind)
+        {
+            if (string.Equals(sourceKind, PartSourceKind.AiAnalysis, StringComparison.Ordinal))
+            {
+                return UiText.T("AI 分析：PDF 分解生成 plu_table.txt → AI 读取部品表 → 按 xy.txt 坐标校验 → 登录部品基本信息");
+            }
+
+            if (string.Equals(sourceKind, PartSourceKind.CmdAssembly, StringComparison.Ordinal))
+            {
+                return UiText.T("CMD 分析 第 1 步「装配图部品入库」：读 plu_table.txt 的部品表 → 按 xy.txt 坐标校验 → 登录部品基本信息");
+            }
+
+            if (string.Equals(sourceKind, PartSourceKind.CmdYoryo, StringComparison.Ordinal))
+            {
+                return UiText.T("CMD 分析 第 3 步「要領図部品追加」：读 02_要領図_部品機能情報.csv → 与装配图同名部品合并 → 按項目位置拆分 → 挂在本図番下");
+            }
+
+            if (string.Equals(sourceKind, PartSourceKind.CmdTz, StringComparison.Ordinal) ||
+                string.Equals(sourceKind, PartSourceKind.LegacyCmdTz, StringComparison.Ordinal))
+            {
+                return UiText.T("CMD 分析 第 4 步「特注品追加」：读 特注品.csv / classify\\特注品.json → 写追加対応特注尺寸 → 挂在本図番下");
+            }
+
+            if (string.Equals(sourceKind, PartSourceKind.Manual, StringComparison.Ordinal))
+            {
+                return UiText.T("画面【追加行】手工录入 → 保存时写「手工追加」");
+            }
+
+            return UiText.T("未记录（老数据 / 未保存的新行，无法还原流程）");
+        }
+
+        /// <summary>
+        /// 从备注里取出「位置：」后面的那段位置说明（到下一个「；」为止）。
+        /// 备注里没有「位置：」时返回空字符串（见 <see cref="IsSplitRow"/>）。
+        /// </summary>
+        private static string ExtractSplitPosition(string remark)
+        {
+            int index = remark.IndexOf(CmdCalloutPartSplitter.RemarkPositionPrefix, StringComparison.Ordinal);
+
+            if (index < 0)
+            {
+                return string.Empty;
+            }
+
+            string position = remark.Substring(
+                index + CmdCalloutPartSplitter.RemarkPositionPrefix.Length);
+            int end = position.IndexOf('；');
+
+            if (end >= 0)
+            {
+                position = position.Substring(0, end);
+            }
+
+            return position.Trim();
+        }
+
+        /// <summary>
+        /// 说明这一行为什么用这个背景色（颜色含义见 <see cref="ApplyRowStyle"/>），
+        /// 作为悬停提示的最后一行。
+        /// </summary>
+        private static string ResolveRowColorDescription(DataGridViewRow row)
+        {
             if (IsSpecialNoteRow(row))
             {
-                cell.ToolTipText = UiText.F("行背景 淡粉 = 特注（「特注」= {0}）", PartBasicInfo.SpecialNoteMark);
-                return;
+                return UiText.F("行背景 淡粉 = 特注（「特注」= {0}）", PartBasicInfo.SpecialNoteMark);
             }
 
             if (IsSplitRow(row))
             {
-                cell.ToolTipText = UiText.F("行背景 淡紫 = 被分割的行（备注含「{0}」，按圈号 / 位置 1 行拆成多条）",
+                return UiText.F("行背景 淡紫 = 被分割的行（备注含「{0}」，按圈号 / 位置 1 行拆成多条）",
                     CmdCalloutPartSplitter.RemarkPositionPrefix);
-                return;
             }
 
             string sourceKind = GetCellText(row, "colSourceKind");
 
             if (string.Equals(sourceKind, PartSourceKind.CmdAssembly, StringComparison.Ordinal))
             {
-                cell.ToolTipText = UiText.F("行背景 淡绿 = 数据来源「{0}」", PartSourceKind.CmdAssembly);
-                return;
+                return UiText.F("行背景 淡绿 = 数据来源「{0}」", PartSourceKind.CmdAssembly);
             }
 
             if (string.Equals(sourceKind, PartSourceKind.CmdYoryo, StringComparison.Ordinal))
             {
-                cell.ToolTipText = UiText.F("行背景 淡蓝 = 数据来源「{0}」", PartSourceKind.CmdYoryo);
+                return UiText.F("行背景 淡蓝 = 数据来源「{0}」", PartSourceKind.CmdYoryo);
+            }
+
+            return sourceKind.Length == 0
+                ? UiText.T("数据来源为空（老数据 / 未写来源）→ 行背景 白色")
+                : UiText.F("行背景 白色 = 数据来源「{0}」（不属于上面几类）", sourceKind);
+        }
+
+        /// <summary>
+        /// 当前选中的是「アセンブリ図」的行时，把与它<b>关联的「要領図」行的「行号」文字标红 + 加粗</b>
+        /// （其余行恢复原来的浅灰 / 常规字体）。
+        /// <para>
+        /// <b>哪一行算关联</b>：与【CMD 分析】第 3 步的合并规则同一套
+        /// （<see cref="CmdPartAnalysisService.IsSamePartNameForLink"/>）——
+        /// 「部品名」按 NFKC 规整（忽略空白 / 全角半角 / 英文大小写）后相同，
+        /// 或去掉开头的右 / 左 / 中 / 上 / 下 位置前缀后相同
+        /// （第 2 / 3 步按位置拆出来的「右縦枠」「左縦枠」也能对上装配图的「縦枠」）。
+        /// </para>
+        /// <para>
+        /// 只改「行号」单元格的字体 / 文字颜色，<b>不动背景色和悬停提示</b>
+        /// （背景色见 <see cref="ApplyRowStyle"/>，悬停提示见 <see cref="ApplyRowToolTip"/>）。
+        /// 选中行被删除 / 改成别的来源后，下一次调用会把标过的行号恢复原样。
+        /// </para>
+        /// </summary>
+        private void ApplyRelatedYoryoHighlight()
+        {
+            if (dgvParts == null || dgvParts.Columns[RowNumberColumnName] == null)
+            {
                 return;
             }
 
-            cell.ToolTipText = sourceKind.Length == 0
-                ? UiText.T("数据来源为空（老数据 / 未写来源）→ 行背景 白色")
-                : UiText.F("行背景 白色 = 数据来源「{0}」（不属于上面几类）", sourceKind);
+            // 先把上一次标过的行号恢复原样（只碰字体被我们改过的格子，不逐行重设样式）
+            foreach (DataGridViewRow row in dgvParts.Rows)
+            {
+                DataGridViewCell numberCell = row.Cells[RowNumberColumnName];
+
+                if (numberCell == null || numberCell.Style.Font == null)
+                {
+                    continue;
+                }
+
+                numberCell.Style.Font = null;
+                numberCell.Style.ForeColor = RowNumberForeColor;
+            }
+
+            DataGridViewCell currentCell = dgvParts.CurrentCell;
+            DataGridViewRow selectedRow = currentCell == null ? null : currentCell.OwningRow;
+
+            if (selectedRow == null || selectedRow.IsNewRow ||
+                !string.Equals(GetCellText(selectedRow, "colSourceKind"), PartSourceKind.CmdAssembly,
+                    StringComparison.Ordinal))
+            {
+                // 选中的不是「アセンブリ図」的行（或没有选中行）→ 不需要标
+                return;
+            }
+
+            string assemblyPartName = GetCellText(selectedRow, PartNameColumnName);
+
+            if (assemblyPartName.Length == 0)
+            {
+                return;
+            }
+
+            Font boldFont = ResolveRelatedYoryoBoldFont();
+
+            foreach (DataGridViewRow row in dgvParts.Rows)
+            {
+                if (row.IsNewRow || ReferenceEquals(row, selectedRow))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(GetCellText(row, "colSourceKind"), PartSourceKind.CmdYoryo,
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!CmdPartAnalysisService.IsSamePartNameForLink(assemblyPartName,
+                        GetCellText(row, PartNameColumnName)))
+                {
+                    continue;
+                }
+
+                DataGridViewCell numberCell = row.Cells[RowNumberColumnName];
+
+                if (numberCell == null)
+                {
+                    continue;
+                }
+
+                numberCell.Style.ForeColor = RelatedYoryoNumberForeColor;
+                numberCell.Style.Font = boldFont;
+            }
+        }
+
+        /// <summary>
+        /// 「行号」加粗字体：整个画面只建一个（<see cref="OnFormClosed"/> 里释放），
+        /// 避免每次换行都 new 一个 Font（GDI 句柄越用越多）。
+        /// </summary>
+        private Font ResolveRelatedYoryoBoldFont()
+        {
+            if (_relatedYoryoBoldFont == null)
+            {
+                Font baseFont = dgvParts.Font ?? Control.DefaultFont;
+                _relatedYoryoBoldFont = new Font(baseFont, FontStyle.Bold);
+            }
+
+            return _relatedYoryoBoldFont;
         }
 
         /// <summary>
@@ -2096,8 +2438,9 @@ namespace MSIFAITOOLS
             if (GetCellText(row, "colPartCode").Length > 0)
             {
                 // 已经有部品コード（图纸 / CSV / 用户填写）→ 不是推定值，恢复普通背景
+                // 提示仍保留整行来源说明（不然悬停这一格看不到数据来源）
                 cell.Style.BackColor = Color.Empty;
-                cell.ToolTipText = string.Empty;
+                cell.ToolTipText = BuildRowToolTip(row);
 
                 return;
             }
@@ -2109,8 +2452,9 @@ namespace MSIFAITOOLS
 
             if (partName.Length == 0)
             {
-                cell.ToolTipText = UiText.F("部品コード 为空，部品名 也为空 → 无法从部品マスタ（{0}）推定，请手工输入",
-                    CmdPartCodeNormalizer.FileName);
+                cell.ToolTipText = AppendRowToolTip(row, UiText.F(
+                    "部品コード 为空，部品名 也为空 → 无法从部品マスタ（{0}）推定，请手工输入",
+                    CmdPartCodeNormalizer.FileName));
 
                 return;
             }
@@ -2124,9 +2468,9 @@ namespace MSIFAITOOLS
                 if (!assignValue)
                 {
                     // 用户正在手工改部品コード → 只告诉他マスタ里是什么，不替他填
-                    cell.ToolTipText = UiText.F(
+                    cell.ToolTipText = AppendRowToolTip(row, UiText.F(
                         "部品コード 为空 → 部品名「{0}」在部品マスタ 里是 {1}（{2} 第 {3} 行）→ 需要时请手工输入",
-                        partName, found.PartCode, found.FileName, found.RowNumber);
+                        partName, found.PartCode, found.FileName, found.RowNumber));
 
                     return;
                 }
@@ -2145,9 +2489,9 @@ namespace MSIFAITOOLS
                     _suppressGridEvents = previous;
                 }
 
-                cell.ToolTipText = UiText.F(
+                cell.ToolTipText = AppendRowToolTip(row, UiText.F(
                     "部品コード 为空 → 按部品名「{0}」从部品マスタ 推定：{1}（{2} 第 {3} 行）。请确认。",
-                    partName, found.PartCode, found.FileName, found.RowNumber);
+                    partName, found.PartCode, found.FileName, found.RowNumber));
 
                 return;
             }
@@ -2161,16 +2505,16 @@ namespace MSIFAITOOLS
                     codes.Add(candidate.PartCode);
                 }
 
-                cell.ToolTipText = UiText.F(
+                cell.ToolTipText = AppendRowToolTip(row, UiText.F(
                     "部品マスタ 里「{0}」有 {1} 个部品コード：{2} → 请按材質 / 色 手工选择",
-                    partName, candidates.Count, string.Join(" / ", codes.ToArray()));
+                    partName, candidates.Count, string.Join(" / ", codes.ToArray())));
 
                 return;
             }
 
-            cell.ToolTipText = UiText.F(
+            cell.ToolTipText = AppendRowToolTip(row, UiText.F(
                 "部品マスタ（{0}）里没有「{1}」→ 请手工输入部品コード",
-                CmdPartCodeNormalizer.FileName, partName);
+                CmdPartCodeNormalizer.FileName, partName));
         }
 
         /// <summary>
@@ -2463,7 +2807,8 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 点「部材名」单元格时打开「选择部材名」窗口（<see cref="MemberNamePickerForm"/>）。
-        /// 窗口是<b>非模态</b>的：开着的时候本画面照常操作（改别的格子 / 换行 / 看图纸都不受影响）；
+        /// 窗口是<b>非模态</b>的：开着的时候本画面照常操作（换行 / 看图纸都不受影响）；
+        /// 当前格换成「部材名」以外的单元格时立即隐藏（<see cref="DgvParts_CurrentCellChanged"/> → <see cref="HideMemberNamePicker"/>）。
         /// 单击窗口里的一项，就立刻把这一项写进这一格（见 <see cref="MemberNamePicker_MemberNamePicked"/>），
         /// 不用勾选、也不用点确定。窗口已经开着时只把「写入目标」换成这一次点的格子。
         /// 窗口被「部材名」单元格的内嵌编辑（F2 / 双击 / 直接打字）收起过
@@ -2716,10 +3061,12 @@ namespace MSIFAITOOLS
         }
 
         /// <summary>
-        /// 收起「选择部材名」窗口（<b>不关闭</b>）：「部材名」单元格进入<b>内嵌编辑</b>
-        /// （F2 / 直接打字 / 双击）时用 —— 编辑框和候选面板同时开着，
-        /// 既挡视线，面板上的数字键 / 滑轮还会把值写进正在编辑的这一格
-        /// （见 <see cref="DgvParts_CellBeginEdit"/>）。
+        /// 收起「选择部材名」窗口（<b>不关闭</b>），两种时候用：
+        /// ① 「部材名」单元格进入<b>内嵌编辑</b>（F2 / 直接打字 / 双击）——
+        /// 编辑框和候选面板同时开着，既挡视线，面板上的数字键 / 滑轮还会把值写进正在编辑的这一格
+        /// （见 <see cref="DgvParts_CellBeginEdit"/>）；
+        /// ② 表格的当前格换成<b>「部材名」以外</b>的单元格
+        /// （见 <see cref="DgvParts_CurrentCellChanged"/>）—— 面板只在点「部材名」时显示。
         /// <para>
         /// 再点「部材名」单元格会重新显示（<see cref="ShowMemberNamePicker"/> 里有
         /// <c>!Visible</c> 就 <c>Show(this)</c> 的分支），所以这里只 <c>Hide</c> 不 <c>Close</c>：
@@ -2836,6 +3183,10 @@ namespace MSIFAITOOLS
             {
                 SetDirty(true);
             }
+
+            // 部品名 / 数据来源 变了 → 「アセンブリ図 → 要領図」的关联可能变了；
+            // ApplyRowStyle 也会把行号文字色重置成浅灰 → 这里统一重算一次
+            ApplyRelatedYoryoHighlight();
         }
 
         /// <summary>
@@ -3001,6 +3352,24 @@ namespace MSIFAITOOLS
 
             // 「部品名」候选窗口同理（Owned 窗口，隐藏后复用，这里释放掉）
             ClosePartNameCandidatePopup();
+
+            // 「行号」加粗字体是代码创建的（不在 components 里）→ 先把引用清掉再释放，
+            // 免得表格在 Dispose 过程中还拿已释放的 Font 重绘
+            if (_relatedYoryoBoldFont != null)
+            {
+                foreach (DataGridViewRow row in dgvParts.Rows)
+                {
+                    DataGridViewCell numberCell = row.Cells[RowNumberColumnName];
+
+                    if (numberCell != null && ReferenceEquals(numberCell.Style.Font, _relatedYoryoBoldFont))
+                    {
+                        numberCell.Style.Font = null;
+                    }
+                }
+
+                _relatedYoryoBoldFont.Dispose();
+                _relatedYoryoBoldFont = null;
+            }
 
             // Close() 会触发 FormClosed，所以先把引用取到局部变量再关闭
             if (preview != null && !preview.IsDisposed)

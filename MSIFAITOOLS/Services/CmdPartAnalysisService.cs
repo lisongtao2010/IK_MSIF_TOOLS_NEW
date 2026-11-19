@@ -1842,10 +1842,11 @@ namespace MSIFAITOOLS.Services
         /// <para>
         /// 库里的「部品名」登录时已转成半角片假名（见 <see cref="JapaneseTextConverter.ToHalfWidthKatakana"/>），
         /// PDF / Excel 原文多为全角，所以 NFKC 不能省：<c>上ﾚｰﾙ</c> 与 <c>上レール</c> 要当成同一个名字
-        /// （第 3 步把要領図行与アッセンブリ図行合并时靠这里比对）。
+        /// （第 3 步把要領図行与アッセンブリ図行合并时靠这里比对；部品基本信息画面的
+        /// 「选中アッセンブリ図行 → 关联要領図行 标红」也用它，见 <see cref="IsSamePartNameForLink"/>）。
         /// </para>
         /// </summary>
-        private static string NormalizePartName(string value)
+        internal static string NormalizePartName(string value)
         {
             if (string.IsNullOrEmpty(value))
             {
@@ -1876,6 +1877,42 @@ namespace MSIFAITOOLS.Services
             }
 
             return builder.ToString();
+        }
+
+        /// <summary>
+        /// 两个「部品名」是否算<b>同一个部品</b>（部品基本信息画面：选中「アッセンブリ図」行时，
+        /// 用这个判定哪些「要領図」行是它关联的明细，见 <c>PartBasicInfoForm.ApplyRelatedYoryoHighlight</c>）。
+        /// <para>
+        /// 判定与第 3 步的合并 / 补区分完全同一套：
+        /// <see cref="NormalizePartName"/> 规整后相同；或去掉开头的右 / 左 / 中 / 上 / 下
+        /// 位置前缀后相同（第 2 / 3 步按位置拆出来的「右縦枠」「左縦枠」也能对上装配图的「縦枠」）。
+        /// 任一为空时返回 <c>false</c>（空部品名不参与关联）。
+        /// </para>
+        /// </summary>
+        internal static bool IsSamePartNameForLink(string left, string right)
+        {
+            string a = NormalizePartName(left);
+            string b = NormalizePartName(right);
+
+            if (a.Length == 0 || b.Length == 0)
+            {
+                return false;
+            }
+
+            if (string.Equals(a, b, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return string.Equals(TrimPositionPrefix(a), TrimPositionPrefix(b), StringComparison.Ordinal);
+        }
+
+        /// <summary>去掉开头的单个位置前缀（<see cref="PositionPrefixChars"/>：右 / 左 / 中 / 上 / 下）。</summary>
+        private static string TrimPositionPrefix(string normalizedName)
+        {
+            return normalizedName.Length > 1 && Array.IndexOf(PositionPrefixChars, normalizedName[0]) >= 0
+                ? normalizedName.Substring(1)
+                : normalizedName;
         }
 
         /// <summary>取该図番第 1 页已有的最大「番号」+1（没有行时返回 1）。</summary>

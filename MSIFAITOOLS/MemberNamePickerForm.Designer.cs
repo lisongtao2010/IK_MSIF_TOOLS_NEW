@@ -47,7 +47,7 @@ namespace MSIFAITOOLS
             this.pnlSearch.Dock = System.Windows.Forms.DockStyle.Top;
             this.pnlSearch.Location = new System.Drawing.Point(1, 1);
             this.pnlSearch.Name = "pnlSearch";
-            this.pnlSearch.Size = new System.Drawing.Size(378, 54);
+            this.pnlSearch.Size = new System.Drawing.Size(468, 54);
             this.pnlSearch.TabIndex = 0;
             this.pnlSearch.MouseDown += new System.Windows.Forms.MouseEventHandler(this.DragArea_MouseDown);
             this.pnlSearch.Paint += new System.Windows.Forms.PaintEventHandler(this.PnlSearch_Paint);
@@ -62,7 +62,7 @@ namespace MSIFAITOOLS
             this.txtFilter.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(32)))), ((int)(((byte)(33)))), ((int)(((byte)(36)))));
             this.txtFilter.Location = new System.Drawing.Point(46, 15);
             this.txtFilter.Name = "txtFilter";
-            this.txtFilter.Size = new System.Drawing.Size(310, 25);
+            this.txtFilter.Size = new System.Drawing.Size(400, 25);
             this.txtFilter.TabIndex = 0;
             this.txtFilter.TextChanged += new System.EventHandler(this.TxtFilter_TextChanged);
             this.txtFilter.GotFocus += new System.EventHandler(this.TxtFilter_FocusChanged);
@@ -75,22 +75,26 @@ namespace MSIFAITOOLS
             | System.Windows.Forms.AnchorStyles.Right)));
             this.lstNames.BackColor = System.Drawing.Color.White;
             this.lstNames.BorderStyle = System.Windows.Forms.BorderStyle.None;
+            this.lstNames.ColumnWidth = 229;
             this.lstNames.DrawMode = System.Windows.Forms.DrawMode.OwnerDrawFixed;
             this.lstNames.Font = new System.Drawing.Font("微软雅黑", 11F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lstNames.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(32)))), ((int)(((byte)(33)))), ((int)(((byte)(36)))));
             this.lstNames.FormattingEnabled = true;
+            this.lstNames.HorizontalScrollbar = false;
             this.lstNames.IntegralHeight = false;
-            this.lstNames.ItemHeight = 30;
+            this.lstNames.ItemHeight = 22;
             this.lstNames.Location = new System.Drawing.Point(1, 55);
+            this.lstNames.MultiColumn = true;
             this.lstNames.Name = "lstNames";
             this.lstNames.SelectionMode = System.Windows.Forms.SelectionMode.One;
-            this.lstNames.Size = new System.Drawing.Size(378, 422);
+            this.lstNames.Size = new System.Drawing.Size(468, 220);
             this.lstNames.TabIndex = 1;
             this.lstNames.TabStop = false;
             this.lstNames.DrawItem += new System.Windows.Forms.DrawItemEventHandler(this.LstNames_DrawItem);
             this.lstNames.MouseClick += new System.Windows.Forms.MouseEventHandler(this.LstNames_MouseClick);
             this.lstNames.MouseMove += new System.Windows.Forms.MouseEventHandler(this.LstNames_MouseMove);
             this.lstNames.MouseLeave += new System.EventHandler(this.LstNames_MouseLeave);
+            this.lstNames.Resize += new System.EventHandler(this.LstNames_Resize);
             // 
             // pnlFooter
             // 
@@ -102,9 +106,9 @@ namespace MSIFAITOOLS
             this.pnlFooter.Controls.Add(this.lblHint);
             this.pnlFooter.Controls.Add(this.btnCancel);
             this.pnlFooter.Dock = System.Windows.Forms.DockStyle.Bottom;
-            this.pnlFooter.Location = new System.Drawing.Point(1, 477);
+            this.pnlFooter.Location = new System.Drawing.Point(1, 277);
             this.pnlFooter.Name = "pnlFooter";
-            this.pnlFooter.Size = new System.Drawing.Size(378, 34);
+            this.pnlFooter.Size = new System.Drawing.Size(468, 34);
             this.pnlFooter.TabIndex = 2;
             this.pnlFooter.MouseDown += new System.Windows.Forms.MouseEventHandler(this.DragArea_MouseDown);
             this.pnlFooter.Paint += new System.Windows.Forms.PaintEventHandler(this.PnlFooter_Paint);
@@ -136,7 +140,7 @@ namespace MSIFAITOOLS
             this.btnPrevPage.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnPrevPage.Font = new System.Drawing.Font("微软雅黑", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnPrevPage.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(95)))), ((int)(((byte)(99)))), ((int)(((byte)(104)))));
-            this.btnPrevPage.Location = new System.Drawing.Point(162, 5);
+            this.btnPrevPage.Location = new System.Drawing.Point(212, 5);
             this.btnPrevPage.Name = "btnPrevPage";
             this.btnPrevPage.Size = new System.Drawing.Size(18, 24);
             this.btnPrevPage.TabIndex = 1;
@@ -150,7 +154,7 @@ namespace MSIFAITOOLS
             this.lblPage.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.lblPage.Font = new System.Drawing.Font("微软雅黑", 8.5F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblPage.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(95)))), ((int)(((byte)(99)))), ((int)(((byte)(104)))));
-            this.lblPage.Location = new System.Drawing.Point(182, 0);
+            this.lblPage.Location = new System.Drawing.Point(232, 0);
             this.lblPage.Name = "lblPage";
             this.lblPage.Size = new System.Drawing.Size(28, 34);
             this.lblPage.TabIndex = 2;
@@ -170,7 +174,7 @@ namespace MSIFAITOOLS
             this.btnNextPage.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnNextPage.Font = new System.Drawing.Font("微软雅黑", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnNextPage.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(95)))), ((int)(((byte)(99)))), ((int)(((byte)(104)))));
-            this.btnNextPage.Location = new System.Drawing.Point(212, 5);
+            this.btnNextPage.Location = new System.Drawing.Point(262, 5);
             this.btnNextPage.Name = "btnNextPage";
             this.btnNextPage.Size = new System.Drawing.Size(18, 24);
             this.btnNextPage.TabIndex = 3;
@@ -184,11 +188,11 @@ namespace MSIFAITOOLS
             this.lblHint.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.lblHint.Font = new System.Drawing.Font("微软雅黑", 8.5F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblHint.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(154)))), ((int)(((byte)(160)))), ((int)(((byte)(166)))));
-            this.lblHint.Location = new System.Drawing.Point(232, 0);
+            this.lblHint.Location = new System.Drawing.Point(287, 0);
             this.lblHint.Name = "lblHint";
-            this.lblHint.Size = new System.Drawing.Size(100, 34);
+            this.lblHint.Size = new System.Drawing.Size(116, 34);
             this.lblHint.TabIndex = 1;
-            this.lblHint.Text = "1-9 · ↑↓ · Enter";
+            this.lblHint.Text = "1-9 · ←→↑↓ · Enter";
             this.lblHint.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
             this.lblHint.MouseDown += new System.Windows.Forms.MouseEventHandler(this.DragArea_MouseDown);
             // 
@@ -203,7 +207,7 @@ namespace MSIFAITOOLS
             this.btnCancel.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnCancel.Font = new System.Drawing.Font("微软雅黑", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btnCancel.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(95)))), ((int)(((byte)(99)))), ((int)(((byte)(104)))));
-            this.btnCancel.Location = new System.Drawing.Point(336, 5);
+            this.btnCancel.Location = new System.Drawing.Point(426, 5);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(24, 24);
             this.btnCancel.TabIndex = 2;
@@ -217,7 +221,7 @@ namespace MSIFAITOOLS
             this.pnlResize.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.pnlResize.BackColor = System.Drawing.Color.White;
             this.pnlResize.Cursor = System.Windows.Forms.Cursors.SizeNWSE;
-            this.pnlResize.Location = new System.Drawing.Point(365, 497);
+            this.pnlResize.Location = new System.Drawing.Point(455, 295);
             this.pnlResize.Name = "pnlResize";
             this.pnlResize.Size = new System.Drawing.Size(14, 14);
             this.pnlResize.TabIndex = 3;
@@ -230,7 +234,7 @@ namespace MSIFAITOOLS
             // 
             this.BackColor = System.Drawing.Color.White;
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(380, 512);
+            this.ClientSize = new System.Drawing.Size(470, 310);
             this.Controls.Add(this.lstNames);
             this.Controls.Add(this.pnlSearch);
             this.Controls.Add(this.pnlFooter);
@@ -238,7 +242,7 @@ namespace MSIFAITOOLS
             this.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.None;
             this.KeyPreview = true;
-            this.MinimumSize = new System.Drawing.Size(320, 400);
+            this.MinimumSize = new System.Drawing.Size(470, 310);
             this.Name = "MemberNamePickerForm";
             this.Padding = new System.Windows.Forms.Padding(1);
             this.ShowIcon = false;

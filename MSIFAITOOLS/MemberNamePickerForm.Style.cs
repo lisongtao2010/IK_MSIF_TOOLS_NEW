@@ -35,19 +35,22 @@ namespace MSIFAITOOLS
         private static readonly Color GripColor = Color.FromArgb(189, 193, 198);
 
         /// <summary>候補一行的字体（有「Yu Gothic UI」就用它，日文部材名更像输入法面板；没有就退回微软雅黑）。</summary>
-        private static readonly Font RowFont = CreateUiFont(11F);
+        private static readonly Font RowFont = CreateUiFont(10.5F);
 
         /// <summary>候補前面编号的字体（比正文小一号、灰色）。</summary>
         private static readonly Font NumberFont = CreateUiFont(9F);
 
-        /// <summary>候補文字的左端（左边留给编号）。</summary>
-        private const int RowTextLeft = 34;
+        /// <summary>候補文字的左端（每一列都留出整体位置编号的位置，最多 4 位数）。</summary>
+        private const int RowTextLeft = 46;
 
-        /// <summary>编号的右端（右对齐，1 位数字看起来不会飘）。</summary>
-        private const int NumberRight = 28;
+        /// <summary>编号的右端（右对齐；2～4 位序号也不会挤到部材名）。</summary>
+        private const int NumberRight = 40;
+
+        /// <summary>编号为空（超出这一页范围）时，部材名从列内左侧留一点空白就开始。</summary>
+        private const int UnnumberedTextLeft = 10;
 
         /// <summary>选中行 / 悬停行色块离列表左右边界的距离。</summary>
-        private const int RowInset = 6;
+        private const int RowInset = 4;
 
         /// <summary>检索框（灰色圆角块）的高度 / 上边距 / 圆角半径。</summary>
         private const int SearchPillHeight = 32;
@@ -232,7 +235,7 @@ namespace MSIFAITOOLS
             pnlResize.Capture = true;
         }
 
-        /// <summary>拖动手柄时按鼠标位移改窗口大小（不小于设计器里写的最小尺寸）。</summary>
+        /// <summary>拖动手柄时按鼠标位移只改宽度（高度固定：一览正好两列 × 10 行）。</summary>
         private void PnlResize_MouseMove(object sender, MouseEventArgs e)
         {
             if (!_resizing)
@@ -241,21 +244,14 @@ namespace MSIFAITOOLS
             }
 
             Point now = Cursor.Position;
-            Size size = new Size(
-                _resizeStartSize.Width + (now.X - _resizeStart.X),
-                _resizeStartSize.Height + (now.Y - _resizeStart.Y));
+            int width = _resizeStartSize.Width + (now.X - _resizeStart.X);
 
-            if (size.Width < MinimumSize.Width)
+            if (width < MinimumSize.Width)
             {
-                size.Width = MinimumSize.Width;
+                width = MinimumSize.Width;
             }
 
-            if (size.Height < MinimumSize.Height)
-            {
-                size.Height = MinimumSize.Height;
-            }
-
-            Size = size;
+            Size = new Size(width, Height);
         }
 
         /// <summary>松开鼠标 = 结束改大小。</summary>
@@ -305,19 +301,22 @@ namespace MSIFAITOOLS
             }
 
             string number = ShortcutNumber(e.Index);
+            int textLeft = UnnumberedTextLeft;
 
             if (number.Length > 0)
             {
-                Rectangle numberRect = new Rectangle(row.X + 10, row.Y, NumberRight - 10, row.Height);
+                Rectangle numberRect = new Rectangle(row.X + 6, row.Y, NumberRight - 6, row.Height);
 
                 TextRenderer.DrawText(graphics, number, NumberFont, numberRect,
                     selected ? RowNumberSelectedColor : RowNumberColor,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+
+                textLeft = RowTextLeft;
             }
 
             string text = lstNames.Items[e.Index] as string ?? string.Empty;
-            Rectangle textRect = new Rectangle(row.X + RowTextLeft, row.Y,
-                Math.Max(0, row.Width - RowTextLeft - 10), row.Height);
+            Rectangle textRect = new Rectangle(row.X + textLeft, row.Y,
+                Math.Max(0, row.Width - textLeft - 10), row.Height);
 
             TextRenderer.DrawText(graphics, text, RowFont, textRect, RowTextColor,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
@@ -351,7 +350,25 @@ namespace MSIFAITOOLS
             _hoverIndex = -1;
         }
 
-        /// <summary>只重画一行（整表重画会闪）。</summary>
+        /// <summary>列表宽度变了：每列占一半（双列显示，列宽始终跟着窗口走）。</summary>
+        private void LstNames_Resize(object sender, EventArgs e)
+        {
+            int width = lstNames.ClientSize.Width;
+
+            if (width <= 0)
+            {
+                return;
+            }
+
+            int columnWidth = Math.Max(120, width / ColumnCount);
+
+            if (lstNames.ColumnWidth != columnWidth)
+            {
+                lstNames.ColumnWidth = columnWidth;
+            }
+        }
+
+        /// <summary>只重画一行（整表重画会闪）。多列时由 <see cref="ListBox.GetItemRectangle"/> 取这一项所在列的位置。</summary>
         /// <param name="index">行的位置（从 0 开始；-1 = 忽略）。</param>
         private void InvalidateRow(int index)
         {
@@ -360,43 +377,32 @@ namespace MSIFAITOOLS
                 return;
             }
 
-            int y = (index - lstNames.TopIndex) * lstNames.ItemHeight;
+            Rectangle row = lstNames.GetItemRectangle(index);
 
-            if (y + lstNames.ItemHeight <= 0 || y >= lstNames.ClientSize.Height)
+            if (lstNames.ClientRectangle.IntersectsWith(row))
             {
-                return;
+                lstNames.Invalidate(row);
             }
-
-            lstNames.Invalidate(new Rectangle(0, y, lstNames.ClientSize.Width, lstNames.ItemHeight));
         }
 
-        /// <summary>列表里一次能看到几行（窗口缩到最小时让选中行露出来用；正常 10 项都看得见）。</summary>
-        private int VisibleRowCount()
-        {
-            int itemHeight = Math.Max(1, lstNames.ItemHeight);
-
-            return Math.Max(1, lstNames.ClientSize.Height / itemHeight);
-        }
-
-        /// <summary>把第 <paramref name="index"/> 行滚进可视范围（键盘 ↑↓ / 数字键选的时候用）。</summary>
-        /// <param name="index">行的位置（从 0 开始）。</param>
+        /// <summary>
+        /// 把第 <paramref name="index"/> 项滚进可视范围（键盘 ↑↓ / 数字键选的时候用）。
+        /// 双列显示时「滚动」是按列走的：切到这一项所在的那一列（<c>TopIndex</c> = 列首项）。
+        /// </summary>
+        /// <param name="index">项的位置（从 0 开始）。</param>
         private void EnsureRowVisible(int index)
         {
-            if (index < 0)
+            if (index < 0 || index >= lstNames.Items.Count)
             {
                 return;
             }
 
-            int visible = VisibleRowCount();
+            if (lstNames.ClientRectangle.IntersectsWith(lstNames.GetItemRectangle(index)))
+            {
+                return;
+            }
 
-            if (index < lstNames.TopIndex)
-            {
-                lstNames.TopIndex = index;
-            }
-            else if (index >= lstNames.TopIndex + visible)
-            {
-                lstNames.TopIndex = Math.Max(0, index - visible + 1);
-            }
+            lstNames.TopIndex = (index / RowsPerColumn) * RowsPerColumn;
         }
 
         // ------------------------------------------------------------------
@@ -453,7 +459,7 @@ namespace MSIFAITOOLS
 
         /// <summary>
         /// 列表不拿焦点（焦点一直在检索框里），滚轮消息本来会滚到别的控件上；
-        /// 鼠标停在候補一览上时把滚轮接过来<b>翻页</b>（一页 10 项，列表里没有滚动条）。
+        /// 鼠标停在候補一览上时把滚轮接过来<b>翻页</b>（一页 20 项 = 两列 × 每列 10 项，列表里没有滚动条）。
         /// </summary>
         /// <param name="wheelDelta">滚轮增量（正 = 往上滚 = 上一页）。</param>
         /// <returns>true = 已经处理（不要再传给别的控件）。</returns>

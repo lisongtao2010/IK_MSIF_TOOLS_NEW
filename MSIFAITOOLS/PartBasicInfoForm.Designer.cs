@@ -160,6 +160,7 @@ namespace MSIFAITOOLS
             this.dgvParts.CellMouseDown += new System.Windows.Forms.DataGridViewCellMouseEventHandler(this.DgvParts_CellMouseDown);
             this.dgvParts.CellValueChanged += new System.Windows.Forms.DataGridViewCellEventHandler(this.DgvParts_CellValueChanged);
             this.dgvParts.SelectionChanged += new System.EventHandler(this.DgvParts_SelectionChanged);
+            this.dgvParts.CurrentCellChanged += new System.EventHandler(this.DgvParts_CurrentCellChanged);
             this.dgvParts.ColumnWidthChanged += new System.Windows.Forms.DataGridViewColumnEventHandler(this.DgvParts_HidePartNameCandidates);
             this.dgvParts.EditingControlShowing += new System.Windows.Forms.DataGridViewEditingControlShowingEventHandler(this.DgvParts_EditingControlShowing);
             this.dgvParts.KeyDown += new System.Windows.Forms.KeyEventHandler(this.DgvParts_KeyDown);
