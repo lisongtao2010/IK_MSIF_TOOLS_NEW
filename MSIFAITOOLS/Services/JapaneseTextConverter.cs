@@ -8,12 +8,14 @@ namespace MSIFAITOOLS.Services
     /// 日文文本的宽度转换 / 兼容性归一化。
     ///
     /// <para>
-    /// <b><see cref="ToHalfWidthKatakana"/></b>：全角片假名 → 半角片假名。
+    /// <b><see cref="ToHalfWidthKatakana"/></b>：全角片假名 → 半角片假名（另含<b>括号</b> <c>（）</c> → <c>()</c>）。
     /// 部品基本信息表「登录」（<see cref="PartBasicInfoRepository"/> 写库）时，
     /// 「部材名」「部品名」先走这里统一成半角片假名：
-    /// 例 <c>上レール</c> → <c>上ﾚｰﾙ</c>、<c>カバー</c> → <c>ｶﾊﾞｰ</c>。
+    /// 例 <c>上レール</c> → <c>上ﾚｰﾙ</c>、<c>カバー</c> → <c>ｶﾊﾞｰ</c>、
+    /// <c>部品セット（フラットレール）</c> → <c>部品ｾｯﾄ(ﾌﾗｯﾄﾚｰﾙ)</c>。
     /// 濁音 / 半濁音写成「半角清音 + ﾞ / ﾟ」两个字符（<c>ガ</c> → <c>ｶﾞ</c>）。
-    /// 平假名 / 汉字 / 英数 / 标点（「」。、）<b>原样保留</b>（只转片假名 + 长音「ー」+ 中点「・」+ 浊点）。
+    /// 平假名 / 汉字 / 英数 / 其它标点（「」。、）<b>原样保留</b>
+    /// （只转片假名 + 长音「ー」+ 中点「・」+ 浊点 + 括号）。
     /// </para>
     ///
     /// <para>
@@ -32,11 +34,11 @@ namespace MSIFAITOOLS.Services
     internal static class JapaneseTextConverter
     {
         /// <summary>
-        /// 全角片假名 → 半角片假名 的对照表。
+        /// 全角 → 半角 的对照表（片假名 + 长音 / 中点 / 浊点 + 括号）。
         /// 每个元素：<b>第 1 个字符 = 全角</b>，其余字符 = 半角写法（濁音 / 半濁音是「半角清音 + ﾞ / ﾟ」两个字符）。
         /// 没有半角写法的 ヰ / ヱ / ヽ / ヾ 不列在这里（原样保留）。
         /// </summary>
-        private static readonly string[] HalfWidthKatakanaPairs = new string[]
+        private static readonly string[] FullToHalfWidthPairs = new string[]
         {
             // 清音 / 小字
             "ァｧ", "アｱ", "ィｨ", "イｲ", "ゥｩ", "ウｳ", "ェｪ", "エｴ", "ォｫ", "オｵ",
@@ -58,20 +60,22 @@ namespace MSIFAITOOLS.Services
             // 半濁音
             "パﾊﾟ", "ピﾋﾟ", "プﾌﾟ", "ペﾍﾟ", "ポﾎﾟ",
             // 片假名里的符号（长音 / 中点 / 单独的浊点 / 半浊点）
-            "ーｰ", "・･", "゛ﾞ", "゜ﾟ"
+            "ーｰ", "・･", "゛ﾞ", "゜ﾟ",
+            // 括号：全角 → 半角（部品名 常见写法「部品セット（フラットレール）」→「部品ｾｯﾄ(ﾌﾗｯﾄﾚｰﾙ)」）
+            "（(", "）)"
         };
 
         /// <summary>全角 → 半角 的查表（键 = 全角字符，值 = 半角写法，1 或 2 个字符）。</summary>
-        private static readonly Dictionary<char, string> HalfWidthKatakanaMap =
-            BuildHalfWidthKatakanaMap();
+        private static readonly Dictionary<char, string> FullToHalfWidthMap =
+            BuildFullToHalfWidthMap();
 
-        private static Dictionary<char, string> BuildHalfWidthKatakanaMap()
+        private static Dictionary<char, string> BuildFullToHalfWidthMap()
         {
-            Dictionary<char, string> map = new Dictionary<char, string>(HalfWidthKatakanaPairs.Length);
+            Dictionary<char, string> map = new Dictionary<char, string>(FullToHalfWidthPairs.Length);
 
-            for (int index = 0; index < HalfWidthKatakanaPairs.Length; index++)
+            for (int index = 0; index < FullToHalfWidthPairs.Length; index++)
             {
-                string pair = HalfWidthKatakanaPairs[index];
+                string pair = FullToHalfWidthPairs[index];
 
                 if (pair == null || pair.Length < 2)
                 {
@@ -85,8 +89,9 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 全角片假名 → 半角片假名（清音 / 小字 / 濁音 / 半濁音 / 长音 ー / 中点 ・）。
-        /// 片假名以外的字符（平假名 / 汉字 / 英数 / 「」。、 等标点、空白）原样保留。
+        /// 全角片假名 → 半角片假名（清音 / 小字 / 濁音 / 半濁音 / 长音 ー / 中点 ・），
+        /// 外加全角括号 <c>（</c> <c>）</c> → <c>(</c> <c>)</c>（名称里的括号也跟着变半角）。
+        /// 其它字符（平假名 / 汉字 / 英数 / 「」。、 等标点、空白）原样保留。
         /// </summary>
         /// <param name="text">要转换的文本（<c>null</c> / 空串原样返回）。</param>
         /// <returns>转换后的文本；没有需要转换的字符时返回<b>同一个实例</b>。</returns>
@@ -104,7 +109,7 @@ namespace MSIFAITOOLS.Services
                 char current = text[index];
                 string half;
 
-                if (!HalfWidthKatakanaMap.TryGetValue(current, out half))
+                if (!FullToHalfWidthMap.TryGetValue(current, out half))
                 {
                     if (builder != null)
                     {

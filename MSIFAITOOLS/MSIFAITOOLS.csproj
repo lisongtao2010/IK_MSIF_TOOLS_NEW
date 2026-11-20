@@ -158,7 +158,7 @@
     <Compile Include="Services\UiLocalization.cs" />
     <Compile Include="Services\AiPartAnalyzer.cs" />
     <Compile Include="Services\PartBasicInfoRepository.cs" />
-    <!-- 日文文本的宽度转换：全角片假名 → 半角片假名（部品基本信息表登录时「部材名 / 部品名」用）
+    <!-- 日文文本的宽度转换：全角片假名 → 半角片假名 + 全角括号（）→ ()（部品基本信息表登录时「部材名 / 部品名」用）
          ＋ NFKC 归一化（库里的半角值 与 PDF / Excel 原文的全角值 比较时用） -->
     <Compile Include="Services\JapaneseTextConverter.cs" />
     <Compile Include="Services\PartAnalysisService.cs" />

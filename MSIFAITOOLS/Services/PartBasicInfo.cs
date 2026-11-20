@@ -260,6 +260,21 @@ namespace MSIFAITOOLS.Services
             FrameKind = Clean(frameKind);
         }
 
+        /// <summary>
+        /// 【CMD 分析】第 3 步专用：把「番号」改成指定值
+        /// （要領図行与「アッセンブリ図」行部品名相同时，被删掉的装配图行的<b>番号</b>由要領図行接手，
+        /// 见 <see cref="CmdPartAnalysisService"/> 的同名合并规则 ——
+        /// 这样画面上仍然能看到装配图的番号，「页码 + 番号 + 部品コード」的唯一键也照着装配图走）。
+        /// </summary>
+        /// <param name="number">要保留的番号；<c>≤ 0</c>（没有有效番号）时忽略，保持原值。</param>
+        public void OverrideNumber(int number)
+        {
+            if (number > 0)
+            {
+                Number = number;
+            }
+        }
+
         /// <summary>坐标校验状态（取值见 <see cref="PartVerifyStatus"/>）。</summary>
         public string VerifyStatus { get; set; }
 

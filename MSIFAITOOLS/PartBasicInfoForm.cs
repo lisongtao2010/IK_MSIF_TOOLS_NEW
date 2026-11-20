@@ -715,8 +715,8 @@ namespace MSIFAITOOLS
         /// 在选中行的上方 / 下方插入一行空白行（右键菜单「在上方插入行」「在下方插入行」；
         /// 【追加行】按钮 = 在下方插入）。插完直接进入「部品名」的编辑。
         /// <para>
-        /// 页码沿用参照行，番号取其下一个（和原来的【追加行】一致）；
-        /// 表格里一行都没有时按「页码 1 / 番号 1」建第一行。
+        /// 「页码」沿用参照行；「番号」= 表格里<b>当前最大的番号 + 1</b>（<see cref="ResolveNextPartNumber"/>）——
+        /// 在中间插入也不会和已有的行重号。表格里一行都没有时按「页码 1 / 番号 1」建第一行。
         /// </para>
         /// </summary>
         /// <param name="above">true = 插在选中行的上方；false = 插在选中行的下方（没有选中行时追加到末尾）。</param>
@@ -746,23 +746,19 @@ namespace MSIFAITOOLS
             }
 
             int page = 1;
-            int number = 1;
 
             if (anchor != null)
             {
                 int anchorPage;
-                int anchorNumber;
 
                 if (int.TryParse(GetCellText(anchor, "colPage"), out anchorPage) && anchorPage > 0)
                 {
                     page = anchorPage;
                 }
-
-                if (int.TryParse(GetCellText(anchor, "colNumber"), out anchorNumber) && anchorNumber > 0)
-                {
-                    number = anchorNumber + 1;
-                }
             }
+
+            // 「番号」= 表格里当前最大的番号 + 1（不再按参照行 + 1：在中间插入时那样会和后面的行重号）
+            int number = ResolveNextPartNumber();
 
             _suppressGridEvents = true;
             DataGridViewRow row;
@@ -819,6 +815,42 @@ namespace MSIFAITOOLS
             {
                 dgvParts.BeginEdit(true);
             }
+        }
+
+        /// <summary>
+        /// 新插入 / 追加的空白行的「番号」：表格里<b>当前最大的番号 + 1</b>。
+        /// <para>
+        /// 以前取「参照行的番号 + 1」，在中间插入时会同已有的行重号
+        /// （例：在第 2 行下面插入 → 又是 3，与原来的第 3 行重复），
+        /// 所以改成扫一遍整张表取<b>最大值 + 1</b>。这样不论插在哪一行，
+        /// 新番号都和画面上已有的番号不重复。
+        /// </para>
+        /// <para>
+        /// 表格里一行都没有 / 「番号」都不是正整数时从 <c>1</c> 开始；
+        /// 「新行」行（<see cref="DataGridViewRow.IsNewRow"/>）不参与比较。
+        /// </para>
+        /// </summary>
+        /// <returns>新的番号（一定大于 0）。</returns>
+        private int ResolveNextPartNumber()
+        {
+            int maxNumber = 0;
+
+            foreach (DataGridViewRow row in dgvParts.Rows)
+            {
+                if (row.IsNewRow)
+                {
+                    continue;
+                }
+
+                int number;
+
+                if (int.TryParse(GetCellText(row, "colNumber"), out number) && number > maxNumber)
+                {
+                    maxNumber = number;
+                }
+            }
+
+            return maxNumber + 1;
         }
 
         /// <summary>

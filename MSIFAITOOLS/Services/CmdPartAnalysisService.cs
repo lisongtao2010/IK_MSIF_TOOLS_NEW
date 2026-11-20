@@ -927,8 +927,9 @@ namespace MSIFAITOOLS.Services
         ///         番号不同即不会命中唯一索引（図番 + 页码 + 番号 + 部品コード）；</item>
         ///   <item>合并后一次写库（<see cref="PartBasicInfoRepository.Save"/> 会先清空该図番再插入，
         ///         所以必须把已有行一起提交，否则会把 01_アッセンブリ図_部品機能情報.csv 的明细冲掉）。</item>
-        ///   <item>部品名与已有的「アッセンブリ図」行<b>相同</b>时，用装配图行的「区分」覆盖要領図行，
-        ///         并把那条装配图行删掉（<see cref="MergeInstructionWithAssembly"/>）。</item>
+        ///   <item>部品名与已有的「アッセンブリ図」行<b>相同</b>时，用装配图行的「区分」/「番号」覆盖要領図行，
+        ///         并把那条装配图行删掉（<see cref="MergeInstructionWithAssembly"/>）——
+        ///         番号保留的是装配图的编号，删掉的行不会把番号带走。</item>
         ///   <item>合并后「区分」还是空着的行（名字带位置前缀、对不上装配图行），
         ///         用同一个部品 / 同一个部材 的区分补上（<see cref="FillMissingFrameKind"/>）。</item>
         /// </list>
@@ -1577,12 +1578,14 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 第 3 步写库前：把「要領図」行与「アッセンブリ図」行里<b>部品名相同</b>的合掉 ——
-        /// 用该装配图行的「区分」覆盖要領図行（<see cref="PartBasicInfo.OverrideFrameKind"/>），
+        /// 用该装配图行的「区分」覆盖要領図行（<see cref="PartBasicInfo.OverrideFrameKind"/>）、
+        /// <b>「番号」也由要領図行接手</b>（<see cref="PartBasicInfo.OverrideNumber"/>），
         /// 然后把装配图行从整张表里删掉（只在本図番的明细里操作）。
         /// <para>
         /// 匹配规则：部品名按 <see cref="NormalizePartName"/> 规整后完全相同
         /// （忽略全部空白、全角 / 半角、英文大小写）。同一个要領図行对上多条装配图行时，
-        /// <b>第一条</b>的区分用于覆盖，其余同名行也一并删除（同一部品只留要領図 这一条）。
+        /// <b>第一条</b>的区分 / 番号用于覆盖，其余同名行也一并删除（同一部品只留要領図 这一条）。
+        /// 一条明细只有一个「番号」，所以第二条以后的番号保留不了，日志里会写「番号 N 未保留」。
         /// </para>
         /// </summary>
         /// <returns>删除的装配图行数（0 = 没有可合并的行）。</returns>
@@ -1622,6 +1625,12 @@ namespace MSIFAITOOLS.Services
 
                 PartBasicInfo source = null;
 
+                // 覆盖之后 instruction.Number 会变成装配图的番号 → 日志里要用原来的要領図 番号
+                int instructionNumber = instruction.Number;
+
+                // 这次保留下来的装配图番号（0 = 装配图行没有有效番号 / 还没保留）
+                int keptNumber = 0;
+
                 foreach (PartBasicInfo assembly in assemblyRows)
                 {
                     if (removed.Contains(assembly) ||
@@ -1635,10 +1644,29 @@ namespace MSIFAITOOLS.Services
                         source = assembly;
                         instruction.OverrideFrameKind(assembly.FrameKind);
 
+                        // 装配图行下面就要删掉：它的「番号」交给要領図行接手，
+                        // 画面上（以及「页码 + 番号 + 部品コード」的唯一键）仍然按装配图的编号走
+                        instruction.OverrideNumber(assembly.Number);
+
+                        if (assembly.Number > 0)
+                        {
+                            keptNumber = assembly.Number;
+                        }
+
                         PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
-                            "  同部品名合并：部品名「{0}」→ 区分 取装配图 番号 {1} 的「{2}」，要領図 番号 {3}（図番 {4}）",
-                            instruction.PartName, assembly.Number, assembly.FrameKind, instruction.Number,
+                            "  同部品名合并：部品名「{0}」→ 区分 取装配图 番号 {1} 的「{2}」，要領図 番号 {3} → {4}（図番 {5}）",
+                            instruction.PartName, assembly.Number, assembly.FrameKind, instructionNumber,
+                            keptNumber > 0
+                                ? string.Format("装配图 番号 {0}（保留装配图的番号）", keptNumber)
+                                : "原番号（装配图行没有有效番号）",
                             drawingNo));
+                    }
+                    else if (assembly.Number > 0 && assembly.Number != keptNumber)
+                    {
+                        // 一条明细只有一个「番号」：同名装配图行有多条时，只有第一条的番号能保留
+                        PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
+                            "    番号 {0} 未保留（部品名「{1}」合并后只留要領図 1 条，已保留番号 {2}）",
+                            assembly.Number, instruction.PartName, keptNumber));
                     }
 
                     removed.Add(assembly);
