@@ -1,0 +1,29 @@
+{
+  "source": "D:\\Github_lis2010\\IK_MSIF_TOOLS_NEW\\要領図-20261124T003905Z-1-001\\要領図\\I265U10004.PDF",
+  "page": 1,
+  "dpi": 300,
+  "image": { "w": 9933, "h": 7016 },
+  "table_start_x": 5461,
+  "word_count": 39,
+  "outside_word_count": 1,
+  "table_word_count": 1,
+  "other_word_count": 0,
+  "tables": [
+    {
+      "name": "table_1",
+      "pixel": { "x": 5461, "y": 6686, "w": 1003, "h": 67 },
+      "pdf_mm": { "x": 462.36, "y": 566.08, "w": 84.92, "h": 5.67 },
+      "row_count": 1,
+      "cell_count": 1,
+      "rows": [
+        { "row": 1, "pixel": { "x": 5743, "y": 6686, "w": 721, "h": 67 }, "cells": [
+          { "col": 1, "text": "承認日：2026/08/06",
+            "pixel": { "x": 5743, "y": 6686, "w": 721, "h": 67 },
+            "pdf_mm": { "x": 486.24, "y": 566.08, "w": 61.04, "h": 5.67 } }
+        ] }
+      ]
+    }
+  ],
+  "other_words": [
+  ]
+}
