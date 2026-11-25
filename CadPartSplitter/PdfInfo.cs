@@ -159,7 +159,8 @@ namespace CadPartSplitter
 
         /// <summary>
         /// 图种关键字（**规范写法**），顺序即优先级：与 <see cref="DrawingListBuilder.CategoryKeywords"/>
-        /// 是同一份，变体也按同一规则认（<c>アセンブリ図</c> 算 アッセンブリ図）。
+        /// 是同一份，变体也按同一规则认（<c>アセンブリ図</c> 算 アッセンブリ図、<c>要領</c> 算 要領図 ——
+        /// 图纸上只写「要領」/「要領書」时同样判成要領図）。
         /// </summary>
         private static readonly string[] RowCategoryKeywords = DrawingListBuilder.CategoryKeywords;
 
@@ -720,7 +721,7 @@ namespace CadPartSplitter
         /// （例如 <c>H310U10025 | 枠 … 要領図</c>），而 <see cref="DrawingListBuilder.Classify"/>
         /// 要求两者落在同一格，那种写法判不出来 —— 这里再按「同一行里既有图番号前缀、又有图种关键字」找一次。
         /// 关键字优先级与 <see cref="DrawingListBuilder"/> 相同：基本図 → 加工図 → アッセンブリ図 → 要領図，
-        /// 变体也照同一份规则认（<c>アセンブリ図</c> 算 アッセンブリ図）。
+        /// 变体也照同一份规则认（<c>アセンブリ図</c> 算 アッセンブリ図、<c>要領</c> 算 要領図）。
         /// </summary>
         /// <param name="drawingNumber">図番号（PDF 文件名去掉扩展名）。</param>
         /// <param name="tablesDirectory">该图纸的 <c>tables</c> 目录。</param>

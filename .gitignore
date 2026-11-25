@@ -111,9 +111,13 @@ desktop.ini
 !.vscode/extensions.json
 *.code-workspace
 
-# ---------- 密钥与本地配置（按需启用） ----------
-# *.pfx
-# *.snk
+# ---------- 密钥与本地配置 ----------
+# 证书私钥不入库：msif.pfx / cad.pfx 当年把私钥 commit 进来了（经核实只是「强名称」
+# 测试密钥，对 Authenticode 代码签名无用）。真正的代码签名证书请放在仓库外，
+# 用 -CertificatePath / -CertificateThumbprint 引用，详见 MSIFAITOOLS\docs\病毒误报_对策.md 第 4 章。
+*.pfx
+*.snk
+# 下面几项按需启用
 # *.pubxml
 # *.publishproj
 # appsettings.*.local.json
@@ -136,3 +140,4 @@ MSIFAITOOLS/CadPartSplitter/H310A20009.pdf
 /図面-20260918T025344Z-1-001/アセンブリ図/H467/AiAppData
 /図面-20260918T025344Z-1-001/アセンブリ図/H467/AiAppData
 /図面-20260918T025344Z-1-001/アセンブリ図/H467/AiAppData/H467U10001_V片引戸 枠 アッセンブリ図
+/要領図-20261124T003905Z-1-001/要領図/AiAppData

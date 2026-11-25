@@ -7,9 +7,12 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("MSIFAITOOLS")]
 [assembly: AssemblyDescription("MSIF AI Tools - PDF 分解工具")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("MSIFAITOOLS")]
-[assembly: AssemblyCopyright("Copyright ©  2026")]
+// 公司名不能留空：留空时 exe 的「文件属性 → 详细信息」看起来就像来历不明的野包，
+// 安全软件/SmartScreen 对这类文件评分更差。建议填公司或部门的正式名称，
+// 并尽量与代码签名证书的主体（Subject）保持一致。
+[assembly: AssemblyCompany("MSIF")]
+[assembly: AssemblyProduct("MSIFAITOOLS - MSIF AI Tools")]
+[assembly: AssemblyCopyright("Copyright © 2026 MSIF")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
@@ -31,5 +34,7 @@ using System.Runtime.InteropServices;
 // 可以指定所有这些值，也可以使用"生成号"和"修订号"的默认值，
 // 方法是按如下所示使用"*":
 // [assembly: AssemblyVersion("1.0.*")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+// 每次对外发版请递增这里的版本号：客户/安全软件看到「版本号永远不变、文件哈希
+// 却天天变」的 exe，更容易按可疑程序处理（信誉也无法累积）。
+[assembly: AssemblyVersion("1.6.0.0")]
+[assembly: AssemblyFileVersion("1.6.0.0")]

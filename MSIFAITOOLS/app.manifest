@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSIFAITOOLS 应用程序清单（Application Manifest）。
+
+  为什么要显式提供这个文件：
+    1) requestedExecutionLevel = asInvoker
+       —— 明确声明「本程序不需要管理员权限」。没有清单时 Windows 会对
+          「未知」exe 保持戒备（可能被判定为试图提权 / 走 UAC 文件/注册表虚拟化），
+          安全软件对这种「清单缺失的未知程序」打分也更差。
+    2) supportedOS 声明
+       —— 告诉 Windows 7/8/8.1/10/11「这个程序支持你」。
+          缺了这段，exe 会被当成「为老系统写的兼容程序」，GetVersionEx 也会
+          返回假版本号（永远是 6.2），部分安全策略会因此降低信任度。
+    3) 与 Authenticode 代码签名配合
+       —— 清单 + 版本信息（Properties\AssemblyInfo.cs）+ 数字签名 三件套齐全，
+          文件属性里才是一份「正规软件」的样子，SmartScreen 的判定也才会好。
+
+  刻意没有写的东西（写了会改行为，需要单独验证后再加）：
+    * dpiAware / dpiAwareness
+      —— 本程序目前没有 DPI 声明，Windows 用「位图拉伸」缩放。加上 true 会让
+         高分屏上的界面重新按 96 DPI 布局（字号更清晰，但各控件位置/尺寸会变），
+         属于界面变更，改动前请先在 125% / 150% 缩放下实测。
+    * activeCodePage = UTF-8
+      —— 会把进程内 ANSI 代码页改成 UTF-8，而本程序大量处理 Shift-JIS /
+         中文文本（JapaneseTextConverter 等），改了极易乱码，不要加。
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="MSIFAITOOLS.app" />
+
+  <!-- 以「当前用户权限」运行，不弹 UAC -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 7 -->
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}" />
+      <!-- Windows 8 -->
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}" />
+      <!-- Windows 8.1 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}" />
+      <!-- Windows 10 / Windows 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- 长路径（>260 字符）支持：本工具会按图纸名层层建输出目录，容易超长。
+           生效前提是目标机注册表 HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1，
+           没开时这一项无副作用。 -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

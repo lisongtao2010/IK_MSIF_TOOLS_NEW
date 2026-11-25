@@ -99,6 +99,9 @@ namespace CadPartSplitter
         /// <summary>
         /// 关键字的其它写法（图纸文字 / 文件名里见得到的变体），命中后一律归到规范写法：
         /// <c>アセンブリ図</c>（少一个「ッ」）、<c>アセンブリー図</c>（长音）→ <c>アッセンブリ図</c>。
+        /// <c>要領</c>（图纸只写「要領」/「要領書」，省掉「図」）也归到 <c>要領図</c> ——
+        /// 子串匹配更宽：`H310 U10025 要領` / `… 要領書` 都算要領図；它只在基本図 / 加工図 /
+        /// アッセンブリ図 全都没命中时才起作用（<see cref="CategoryKeywords"/> 的顺序保证）。
         /// </summary>
         private static readonly Dictionary<string, string[]> CategoryAliases =
             new Dictionary<string, string[]>(StringComparer.Ordinal)
@@ -106,7 +109,7 @@ namespace CadPartSplitter
                 { "基本図", new string[0] },
                 { "加工図", new string[0] },
                 { "アッセンブリ図", new[] { "アセンブリ図", "アッセンブリー図" } },
-                { "要領図", new string[0] }
+                { "要領図", new[] { "要領" } }
             };
 
         /// <summary>
@@ -248,7 +251,8 @@ namespace CadPartSplitter
         /// 判定一次图的分类：<b>文件名里写着图面分类就以它为准</b>（<c>H310U10004_アッセンブリ図.pdf</c>），
         /// 否则在 <paramref name="tablesDirectory"/> 的 <c>*.csv</c> 里逐格找
         /// 「図番号 前 4 位 + 关键字」，返回 基本図 / 加工図 / アッセンブリ図 / 要領図；都没命中返回空串。
-        /// 关键字认变体（<c>アセンブリ図</c> → <c>アッセンブリ図</c>），返回的永远是规范写法。
+        /// 关键字认变体（<c>アセンブリ図</c> → <c>アッセンブリ図</c>、<c>要領</c> → <c>要領図</c>），
+        /// 返回的永远是规范写法。
         /// </summary>
         /// <param name="drawingNumber">図番号（PDF 文件名去掉扩展名）。</param>
         /// <param name="tablesDirectory">该图纸的 <c>tables</c> 目录。</param>
