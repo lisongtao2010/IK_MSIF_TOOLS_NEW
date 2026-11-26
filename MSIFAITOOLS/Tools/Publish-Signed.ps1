@@ -25,7 +25,8 @@
 
 .PARAMETER SecretMode
     发布包里 exe.config 的密钥处理方式（默认 BlankAiKey）：
-      BlankAiKey = 清空 AiApiKey，使用者各自在【AI 设置】填自己的 Key，SQL 连接保留（内部同事）；
+      BlankAiKey = 清空 AiApiKey，SQL 连接保留（内部同事）。程序内有内置测试密钥兜底：
+                   接口地址 = ModelArts /v2 时自动使用 AiApiOptions.DefaultApiKey，所以 AI 分析照常可用；
       BlankAll   = 再清空 SQL 密码（给公司外 / 演示环境）；
       Keep       = 原样不动（只在本机自用或完全可信的分发时用）。
     只改发布目录里的副本，仓库里的 App.config 不会被修改。
@@ -479,7 +480,7 @@ else {
         $secretNote = 'AiApiKey / SQL 密码已清空（公司外 / 演示用）'
     }
     else {
-        $secretNote = 'AiApiKey 已清空（使用者自己填 Key；DB 连接保留）'
+        $secretNote = 'AiApiKey 已清空（程序内置测试密钥兜底：接口地址 = ModelArts /v2 时自动使用；DB 连接保留）'
     }
 
     Write-Host ('    ' + $secretNote)

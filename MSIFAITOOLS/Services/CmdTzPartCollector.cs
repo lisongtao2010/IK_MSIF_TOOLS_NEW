@@ -124,7 +124,8 @@ namespace MSIFAITOOLS.Services
     ///         （<c>品種：片引戸；特注寸法：2199 ≦Ｗ</c>）、<b>特注 = <see cref="SpecialNoteMark"/></b>（<c>1</c>），
     ///         校验状态 = 未校验；</item>
     ///   <item>追加対応特注寸法由 <see cref="ApplySpecialSize"/> 解析成 H / W 范围：
-    ///         <c>2199 ≦Ｗ</c> → W下限 = 2199、W上限 = 9999（只写一边时另一边固定 9999 / 0）；</item>
+    ///         <c>2199 ≦Ｗ</c> → W下限 = 2199、W上限 = 9999；<c>Ｗ ≦ 2199</c> → W下限 = 空、
+    ///         W上限 = 2199（只写上限时下限<b>留空</b>，不补 0）；</item>
     ///   <item>明细里带「追加不要」这类字样（品種 / 部品名 / 枠区分 / 部品コード / 追加対応特注寸法 任一处，
     ///         见 <see cref="NoNeedMarks"/>）→ <b>整条不追加</b>；</item>
     ///   <item>部品コード 必须是含英文字母的编码（空 / 占位符 / 纯数字一律丢弃），
@@ -170,13 +171,9 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 特注寸法只写下限时的上限固定值（<c>2199 ≦Ｗ</c> → W下限 2199、W上限 9999）。
+        /// 只写上限时下限不补值 —— 留空（<c>Ｗ ≦ 2199</c> → W下限 空、W上限 2199）。
         /// </summary>
         public const int SpecialSizeOpenUpper = 9999;
-
-        /// <summary>
-        /// 特注寸法只写上限时的下限固定值（<c>Ｗ ≦ 2199</c> → W下限 0、W上限 2199）。
-        /// </summary>
-        public const int SpecialSizeOpenLower = 0;
 
         /// <summary>特注品.json 顶层存放明细的键。</summary>
         private const string ItemKey = "items";
@@ -776,7 +773,7 @@ namespace MSIFAITOOLS.Services
         /// 写进 <paramref name="part"/>：
         /// <list type="bullet">
         ///   <item><c>2199 ≦Ｗ</c>（只写下限）→ W下限 = 2199、W上限 = <see cref="SpecialSizeOpenUpper"/>（9999 固定）；</item>
-        ///   <item><c>Ｗ ≦ 2199</c>（只写上限）→ W下限 = <see cref="SpecialSizeOpenLower"/>（0 固定）、W上限 = 2199；</item>
+        ///   <item><c>Ｗ ≦ 2199</c>（只写上限）→ W下限 = <b>空</b>（不补 0）、W上限 = 2199；</item>
         ///   <item><c>1800 ≦Ｗ ≦ 2000</c> → 两端都按写的不等号取；<c>＜</c>（开区间）各让 1
         ///         （<c>1299 ≦Ｗ ＜ 1749</c> → 1299 ~ 1748）；</item>
         ///   <item><c>Ｈ</c> 同理（写进 H下限 / H上限）；一行里 H 与 W 同时写也能分开取。</item>
@@ -840,7 +837,7 @@ namespace MSIFAITOOLS.Services
                 }
             }
 
-            // 只写了一边的用固定值补齐：2199 ≦Ｗ → 上限 9999；Ｗ ≦ 2199 → 下限 0
+            // 只写下限时上限补固定值（2199 ≦Ｗ → 上限 9999）；只写上限时下限留空，不补 0
             FinalizeBound(ref heightMin, ref heightMax);
             FinalizeBound(ref widthMin, ref widthMax);
 
@@ -851,19 +848,15 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 只写了一边时补齐另一边（有下限没上限 → 上限 <see cref="SpecialSizeOpenUpper"/>；
-        /// 有上限没下限 → 下限 <see cref="SpecialSizeOpenLower"/>），两边矛盾时交换；
-        /// 两边都没有就都留空（认不出的写法不猜）。
+        /// 只写了下限时上限补 <see cref="SpecialSizeOpenUpper"/>（9999）；只写了上限时下限<b>留空</b>
+        /// （特注寸法没写下限 = 没有下限，画面 / 数据库 / 导出的 Excel 里都显示空，不再补 0）；
+        /// 两边矛盾时交换；两边都没有就都留空（认不出的写法不猜）。
         /// </summary>
         private static void FinalizeBound(ref double? min, ref double? max)
         {
             if (min.HasValue && !max.HasValue)
             {
                 max = SpecialSizeOpenUpper;
-            }
-            else if (!min.HasValue && max.HasValue)
-            {
-                min = SpecialSizeOpenLower;
             }
             else if (min.HasValue && max.HasValue && min.Value > max.Value)
             {

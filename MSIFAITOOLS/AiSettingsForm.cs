@@ -103,7 +103,10 @@ namespace MSIFAITOOLS
                 else
                 {
                     lblStatus.ForeColor = Color.FromArgb(52, 73, 94);
-                    UiLocalization.SetText(lblStatus, "当前配置来源：" + current.ConfigurationSource);
+                    UiLocalization.SetText(lblStatus, "当前配置来源：" + current.ConfigurationSource +
+                        (current.IsBuiltInApiKey
+                            ? "（密钥未配置，已自动使用内置测试密钥）"
+                            : string.Empty));
                 }
             }
             finally

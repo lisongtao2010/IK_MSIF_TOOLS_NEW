@@ -7,12 +7,25 @@ namespace MSIFAITOOLS.Services
     /// <summary>
     /// AI 的连接配置：<b>调用方式</b>（云端 OpenAI 兼容接口 / 本机 Claude Code CLI）+ 各自的参数。
     /// 取值优先级：环境变量 → AI 设置画面保存的用户配置（%APPDATA%\MSIFAITOOLS\ai-settings.json）
-    /// → App.config 的 appSettings → 内置默认值。
+    /// → App.config 的 appSettings → 内置默认值；
+    /// 密钥为空且接口地址正是 <see cref="DefaultBaseUrl"/> 时，再兜底用 <see cref="DefaultApiKey"/>。
     /// </summary>
     internal sealed class AiApiOptions
     {
         /// <summary>默认接口地址（OpenAI Compatible）。</summary>
         public const string DefaultBaseUrl = "https://api-ap-southeast-1.modelarts-maas.com/v2";
+
+        /// <summary>
+        /// 内置测试密钥（ModelArts 试用期的测试 Key，不是个人密钥）。
+        /// <para>
+        /// 发布包默认会把 exe.config 的 AiApiKey 清空（Publish-Signed.ps1 的 -SecretMode BlankAiKey），
+        /// 清空之后【AI 设置】画面是空的、【AI 分析】直接报「未配置 AI 密钥」。
+        /// 所以这里做一层兜底：<b>只有「密钥为空」且「接口地址 = <see cref="DefaultBaseUrl"/>」时才用这个 Key</b>，
+        /// 把接口地址改成任何别的值（OpenAI 官方 / DeepSeek / 本地 Ollama …）就不会带上它。
+        /// </para>
+        /// </summary>
+        public const string DefaultApiKey =
+            "RG1wlfD1ixUC0DOfX4HJw7KHc_orZYD7_KJw2gxoVjBtAVWCGSKN1JwBcKHYsf-BR2FzDtlMgTiyOVFA4rPCKQ";
 
         /// <summary>默认模型。</summary>
         public const string DefaultModel = "deepseek-v4.1-flash-1017";
@@ -165,6 +178,12 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
+        /// 本次配置的密钥是否来自内置测试密钥（<see cref="DefaultApiKey"/>）：
+        /// 即配置里没有密钥、接口地址又是 <see cref="DefaultBaseUrl"/> 的情况。
+        /// </summary>
+        public bool IsBuiltInApiKey { get; private set; }
+
+        /// <summary>
         /// 规范化调用方式：只认 <c>claude-cli</c>（含 claude / claude-code / cli 等写法），
         /// 其它值一律按云端接口处理。
         /// </summary>
@@ -220,6 +239,12 @@ namespace MSIFAITOOLS.Services
                 ProviderCompatibleApi,
                 userSettings == null ? null : userSettings.Provider, out source);
             string providerSource = source;
+
+            // 内置测试密钥兜底：发布包会把 exe.config 的 AiApiKey 清空（-SecretMode BlankAiKey），
+            // 只要接口地址仍是 ModelArts v2，就自动用内置测试密钥 —— 否则【AI 设置】是空的、
+            // 【AI 分析】一上来就报「未配置 AI 密钥」。换了接口地址 / 用本机 CLI 时不受影响。
+            bool usesBuiltInApiKey = TryApplyBuiltInApiKey(ref apiKey, baseUrl, provider);
+
             string claudeCliPath = ReadSetting(ClaudeCliPathEnvironmentKey, ClaudeCliPathSettingKey,
                 string.Empty,
                 userSettings == null ? null : userSettings.ClaudeCliPath, out source);
@@ -247,8 +272,44 @@ namespace MSIFAITOOLS.Services
                 timeoutSeconds = parsedTimeout;
             }
 
-            return new AiApiOptions(baseUrl, apiKey, model, timeoutSeconds, providerSource,
+            AiApiOptions options = new AiApiOptions(baseUrl, apiKey, model, timeoutSeconds, providerSource,
                 provider, claudeCliPath, claudeModel, claudeCliEnvironment);
+            options.IsBuiltInApiKey = usesBuiltInApiKey;
+
+            return options;
+        }
+
+        /// <summary>
+        /// 密钥为空、且接口地址正是 <see cref="DefaultBaseUrl"/> 时，用 <see cref="DefaultApiKey"/> 兜底。
+        /// 用本机 Claude Code CLI 时不补（那本来就不需要 Key）。
+        /// </summary>
+        /// <returns>是否使用了内置测试密钥。</returns>
+        private static bool TryApplyBuiltInApiKey(ref string apiKey, string baseUrl, string provider)
+        {
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                return false;
+            }
+
+            if (!string.Equals(NormalizeProvider(provider), ProviderCompatibleApi, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!string.Equals(NormalizeBaseUrl(baseUrl), NormalizeBaseUrl(DefaultBaseUrl),
+                StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            apiKey = DefaultApiKey;
+            return true;
+        }
+
+        /// <summary>接口地址比对用：去首尾空白、去末尾的 /、忽略大小写。</summary>
+        private static string NormalizeBaseUrl(string baseUrl)
+        {
+            return (baseUrl ?? string.Empty).Trim().TrimEnd('/').ToLowerInvariant();
         }
 
         /// <summary>用户配置文件读取失败的原因（为空表示正常或文件不存在）。</summary>
@@ -266,8 +327,10 @@ namespace MSIFAITOOLS.Services
                     ConfigurationSource);
             }
 
-            return string.Format("接口 {0}，模型 {1}，密钥 {2}（来源：{3}）", BaseUrl, Model,
-                MaskApiKey(), ConfigurationSource);
+            string keyNote = IsBuiltInApiKey ? "，内置测试密钥" : string.Empty;
+
+            return string.Format("接口 {0}，模型 {1}，密钥 {2}（来源：{3}{4}）", BaseUrl, Model,
+                MaskApiKey(), ConfigurationSource, keyNote);
         }
 
         private string MaskApiKey()

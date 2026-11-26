@@ -383,10 +383,13 @@ H310-三方枠：需要判定 23 行（部材名 空 0 行 / その他 5 行 / �
 
 | 项 | 环境变量 | App.config | 默认值 |
 |----|----------|------------|--------|
-| 密钥 | `MSIF_AI_API_KEY` | `AiApiKey` | （空，未配置时按钮直接拒绝运行） |
+| 密钥 | `MSIF_AI_API_KEY` | `AiApiKey` | （空 → **接口地址 = 下面的默认地址时自动用内置测试密钥** `AiApiOptions.DefaultApiKey`；换成别的地址则为空，按钮直接拒绝运行） |
 | 接口地址 | `MSIF_AI_BASE_URL` | `AiBaseUrl` | `https://api-ap-southeast-1.modelarts-maas.com/v2` |
 | 模型 | `MSIF_AI_MODEL` | `AiModel` | `deepseek-v4.1-flash-1017` |
 | 超时（秒） | `MSIF_AI_TIMEOUT_SECONDS` | `AiTimeoutSeconds` | `180` |
+
+**内置测试密钥兜底**（`AiApiOptions.TryApplyBuiltInApiKey`）：凡是从上面三级都读不到密钥 **且** 接口地址（去末尾 `/`、忽略大小写后）正好是 `https://api-ap-southeast-1.modelarts-maas.com/v2`，就用 `DefaultApiKey`（ModelArts 试用期的测试 Key）。目的是：发布包被 `Publish-Signed.ps1 -SecretMode` 清空 `AiApiKey` 之后，AI 分析仍然能用。【AI 设置】画面的状态行会显示「密钥未配置，已自动使用内置测试密钥」。把接口地址改成 OpenAI 官方 / DeepSeek / 本地 Ollama 之类，这个 Key 就不会带出去。
+
 
 【AI 设置】画面的配置写在 `%APPDATA%\MSIFAITOOLS\ai-settings.json`，**保存后立即生效**，不必重启。
 
@@ -517,6 +520,7 @@ H310-三方枠：需要判定 23 行（部材名 空 0 行 / その他 5 行 / �
 
 | 日期 | 内容 |
 |------|------|
+| 2026-11-25 | **AI 密钥不再"丢"**：`Publish-Signed.ps1` 默认会清空发布包 `exe.config` 的 `AiApiKey`，导致打开程序后【AI 设置】里密钥是空的。新增内置测试密钥兜底 `AiApiOptions.DefaultApiKey`（ModelArts 试用期测试 Key）：只有「密钥为空」且「接口地址 = `DefaultBaseUrl`（`.../modelarts-maas.com/v2`）」时才生效，换地址 / 用本机 Claude Code 时不受影响；`AiApiOptions.IsBuiltInApiKey` 供日志（`Describe()` 追加「内置测试密钥」）和【AI 设置】状态行提示。 |
 | 2026-11-18 | **默认 AI 连接换新**：接口地址 `https://api-ap-southeast-1.modelarts-maas.com/v1` → `.../v2`，模型 `deepseek-v4-flash` → `deepseek-v4.1-flash-1017`（密钥不变）。改动位置：`App.config`（`AiBaseUrl` / `AiModel`）、`Services\AiApiOptions.DefaultBaseUrl` / `DefaultModel`、`AiSettingsForm.ModelPresets`（新模型排在第一位）；[AI 设置] 画面的端点预设 / 模型下拉随之更新。 |
 | 2026-11-16 | **删除部材名 AI 推荐**：【AI 分析】只保留特注品记录的数量设定；删除 `MemberNameAiAdvisor` / `MemberNamePromptStore` / `Prompts\MemberNameAdvisor.Prompt.txt`，部品基本信息画面去掉「部材名AI推荐」列（数据库列保留作历史残留，保存时原值透传）。本文第 1 ~ 17 章转为历史存档。 |
 | 2026-11-15 | 初版：按当前代码整理「AI 分析 = 部材名 AI 推荐」的完整行为（前置条件、逐図番/逐页流程、提示词 7 张表、6 级兜底链、写库规则、日志文案、配置项、手工测试清单）。 |
