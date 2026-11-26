@@ -102,7 +102,7 @@ namespace MSIFAITOOLS.Services
         /// <summary>追加步骤（要領図 部品）：读到的 02_要領図_部品機能情報.csv 个数。</summary>
         public int InstructionFileCount { get; set; }
 
-        /// <summary>追加步骤（要領図 部品）：命中分类依据并登录的行数。</summary>
+        /// <summary>追加步骤（要領図 部品）：品種命中（清单「品種」列）并登录的行数。</summary>
         public int InstructionRowCount { get; set; }
 
         /// <summary>追加步骤（要領図 部品）：缺少 01 / 02 文件的个数。</summary>
@@ -123,7 +123,7 @@ namespace MSIFAITOOLS.Services
         /// <summary>追加步骤（特注品.json 部品）：读到的 特注品.json 明细条数。</summary>
         public int TzEntryCount { get; set; }
 
-        /// <summary>追加步骤（特注品.json 部品）：品種命中分类依据并登录的行数。</summary>
+        /// <summary>追加步骤（特注品.json 部品）：品種命中装配图品種（清单「品種」列）并登录的行数。</summary>
         public int TzRowCount { get; set; }
 
         /// <summary>追加步骤（使い分け自動設定）：找到的多行组数量（7 个字段全同、且拾い出し表里命中部品コード）。</summary>

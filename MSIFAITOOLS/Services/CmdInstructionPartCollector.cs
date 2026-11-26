@@ -37,7 +37,8 @@ namespace MSIFAITOOLS.Services
         public int MissingFileCount { get; set; }
 
         /// <summary>
-        /// 同一要領図 内「品種 + 部品名 + 部品コード」重复而被丢弃的行数。
+        /// 同一要領図 内「品種 + 部品名 + 区分 + 部品コード」全部相同而被丢弃的行数
+        /// （区分 或 品種 不同 = 另一条明细，各留一条）。
         /// （品種为空的行<b>不再丢弃</b>，见 <see cref="SharedRowCount"/>。）
         /// </summary>
         public int SkippedRowCount { get; set; }
@@ -60,19 +61,22 @@ namespace MSIFAITOOLS.Services
     ///
     /// 流程：
     /// <list type="number">
-    ///   <item>输入：一览中分类为「アッセンブリ図」的 PDF，它的「分类依据」来自
-    ///         <c>&lt;输出根目录&gt;\classify\PdfInfoList.txt</c>；</item>
+    ///   <item>输入：一览中分类为「アッセンブリ図」的 PDF，它的「品種」取自
+    ///         <c>&lt;输出根目录&gt;\classify\PdfInfoList.txt</c> 的「品種」列
+    ///         （老清单没有这一列时退回「分类依据」列）；</item>
     ///   <item>读 <c>&lt;输出根目录&gt;\&lt;図番号&gt;\01_アッセンブリ図_要領図.csv</c>
     ///         （項目 / 要領図漢字 / 図番），取出该装配图引用的全部「要領図」図番；</item>
     ///   <item>按每个要領図図番找到 <c>&lt;输出根目录&gt;\&lt;図番&gt;\02_要領図_部品機能情報.csv</c>
     ///         （品種 / 部品名 / 枠区分 / 部品コード / 員数）—— CadPartSplitter 的文件夹名是
     ///         PDF 文件名，常带分类名（<c>H453U10002要領図</c>），定位规则见 <see cref="LocateOutputFile"/>；</item>
-    ///   <item>「品種」出现在分类依据里的行保留 —— 分类依据的正文形如
-    ///         <c>table_05.csv：H310 １７ラシッサ 片引戸 枠 アッセンブリ図</c>，先按空白 / 标点
-    ///         切成单词做<b>完全一致</b>比较；一条都没命中时（依据里没有分隔符）再退回
-    ///         <b>包含</b>比较 —— 此时<b>同一个单词里只认最长的品種</b>：
-    ///         依据 <c>文件名 H467U10002_V片引戸2枚建 枠 アッセンブリ図</c> 只命中
-    ///         「片引戸2枚建」，短的前缀品種「片引戸」不会被误判成命中；</item>
+    ///   <item>「品種」出现在装配图的品種里（<see cref="PdfClassification.Kind"/>：清单「品種」列原文，
+    ///         老清单没有这一列时为「分类依据」列）的行保留 —— 判定用 <see cref="CmdKindMatcher"/>
+    ///         （第 4 步 特注品 同一套）：<b>品種原文里出现过的品種都算命中</b>。原文形如
+    ///         <c>H310 １７ラシッサ V引違戸2枚建枠 Wモーション アッセンブリ図</c> 时一起命中
+    ///         「V引違戸2枚建」「引違戸2枚建」「引違戸2枚建枠」；<c>H310 V片引戸/2/3枚建/V引分戸枠</c>
+    ///         会先按 <c>/</c> 切开，再把「V片引戸」与「2」「3枚建」组合回「V片引戸2枚建」「V片引戸3枚建」。
+    ///         唯一的例外是<b>后面紧跟数字的泛称</b>：原文里有「片引戸2枚建」时「片引戸」不算命中
+    ///         （<c>H467U10002_V片引戸2枚建</c> 不会把「片引戸」品種的行也吞进来）；</item>
     ///   <item>「品種」<b>为空</b>的行（02 是単純部品表 / 普通部品表，或整张表没有「品種」列）
     ///         代表<b>所有品種共用</b>的部品：<b>不再丢弃</b>，一律登录，备註写 <c>品種：共通</c>；</item>
     ///   <item>部品コード 应该是<b>含英文字母</b>的编码；为空、「―」「-」「／」等占位符、纯数字时
@@ -167,13 +171,13 @@ namespace MSIFAITOOLS.Services
         };
 
         /// <summary>
-        /// 读一个要領図 的 <c>02_要領図_部品機能情報.csv</c>，把「品種 ∈ 分类依据」的行转成部品基本信息。
+        /// 读一个要領図 的 <c>02_要領図_部品機能情報.csv</c>，把「品種 ∈ 品種列」的行转成部品基本信息。
         /// 部品コード 为空 / 不含英文字母（<c>―</c>、<c>-</c>、纯数字等占位内容）的行会被丢弃。
         /// 部品名会按 <paramref name="partsInfo"/> 里「項目 + 部」标记的排列加位置前缀（右 / 左、上 / 下）；
         /// 同一个标记还用来算「部材名」（标记所在零件图的 texts，去掉数字 / <c>XX部</c> 后连接）。
         /// </summary>
         private void CollectFromYoryoParts(PdfClassification assembly, string outputDirectory, string yoryoNo,
-            string item, string yoryoName, string evidence, int startNumber, HashSet<string> addedKeys,
+            string item, string yoryoName, string kindText, int startNumber, HashSet<string> addedKeys,
             PartsInfoIndex partsInfo, CmdInstructionPartResult result)
         {
             string path = LocateOutputFile(outputDirectory, yoryoNo, YoryoPartFileName);
@@ -234,7 +238,7 @@ namespace MSIFAITOOLS.Services
             // 有「部品コード」列时才校验编码：没有该列的老格式文件仍按原规则（部品名或部品コード 非空）收集
             bool requireValidCode = codeCol >= 0;
 
-            // 先看这个文件里有哪些品種，再一次性判定「命中分类依据」的品種集合。
+            // 先看这个文件里有哪些品種，再一次性判定「命中装配图品種」的品種集合。
             // 品種为空的行 = 所有品種共用的部品（単純部品表 / 普通部品表），单独计数、不参与品種匹配
             Dictionary<string, string> kindTexts =
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -267,7 +271,10 @@ namespace MSIFAITOOLS.Services
                 kindTexts.Add(key, raw);
             }
 
-            HashSet<string> matched = ResolveMatchedKinds(kindTexts.Keys, evidence);
+            // 品種比对交给公共实现 <see cref="CmdKindMatcher"/>（与第 4 步 特注品 同一套规则）：
+            // 品種原文里出现过的品種都算命中（V 前缀 / 枠 后缀可省略、跨分隔符 / 数量组合也能命中），
+            // 只有「后面紧跟数字的泛称」（片引戸 と 片引戸2枚建）不算
+            HashSet<string> matched = CmdKindMatcher.ResolveMatchedKinds(kindTexts.Keys, kindText);
             List<string> fileRows = new List<string>();
 
             result.YoryoPartFileCount++;
@@ -281,7 +288,7 @@ namespace MSIFAITOOLS.Services
                 }
                 else
                 {
-                    AddNote(result, string.Format("  要領図 {0}：品種（{1}）都不在分类依据里，跳过",
+                    AddNote(result, string.Format("  要領図 {0}：品種（{1}）都不在品種列里，跳过",
                         yoryoNo, JoinLimited(new List<string>(kindTexts.Values), 4)));
                 }
 
@@ -291,7 +298,7 @@ namespace MSIFAITOOLS.Services
             if (kindTexts.Count > 0 && matched.Count == 0)
             {
                 AddNote(result, string.Format(
-                    "  要領図 {0}：品種（{1}）都不在分类依据里 → 只登录无品種（共通）的 {2} 行",
+                    "  要領図 {0}：品種（{1}）都不在品種列里 → 只登录无品種（共通）的 {2} 行",
                     yoryoNo, JoinLimited(new List<string>(kindTexts.Values), 4), sharedRowTotal));
             }
             else if (sharedRowTotal > 0)
@@ -305,6 +312,7 @@ namespace MSIFAITOOLS.Services
             int invalidCodeCount = 0;
             int noCodeCount = 0;
             int sharedCount = 0;
+            int skippedCount = 0;
 
             // 「A部」这类位置标记（01 要領図 清单的「項目」第一项 + 「部」）在装配图上的情况：
             //   ① 出现 2 处以上 → 按排列方向给部品名加「右 / 左」「上 / 下」；
@@ -333,7 +341,7 @@ namespace MSIFAITOOLS.Services
                 string kindKey = NormalizeKey(rawKind);
 
                 // 品種为空（或只写了「―」「-」「／」「共通」「なし」等占位符）= 共通部品（不分品種），
-                // 一律登录；有品種时必须是命中分类依据的品種（其余品種的部品不属于这张装配图）
+                // 一律登录；有品種时必须是命中装配图品種的品種（其余品種的部品不属于这张装配图）
                 bool isShared = IsBlankKind(kindKey);
 
                 if (!isShared && !matched.Contains(kindKey))
@@ -369,21 +377,18 @@ namespace MSIFAITOOLS.Services
                     continue;
                 }
 
-                // 同一要領図 里同品種 / 同部品 / 同コード 只取一次
-                //（共通部品用固定键，不与同名同碼的「有品種」行互相吞掉）
+                // 同一要領図 里同品種 / 同部品 / 同コード / 同区分 只取一次
+                //（共通部品用固定键，不与同名同碼的「有品種」行互相吞掉）。
+                // 「区分」一定要进键：同一个部品コード 会同时用在不同的区分上
+                //（例：LAVS639「ロットＮｏ．ラベル」在 上枠セット / 縦枠セット 各 1 条），
+                // 少了区分，第二条会被当成重复丢掉
                 string dedupeKey = (isShared ? SharedDedupeKey : kindKey) + "#" +
-                    Normalize(partName) + "#" + Normalize(partCode);
-
-                if (!hasValidCode)
-                {
-                    // 没有部品コード 时，同名部品靠「区分」区分（如「ロットＮｏ．ラベル」的
-                    // 縦枠セット / 上枠セット 各一条），否则第二行会被当成重复丢掉
-                    dedupeKey += "#" + Normalize(frameKind);
-                }
+                    Normalize(partName) + "#" + Normalize(partCode) + "#" + NormalizeKey(frameKind);
 
                 if (!addedKeys.Add(dedupeKey))
                 {
                     result.SkippedRowCount++;
+                    skippedCount++;
 
                     continue;
                 }
@@ -508,6 +513,15 @@ namespace MSIFAITOOLS.Services
                     yoryoNo, invalidCodeCount));
             }
 
+            if (skippedCount > 0)
+            {
+                // 去重是「整行相同」才算重复（区分 / 品種 不同会各留一条），
+                // 被丢掉的行数写进日志，避免「明明有两条、画面只剩一条」查不出来
+                AddNote(result, string.Format(
+                    "  要領図 {0}：同一「品種 + 部品名 + 区分 + 部品コード」重复 {1} 行，已去重（区分 / 品種 不同会各留一条）",
+                    yoryoNo, skippedCount));
+            }
+
             if (rowCount > 0 && memberName.Length > 0)
             {
                 AddNote(result, string.Format(
@@ -544,9 +558,12 @@ namespace MSIFAITOOLS.Services
         }
 
         /// <summary>
-        /// 收集该アッセンブリ図 名下、分类依据命中的要領図部品。
+        /// 收集该アッセンブリ図 名下、品種命中的要領図部品。
         /// </summary>
-        /// <param name="assembly">一览中的アッセンブリ図（<see cref="PdfClassification.Evidence"/> 即分类依据）。</param>
+        /// <param name="assembly">
+        /// 一览中的アッセンブリ図（<see cref="PdfClassification.Kind"/> 即清单「品種」列原文；
+        /// 有这一列但格为空 = 没有品種，只登录共通部品行；只有老清单没有这一列时它等于分类依据）。
+        /// </param>
         /// <param name="outputDirectory">分解输出根目录（&lt;PDF 文件夹&gt;\AiAppData）。</param>
         /// <param name="startNumber">本次追加行的起始「番号」（接在已有行之后）。</param>
         public CmdInstructionPartResult Collect(PdfClassification assembly, string outputDirectory,
@@ -559,7 +576,16 @@ namespace MSIFAITOOLS.Services
 
             string drawingNo = assembly.Stem;
             CmdInstructionPartResult result = new CmdInstructionPartResult(drawingNo);
-            string evidence = assembly.Evidence ?? string.Empty;
+            string kindText = assembly.Kind ?? string.Empty;
+
+            // 品種只来自 PdfInfoList.txt 的「品種」列（不再从「分类依据」列推断）：
+            // 该列为空 = 没有品種，下面只会登录「品種为空（共通）」的部品行
+            if (kindText.Trim().Length == 0)
+            {
+                AddNote(result, string.Format(
+                    "{0} 里这张图的「品種」列为空 → 只登录无品種（共通）的部品行（要按品種筛选请在上游清单的「品種」列补值）",
+                    PdfClassifier.PdfInfoListFileName));
+            }
 
             string yoryoPath = LocateOutputFile(outputDirectory, drawingNo, YoryoListFileName);
 
@@ -667,7 +693,7 @@ namespace MSIFAITOOLS.Services
             foreach (string yoryoNo in yoryoOrder)
             {
                 CollectFromYoryoParts(assembly, outputDirectory, yoryoNo, items[yoryoNo], names[yoryoNo],
-                    evidence, startNumber, addedKeys, partsInfo, result);
+                    kindText, startNumber, addedKeys, partsInfo, result);
             }
 
             return result;
@@ -742,169 +768,11 @@ namespace MSIFAITOOLS.Services
             return first.EndsWith(MarkSuffix, StringComparison.Ordinal) ? first : first + MarkSuffix;
         }
 
-        // ── 品種匹配 ─────────────────────────────────────────────────────────
+        // ── 归一化 ───────────────────────────────────────────────────────────
 
         /// <summary>
-        /// 判定哪些品種出现在分类依据里。
-        /// 先按空白 / 标点把依据切成单词做完全一致比较；一个都没命中时退回包含比较
-        /// （依据里的各个词可能没有分隔符，例如 <c>H310１７ラシッサ片引戸枠アッセンブリ図</c>）。
-        /// </summary>
-        /// <param name="kindKeys">该 02 文件里出现过的品種（已归一化）。</param>
-        /// <param name="evidence">分类依据原文。</param>
-        private static HashSet<string> ResolveMatchedKinds(IEnumerable<string> kindKeys, string evidence)
-        {
-            HashSet<string> matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            List<string> kindList = new List<string>();
-
-            foreach (string kindKey in kindKeys)
-            {
-                if (!string.IsNullOrEmpty(kindKey))
-                {
-                    kindList.Add(kindKey);
-                }
-            }
-
-            if (kindList.Count == 0)
-            {
-                return matched;
-            }
-
-            // ① 单词完全一致
-            List<string> tokens = Tokenize(evidence);
-
-            if (tokens.Count > 0)
-            {
-                Dictionary<string, bool> tokenSet = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-
-                foreach (string token in tokens)
-                {
-                    string key = NormalizeKey(token);
-
-                    if (key.Length > 0 && !tokenSet.ContainsKey(key))
-                    {
-                        tokenSet.Add(key, true);
-                    }
-                }
-
-                foreach (string kindKey in kindList)
-                {
-                    if (tokenSet.ContainsKey(kindKey))
-                    {
-                        matched.Add(kindKey);
-                    }
-                }
-            }
-
-            if (matched.Count > 0)
-            {
-                return matched;
-            }
-
-            // ② 退回包含比较：先按单词逐个比（「H467U10002_V片引戸2枚建」这种词里没有分隔符），
-            //    且同一个单词里只认最长的品種 —— 否则「片引戸」会把「片引戸2枚建」的行也抢走；
-            //    单词上一个都没命中时，再把整段依据压平比一次（「片引戸 2枚建」被空格拆开的情况）。
-            List<string> tokenKeys = new List<string>();
-
-            foreach (string token in tokens)
-            {
-                string key = NormalizeKey(token);
-
-                if (key.Length > 0)
-                {
-                    tokenKeys.Add(key);
-                }
-            }
-
-            AddLongestContainsHits(tokenKeys, kindList, matched);
-
-            if (matched.Count == 0)
-            {
-                string flat = NormalizeKey(evidence);
-
-                if (flat.Length > 0)
-                {
-                    AddLongestContainsHits(new string[] { flat }, kindList, matched);
-                }
-            }
-
-            return matched;
-        }
-
-        /// <summary>
-        /// 包含比较：在 <paramref name="sources"/> 的每一段文字里找出现的品種，
-        /// <b>同一段里只认最长的那些</b>（长度相同则全部保留）。
-        /// 例：依据里的 <c>H467U10002_V片引戸2枚建</c> 同时含「片引戸」与「片引戸2枚建」，
-        /// 只算「片引戸2枚建」命中，品種「片引戸」的行不会被误取。
-        /// </summary>
-        /// <param name="sources">已归一化的依据片段（单词 / 压平后的整段依据）。</param>
-        /// <param name="kindList">该 02 文件里出现过的品種（已归一化）。</param>
-        /// <param name="matched">命中的品種（追加进去）。</param>
-        private static void AddLongestContainsHits(IEnumerable<string> sources, List<string> kindList,
-            HashSet<string> matched)
-        {
-            foreach (string source in sources)
-            {
-                if (string.IsNullOrEmpty(source))
-                {
-                    continue;
-                }
-
-                List<string> hits = new List<string>();
-                int longest = 0;
-
-                foreach (string kindKey in kindList)
-                {
-                    if (source.IndexOf(kindKey, StringComparison.Ordinal) < 0)
-                    {
-                        continue;
-                    }
-
-                    if (kindKey.Length > longest)
-                    {
-                        longest = kindKey.Length;
-                        hits.Clear();
-                    }
-
-                    if (kindKey.Length == longest)
-                    {
-                        hits.Add(kindKey);
-                    }
-                }
-
-                foreach (string hit in hits)
-                {
-                    matched.Add(hit);
-                }
-            }
-        }
-
-        /// <summary>把分类依据按空白与常见标点切成单词（去掉空串）。</summary>
-        private static List<string> Tokenize(string text)
-        {
-            List<string> tokens = new List<string>();
-
-            if (string.IsNullOrEmpty(text))
-            {
-                return tokens;
-            }
-
-            string[] parts = text.Split(WordSeparators, StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (string part in parts)
-            {
-                string token = part.Trim();
-
-                if (token.Length > 0)
-                {
-                    tokens.Add(token);
-                }
-            }
-
-            return tokens;
-        }
-
-        /// <summary>
-        /// 匹配用的归一化：全角 ASCII（含全角数字 / 字母）转半角，去掉空白，便于与 PDF 正文比较。
+        /// 匹配用的归一化：全角 ASCII（含全角数字 / 字母 / 括弧）转半角，去掉空白，便于与清单原文比较。
+        /// 与 <see cref="CmdKindMatcher.NormalizeKey"/> 同一套规则。
         /// </summary>
         private static string NormalizeKey(string value)
         {

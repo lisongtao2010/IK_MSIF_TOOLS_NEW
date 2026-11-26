@@ -95,9 +95,10 @@ namespace MSIFAITOOLS.Services
     ///         顺着 <c>01_アッセンブリ図_要領図.csv</c> 读各要領図的
     ///         <c>02_要領図_部品機能情報.csv</c>，把部品挂到装配图名下。</item>
     ///   <item><b>第 4 步 特注品.json 部品追加</b>（<see cref="CmdTzPartCollector"/>，步骤名跟着文件名走）：
-    ///         读 <c>classify\PdfInfoList.txt</c> 里「アッセンブリ図」的分类依据，
+    ///         读 <c>classify\PdfInfoList.txt</c> 里「アッセンブリ図」的品種（清单「品種」列；
+    ///         老清单没有这一列时为分类依据），
     ///         把最前面那步生成的 <c>AiAppData\&lt;文件名&gt;\特注品.csv</c>（Excel 部品表，
-    ///         <b>不再解析 Excel</b>）中「品種」命中该依据的明细挂到同一装配图名下
+    ///         <b>不再解析 Excel</b>）中「品種」命中该品種的明细挂到同一装配图名下
     ///         （一个 CSV 都没有时才退回读 <c>classify\特注品.json</c>）。</item>
     ///   <item><b>第 5 步 部品コード正規化</b>（<see cref="CmdPartCodeNormalizer"/>）：
     ///         用 <c>部品マスタ\Tbl_部品マスタ.csv</c> 的「色」把部品コード 里的颜色换成 <c>□</c>
@@ -226,7 +227,8 @@ namespace MSIFAITOOLS.Services
         /// <summary>第 4 步：特注品.json 部品追加（明细优先读 特注品.csv，见 <see cref="CmdTzPartCollector"/>）。</summary>
         public static readonly CmdAnalysisStep TzAppendStep = new CmdAnalysisStep(TzAppendNumber,
             TzAppendCode, TzAppendName,
-            "读最前面生成的 AiAppData\\<文件名>\\特注品.csv（Excel 部品表，不再解析 Excel）→ 品種命中分类依据的明细 → 追加建行" +
+            "读最前面生成的 AiAppData\\<文件名>\\特注品.csv（Excel 部品表，不再解析 Excel）→ " +
+            "品種命中装配图品種（清单「品種」列；老清单为分类依据）的明细 → 追加建行" +
             "（没有 CSV 时退回 classify\\特注品.json）");
 
         /// <summary>第 5 步：部品コード正規化（含同図番内の重複チェック）。</summary>

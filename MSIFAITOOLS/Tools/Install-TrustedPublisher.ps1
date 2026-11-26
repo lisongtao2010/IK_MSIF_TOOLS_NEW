@@ -28,6 +28,7 @@
 
 .PARAMETER NoPause
     结束时不停顿（给自动化调用用；手动双击运行时不用加）。
+    
 
 .EXAMPLE
     # 手动运行（双击 / 右键「使用 PowerShell 运行」时无需任何参数）

@@ -100,10 +100,27 @@ namespace MSIFAITOOLS.Services
     internal sealed class PdfClassification
     {
         public PdfClassification(string filePath, PdfCategory category, string evidence, bool isAutomatic)
+            : this(filePath, category, evidence, null, isAutomatic)
+        {
+        }
+
+        /// <param name="filePath">PDF 文件的完整路径。</param>
+        /// <param name="category">图面分类。</param>
+        /// <param name="evidence">分类依据（清单「分类依据」列原文）。</param>
+        /// <param name="kind">
+        /// 品種（清单「品種」列原文）。传 <c>null</c> = 没有「品種」列（老清单 / 外部构造），
+        /// <see cref="Kind"/> 退回 <paramref name="evidence"/>；
+        /// 传空串 = 清单有「品種」列但这一格是空（= 没有品種，<b>不再</b>退回分类依据）。
+        /// </param>
+        /// <param name="isAutomatic">是否来自分类清单。</param>
+        public PdfClassification(string filePath, PdfCategory category, string evidence, string kind, bool isAutomatic)
         {
             FilePath = filePath;
             Category = category;
             Evidence = evidence ?? string.Empty;
+            // null = 调用方没有品種可用（老清单 / 外部构造）→ 退回分类依据；
+            // 空串 = 清单里有「品種」列但这一格是空 → 保持空（CMD 分析据此判定「没有品種」）
+            Kind = kind == null ? Evidence : kind.Trim();
             IsAutomatic = isAutomatic;
         }
 
@@ -127,6 +144,17 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>判定依据说明（分类清单「分类依据」列的原文）。</summary>
         public string Evidence { get; private set; }
+
+        /// <summary>
+        /// 品種（分类清单「品種」列的原文）——【CMD 分析】第 3 / 4 步按这一列判断
+        /// 「某条部品 / 特注品明细属不属于这张图」。
+        /// <para>
+        /// <b>以清单「品種」列为准</b>：清单里有这一列时就用它（这一格为空 = 没有品種，
+        /// <b>不</b>退回「分类依据」）；只有清单里<b>没有「品種」列</b>（改动前生成的老清单）时
+        /// 才退回 <see cref="Evidence"/>，老清单不用重跑也能用。
+        /// </para>
+        /// </summary>
+        public string Kind { get; private set; }
 
         /// <summary>是否来自分类清单（画面已不提供改判，当前恒为 true）。</summary>
         public bool IsAutomatic { get; private set; }
@@ -156,8 +184,13 @@ namespace MSIFAITOOLS.Services
     /// 图纸分类清单的读取与统计（不做规则判定，不改动 / 移动 PDF 文件，也不写回清单）。
     /// <para>
     /// 分类来源是外部（CadPartSplitter 等）生成的 PdfInfoList.txt，主清单为
-    /// &lt;输出根目录&gt;\classify\PdfInfoList.txt，只有「図番号,文件名,图面分类,分类依据」四列
-    /// （UTF-8 带 BOM、RFC 4180）。清单的维护由外部工程负责，本工具只读。
+    /// &lt;输出根目录&gt;\classify\PdfInfoList.txt，含「図番号 / 文件名 / 图面分类 / 分类依据 / 品種」五列
+    /// （UTF-8 带 BOM、RFC 4180，列按表头名定位，顺序不限）。清单的维护由外部工程负责，本工具只读。
+    /// </para>
+    /// <para>
+    /// <b>品種只认「品種」列</b>：清单更新后（新增了「品種」列），【CMD 分析】第 3 / 4 步
+    /// 一律用该列的原文做品種比对，<b>不再</b>从「分类依据」列的文字里推断品種；
+    /// 只有老清单（连「品種」列都没有）才退回「分类依据」列。
     /// </para>
     /// <para>
     /// 主清单里没有某个 PDF 时，退回读该图自己的
@@ -185,13 +218,19 @@ namespace MSIFAITOOLS.Services
         /// <summary>清单表头里的分类依据列名。</summary>
         private const string HeaderEvidence = "分类依据";
 
-        /// <summary>清单里一条记录（图面分类 + 分类依据）。</summary>
+        /// <summary>清单表头里的品種列名（老清单没有这一列 → 退回「分类依据」）。</summary>
+        private const string HeaderKind = "品種";
+
+        /// <summary>清单里一条记录（图面分类 + 分类依据 + 品種）。</summary>
         private sealed class PdfInfoEntry
         {
-            public PdfInfoEntry(PdfCategory category, string evidence)
+            public PdfInfoEntry(PdfCategory category, string evidence, string kind)
             {
                 Category = category;
                 Evidence = evidence ?? string.Empty;
+                // 品種只认「品種」列：清单没有这一列时，调用方先用「分类依据」原文代替传进来；
+                // 有这一列时即使这一格是空也保持空（= 没有品種），不再退回「分类依据」
+                Kind = (kind ?? string.Empty).Trim();
             }
 
             /// <summary>图面分类。</summary>
@@ -199,6 +238,12 @@ namespace MSIFAITOOLS.Services
 
             /// <summary>分类依据（清单原文）。</summary>
             public string Evidence { get; private set; }
+
+            /// <summary>
+            /// 品種（清单「品種」列原文）。清单没有这一列时为「分类依据」列原文；
+            /// 有这一列但这一格是空时为空串（= 没有品種）。
+            /// </summary>
+            public string Kind { get; private set; }
         }
 
         /// <summary>计算主清单完整路径：&lt;输出根目录&gt;\classify\PdfInfoList.txt（只算路径，不建目录）。</summary>
@@ -276,7 +321,7 @@ namespace MSIFAITOOLS.Services
                         evidence = PdfInfoListFileName + " 的「图面分类」列为空";
                     }
 
-                    items.Add(new PdfClassification(path, entry.Category, evidence, true));
+                    items.Add(new PdfClassification(path, entry.Category, evidence, entry.Kind, true));
                     continue;
                 }
 
@@ -387,7 +432,9 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 读取清单文件 → 以図番号为键的记录表；文件不存在或读取失败时返回 null。
-        /// 列按表头名定位，所以四列主清单与列更多的单图清单都能读。
+        /// 列按表头名定位，所以五列主清单、老的四列清单与列更多的单图清单都能读；
+        /// <b>品種以「品種」列为准</b>（有这一列时这一格为空 = 没有品種，不退回「分类依据」），
+        /// 只有清单里<b>没有「品種」列</b>时才退回「分类依据」列。
         /// </summary>
         /// <param name="path">清单完整路径。</param>
         private static Dictionary<string, PdfInfoEntry> ReadInfoList(string path)
@@ -426,6 +473,7 @@ namespace MSIFAITOOLS.Services
             int fileNameIndex = IndexOfHeader(header, HeaderFileName);
             int categoryIndex = IndexOfHeader(header, HeaderCategory);
             int evidenceIndex = IndexOfHeader(header, HeaderEvidence);
+            int kindIndex = IndexOfHeader(header, HeaderKind);
             int keyIndex = drawingNoIndex >= 0 ? drawingNoIndex : fileNameIndex;
 
             if (keyIndex < 0 || categoryIndex < 0)
@@ -443,10 +491,14 @@ namespace MSIFAITOOLS.Services
                     continue;
                 }
 
-                PdfInfoEntry entry = new PdfInfoEntry(
-                    PdfCategoryNames.Parse(GetField(fields, categoryIndex)),
-                    GetField(fields, evidenceIndex).Trim());
+                string evidence = GetField(fields, evidenceIndex).Trim();
 
+                // 品種以「品種」列为准：清单有这一列时直接用（这一格为空 = 没有品種）；
+                // 只有清单里没有「品種」列（改动前的老清单）才用「分类依据」原文代替
+                string kind = kindIndex >= 0 ? GetField(fields, kindIndex).Trim() : evidence;
+
+                PdfInfoEntry entry = new PdfInfoEntry(
+                    PdfCategoryNames.Parse(GetField(fields, categoryIndex)), evidence, kind);
                 entries[key] = entry;
 
                 // 文件名（去扩展名）也登记一次：清单里「図番号」与「文件名」不一致时仍能找到

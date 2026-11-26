@@ -193,6 +193,9 @@
     <Compile Include="Services\CmdPartAnalyzer.cs" />
     <Compile Include="Services\CmdPartAnalysisService.cs" />
     <Compile Include="Services\CmdInstructionPartCollector.cs" />
+    <!-- 品種比对的公共实现（第 3 步 要領図部品 / 第 4 步 特注品 共用）：
+         「品種原文里出现过的品種都算命中」，见文件开头的规则说明 -->
+    <Compile Include="Services\CmdKindMatcher.cs" />
     <Compile Include="Services\CmdTzPartCollector.cs" />
     <Compile Include="Services\CmdCalloutPartSplitter.cs" />
     <Compile Include="Services\CmdAnalysisStep.cs" />

@@ -33,6 +33,7 @@ namespace CadPartSplitter
             this.colFile = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colCategory = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colBasis = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colKind = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.panelBottom = new System.Windows.Forms.Panel();
             this.lblCategory = new System.Windows.Forms.Label();
             this.cmbCategory = new System.Windows.Forms.ComboBox();
@@ -123,7 +124,8 @@ namespace CadPartSplitter
             this.colNumber,
             this.colFile,
             this.colCategory,
-            this.colBasis});
+            this.colBasis,
+            this.colKind});
             this.grid.Dock = System.Windows.Forms.DockStyle.Fill;
             this.grid.EditMode = System.Windows.Forms.DataGridViewEditMode.EditOnKeystrokeOrF2;
             this.grid.Location = new System.Drawing.Point(0, 62);
@@ -160,11 +162,20 @@ namespace CadPartSplitter
             //
             // colBasis
             //
-            this.colBasis.FillWeight = 52F;
+            this.colBasis.FillWeight = 34F;
             this.colBasis.HeaderText = "分类依据";
             this.colBasis.Name = "colBasis";
             this.colBasis.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
             this.colBasis.ToolTipText = "自动判定命中的表格 / 单元格；手工设定的记作「手工设定」";
+            //
+            // colKind
+            //
+            this.colKind.FillWeight = 30F;
+            this.colKind.HeaderText = "品種";
+            this.colKind.Name = "colKind";
+            this.colKind.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
+            this.colKind.ToolTipText = "品種：与「分类依据」同一套表格取法（命中的单元格原文），但没有文件名依据；"
+                + "下游的第 3 / 4 步按这一列判断部品 / 特注品属于哪张图，表格里没有就留空";
             //
             // panelBottom
             //
@@ -309,6 +320,7 @@ namespace CadPartSplitter
         private System.Windows.Forms.DataGridViewTextBoxColumn colFile;
         private System.Windows.Forms.DataGridViewTextBoxColumn colCategory;
         private System.Windows.Forms.DataGridViewTextBoxColumn colBasis;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colKind;
         private System.Windows.Forms.Panel panelBottom;
         private System.Windows.Forms.Label lblCategory;
         private System.Windows.Forms.ComboBox cmbCategory;

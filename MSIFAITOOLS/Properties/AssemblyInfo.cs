@@ -36,5 +36,7 @@ using System.Runtime.InteropServices;
 // [assembly: AssemblyVersion("1.0.*")]
 // 每次对外发版请递增这里的版本号：客户/安全软件看到「版本号永远不变、文件哈希
 // 却天天变」的 exe，更容易按可疑程序处理（信誉也无法累积）。
-[assembly: AssemblyVersion("1.6.0.0")]
-[assembly: AssemblyFileVersion("1.6.0.0")]
+// 1.6.1.0：【CMD 分析】第 3 步 / 第 4 步的「品種」比对改为公共实现 CmdKindMatcher
+//          （品種原文里出现过的品種都算命中；V 前缀 / 枠 后缀可省略、跨分隔符 / 数量组合也能命中）
+[assembly: AssemblyVersion("1.6.1.0")]
+[assembly: AssemblyFileVersion("1.6.1.0")]

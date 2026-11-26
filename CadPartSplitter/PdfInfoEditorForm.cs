@@ -7,7 +7,7 @@ namespace CadPartSplitter
 {
     /// <summary>
     /// 「PDF 信息清单」维护窗口：直接编辑整批共用的
-    /// <c>&lt;输出根目录&gt;\classify\PdfInfoList.txt</c>（図番号 / 文件名 / 图面分类 / 分类依据）。
+    /// <c>&lt;输出根目录&gt;\classify\PdfInfoList.txt</c>（図番号 / 文件名 / 图面分类 / 分类依据 / 品種）。
     ///
     /// 为什么需要它：图面分类是自动判出来的（文件名第 5 位是 <c>Z</c> → 特注；否则在
     /// <c>tables\*.csv</c> 的单元格里找「図番号前 4 位 + 基本図 / 加工図 / アッセンブリ図 / 要領図」），
@@ -157,7 +157,8 @@ namespace CadPartSplitter
                     grid.Rows.Add(item.DrawingNumber ?? string.Empty,
                                   item.FileName ?? string.Empty,
                                   item.Category ?? string.Empty,
-                                  item.MatchedCell ?? string.Empty);
+                                  item.MatchedCell ?? string.Empty,
+                                  item.Kind ?? string.Empty);
                 }
             }
             finally
@@ -252,15 +253,19 @@ namespace CadPartSplitter
         private void UpdateStatus()
         {
             int unclassified = 0;
+            int noKind = 0;
 
             foreach (DataGridViewRow row in grid.Rows)
             {
                 if (CellText(row, colCategory.Name).Length == 0)
                     unclassified++;
+                else if (CellText(row, colKind.Name).Length == 0)
+                    noKind++;
             }
 
             SetStatus("共 " + grid.Rows.Count + " 行"
                       + (unclassified > 0 ? "，其中 " + unclassified + " 行未设定图面分类（需要手工补）" : string.Empty)
+                      + (noKind > 0 ? "，" + noKind + " 行没有「品種」（下游按「分类依据」兜底）" : string.Empty)
                       + (_dirty ? "　·　未保存" : string.Empty));
         }
 
@@ -358,7 +363,8 @@ namespace CadPartSplitter
                     grid.Rows.Add(item.DrawingNumber ?? string.Empty,
                                   item.FileName ?? string.Empty,
                                   item.Category ?? string.Empty,
-                                  item.MatchedCell ?? string.Empty);
+                                  item.MatchedCell ?? string.Empty,
+                                  item.Kind ?? string.Empty);
                 }
             }
             finally
@@ -392,8 +398,10 @@ namespace CadPartSplitter
                 string fileName = CellText(row, colFile.Name);
                 string category = CellText(row, colCategory.Name);
                 string basis = CellText(row, colBasis.Name);
+                string kind = CellText(row, colKind.Name);
 
-                if (number.Length == 0 && fileName.Length == 0 && category.Length == 0 && basis.Length == 0)
+                if (number.Length == 0 && fileName.Length == 0 && category.Length == 0
+                    && basis.Length == 0 && kind.Length == 0)
                     continue;                                   // 整行空白：忽略，不算错误
 
                 if (number.Length == 0)
@@ -412,7 +420,8 @@ namespace CadPartSplitter
                     FileName = fileName.Length > 0 ? fileName : number + ".pdf",
                     Category = category,
                     MatchedTable = null,        // 依据整段存在 MatchedCell 里（读清单时就是这么装的）
-                    MatchedCell = basis
+                    MatchedCell = basis,
+                    Kind = kind
                 });
             }
 
@@ -513,7 +522,7 @@ namespace CadPartSplitter
         {
             grid.EndEdit();
 
-            int index = grid.Rows.Add(string.Empty, string.Empty, string.Empty, string.Empty);
+            int index = grid.Rows.Add(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
 
             _dirty = true;
             grid.CurrentCell = grid.Rows[index].Cells[colNumber.Name];
@@ -618,7 +627,8 @@ namespace CadPartSplitter
         /// <summary>
         /// 对指定行重跑自动判定：与 <see cref="PdfInfoListBuilder.Build"/> 完全同一套规则
         /// （文件名第 5 位是 <c>Z</c> → 特注 → 文件名里的分类 → 逐格找 → 找不到再按「同一行」找，
-        /// 表格读这张图自己的 <c>tables\*.csv</c>），命中就填「图面分类 + 分类依据」。
+        /// 表格读这张图自己的 <c>tables\*.csv</c>），命中就填「图面分类 + 分类依据」；
+        /// 顺带刷新「品種」（表格里没命中就不动这一格）。
         /// </summary>
         /// <param name="rows">要判定的行。</param>
         /// <param name="onlyEmpty">true = 跳过已经有分类的行。</param>
@@ -655,6 +665,14 @@ namespace CadPartSplitter
                 // 与 PdfInfoListBuilder.Build 完全同一套规则；文件名里写着分类的，没有 tables 目录也能判
                 string category = PdfInfoListBuilder.ClassifyCategory(number, tablesDirectory, opts,
                                                                      out cell, out table);
+
+                // 品種：与「分类依据」同一套表格取法，但没有「文件名 …」这一路 ——
+                // 分类是从文件名判出来的行（…_アッセンブリ図.pdf）品種照样只在表格里找；
+                // 表格里没有就不动这一格（别把手工填的冲掉）
+                string kind = PdfInfoListBuilder.ResolveKind(number, tablesDirectory, opts);
+
+                if (kind.Length > 0)
+                    SetCellSilently(row, colKind.Name, kind);
 
                 if (string.IsNullOrEmpty(category))
                 {

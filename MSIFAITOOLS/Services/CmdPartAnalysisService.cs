@@ -52,10 +52,13 @@ namespace MSIFAITOOLS.Services
     ///         才按坐标判排列方向（左右 / 上下）把方向加到部品名前并拆成多条；</item>
     ///   <item><b>追加要領図 部品</b>（<see cref="CmdInstructionPartCollector"/>）：顺着
     ///         <c>01_アッセンブリ図_要領図.csv</c> → 各要領図的 <c>02_要領図_部品機能情報.csv</c>，
-    ///         把「品種命中分类依据」的部品行、以及「品種为空（所有品種共用）」的部品行
+    ///         把「品種命中装配图的品種」的部品行、以及「品種为空（所有品種共用）」的部品行
     ///         也登录到同一张表（図番 = アッセンブリ図、部品図番 = 要領図；备註 <c>品種：共通</c>）；</item>
-    ///   <item><b>追加 特注品.json 部品</b>（<see cref="CmdTzPartCollector"/>）：读 <c>classify\特注品.json</c>（Excel 部品表），
-    ///         把「品種」命中分类依据的明细（部品名 / 枠区分 / 部品コード / 追加対応特注寸法）
+    ///   <item><b>追加 特注品.json 部品</b>（<see cref="CmdTzPartCollector"/>）：读最前面生成的
+    ///         <c>AiAppData\&lt;文件名&gt;\特注品.csv</c>（Excel 部品表的 CSV 版；一个都没有时退回
+    ///         <c>classify\特注品.json</c>），
+    ///         把「品種」命中装配图「品種」（清单「品種」列；老清单没有这一列时为「分类依据」）的明细
+    ///         （部品名 / 枠区分 / 部品コード / 追加対応特注寸法）
     ///         登录到同一张表（図番 = アッセンブリ図、备註 <c>品種：…；特注寸法：…</c>）。</item>
     ///   <item><b>正規化部品コード</b>（<see cref="CmdPartCodeNormalizer"/>）：读 <c>部品マスタ\Tbl_部品マスタ.csv</c>，
     ///         用「色」把部品コード 里的颜色换成 <c>□</c>（<c>MEACC429</c> → <c>MEA□429</c>），
@@ -940,7 +943,7 @@ namespace MSIFAITOOLS.Services
         {
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Empty);
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
-                "{0}{1} → 各要領図的 {2}，把品種命中分类依据的部品（含没有品種的共通部品）挂到「{3}」上",
+                "{0}{1} → 各要領図的 {2}，把品種命中装配图品種的部品（含没有品種的共通部品）挂到「{3}」上",
                 CmdAnalysisSteps.YoryoAppendStep.LogHeader,
                 CmdInstructionPartCollector.YoryoListFileName,
                 CmdInstructionPartCollector.YoryoPartFileName, PdfCategoryNames.Assembly));
@@ -1027,14 +1030,15 @@ namespace MSIFAITOOLS.Services
 
         /// <summary>
         /// 第 4 步「特注品.json 部品追加」：读 <c>classify\PdfInfoList.txt</c> 里
-        /// 「图面分类 = アッセンブリ図」的分类依据，把<b>最前面那步生成的
+        /// 「图面分类 = アッセンブリ図」的<b>品種</b>（<b>以清单「品種」列为准</b>：这一格为空 = 没有品種、
+        /// 该図番跳过；只有老清单连「品種」列都没有时才用「分类依据」），把<b>最前面那步生成的
         /// <c>AiAppData\&lt;文件名&gt;\特注品.csv</c></b>（Excel 部品表的 CSV 版，
-        /// <see cref="CmdTzPartCollector.LoadCsvEntries"/>）中「品種」命中该依据的明细挂到该装配图名下
+        /// <see cref="CmdTzPartCollector.LoadCsvEntries"/>）中「品種」命中该品種的明细挂到该装配图名下
         /// —— <b>不再解析 Excel、也不再读 <c>classify\特注品.json</c></b>
         /// （一个 CSV 都没有时才退回读 特注品.json，并记一条警告）。
         ///
         /// 每个アッセンブリ図：先去掉上一次本步骤写入的行（来源标识 = 特注品.json，升级前的旧行是
-        /// 旧值 tz.json，一并算），按分类依据重新收集，
+        /// 旧值 tz.json，一并算），按品種重新收集，
         /// 与已有行合并后一次写库（<see cref="PartBasicInfoRepository.Save"/> 会先清空该図番再插入，
         /// 所以必须把已有行一起提交，否则会把第 1 / 3 步的明细冲掉）。
         /// 合并后为空（该図番只有上次的 特注品.json 行、这次一条都不再命中）时改用
@@ -1046,14 +1050,14 @@ namespace MSIFAITOOLS.Services
         {
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Empty);
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
-                "{0}读 {1}（图面分类 = 「{2}」的记录，取分类依据）→ 最前面生成的 {3} 中" +
-                "「品種」命中分类依据的明细挂到「{2}」上（不再解析 Excel）",
+                "{0}读 {1}（图面分类 = 「{2}」的记录，取「品種」列；老清单退回「分类依据」）→ 最前面生成的 {3} 中" +
+                "「品種」命中装配图品種的明细挂到「{2}」上（不再解析 Excel）",
                 CmdAnalysisSteps.TzAppendStep.LogHeader, CmdTzPartCollector.PdfInfoListFileName,
                 PdfCategoryNames.Assembly, CmdSpecialProductCsvExporter.CsvFileName));
 
             List<string> notes = new List<string>();
-            Dictionary<string, string> evidence =
-                CmdTzPartCollector.ReadAssemblyEvidence(outputDirectory, notes);
+            Dictionary<string, string> kindTexts =
+                CmdTzPartCollector.ReadAssemblyKindTexts(outputDirectory, notes);
 
             foreach (string note in notes)
             {
@@ -1102,8 +1106,8 @@ namespace MSIFAITOOLS.Services
             summary.TzEntryCount = entries.Count;
 
             PartAnalysisService.ReportLog(onLog, LogKind.Info, string.Format(
-                "  {0}：{1} 个文件 / {2} 条明细；清单里「{3}」{4} 条",
-                sourceName, sourceFileCount, entries.Count, PdfCategoryNames.Assembly, evidence.Count));
+                "  {0}：{1} 个文件 / {2} 条明细；清单里「{3}」的品種 {4} 条",
+                sourceName, sourceFileCount, entries.Count, PdfCategoryNames.Assembly, kindTexts.Count));
 
             CmdTzPartCollector collector = new CmdTzPartCollector();
             // 读 特注品.json 时把它的路径写进「来源表格文件」（读 CSV 时每行用自己那个 CSV 的路径）
@@ -1124,13 +1128,14 @@ namespace MSIFAITOOLS.Services
 
                 try
                 {
-                    // 分类依据来自 PdfInfoList.txt；清单里没有该図番时退回一览的 Evidence
-                    string basis = FindEvidence(evidence, drawingNo, item.Evidence);
+                    // 品種来自 PdfInfoList.txt 的「品種」列（只有清单里没有这一列的老清单才退回「分类依据」）；
+                    // 清单里没有该図番时退回一览的 Kind（它本身已带同样的退回规则）
+                    string kindText = FindKindText(kindTexts, drawingNo, item.Kind);
 
-                    if (string.IsNullOrWhiteSpace(basis))
+                    if (string.IsNullOrWhiteSpace(kindText))
                     {
                         PartAnalysisService.ReportLog(onLog, LogKind.Warning, string.Format(
-                            "  図番 {0}：没有分类依据（清单里不是「{1}」？），跳过", drawingNo,
+                            "  図番 {0}：没有品種（清单里不是「{1}」，或「品種」列是空的？），跳过", drawingNo,
                             PdfCategoryNames.Assembly));
 
                         continue;
@@ -1138,11 +1143,11 @@ namespace MSIFAITOOLS.Services
 
                     List<PartBasicInfo> existing = new List<PartBasicInfo>(repository.Query(drawingNo));
 
-                    // 去掉上一次本步骤写入的行，重新按分类依据收集（番号接在剩余行之后）
+                    // 去掉上一次本步骤写入的行，重新按品種收集（番号接在剩余行之后）
                     int removed = existing.RemoveAll(IsTzRow);
                     int startNumber = NextNumber(existing);
 
-                    CmdTzPartResult result = collector.Collect(drawingNo, basis, fallbackSourcePath,
+                    CmdTzPartResult result = collector.Collect(drawingNo, kindText, fallbackSourcePath,
                         item.FilePath, entries, startNumber);
 
                     foreach (string note in result.Notes)
@@ -1499,15 +1504,19 @@ namespace MSIFAITOOLS.Services
                 string.Equals(part.SourceTag, PartSourceTag.LegacyCmdTz, StringComparison.Ordinal);
         }
 
-        /// <summary>优先用清单里的分类依据；清单里没有该図番时退回一览的 Evidence。</summary>
-        private static string FindEvidence(Dictionary<string, string> evidence, string drawingNo, string fallback)
+        /// <summary>
+        /// 优先用清单里的品種（<c>PdfInfoList.txt</c> 的「品種」列，老清单为「分类依据」）；
+        /// 清单里没有该図番时退回一览的品種（<see cref="PdfClassification.Kind"/>）。
+        /// </summary>
+        private static string FindKindText(Dictionary<string, string> kindTexts, string drawingNo,
+            string fallback)
         {
-            string basis;
+            string kindText;
 
-            if (evidence != null && drawingNo != null && evidence.TryGetValue(drawingNo, out basis) &&
-                !string.IsNullOrWhiteSpace(basis))
+            if (kindTexts != null && drawingNo != null &&
+                kindTexts.TryGetValue(drawingNo, out kindText) && !string.IsNullOrWhiteSpace(kindText))
             {
-                return basis;
+                return kindText;
             }
 
             return fallback ?? string.Empty;

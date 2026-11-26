@@ -7,7 +7,7 @@ namespace CadPartSplitter
 {
     /// <summary>
     /// 一张 PDF 的信息（分类清单 <c>classify\PdfInfoList.txt</c> 里的一行）：
-    /// 図番号 / 文件名 / 图面分类（基本図 / 加工図 / アッセンブリ図 / 要領図 / 特注）/ 分类依据。
+    /// 図番号 / 文件名 / 图面分类（基本図 / 加工図 / アッセンブリ図 / 要領図 / 特注）/ 分类依据 / 品種。
     ///
     /// 其余字段（页数 / 页面尺寸 / 表格张数 / 零件个数 / 文件大小 / 更新日期）清单里不再写，
     /// 模型仍保留它们，供读老清单（十列）与其它调用方使用。
@@ -46,6 +46,17 @@ namespace CadPartSplitter
 
         /// <summary>命中的单元格原文（判不出来时为 null）。</summary>
         public string MatchedCell { get; set; }
+
+        /// <summary>
+        /// 品種（下游用它判断「某条部品 / 特注品明细属不属于这张图」，<b>不再从「分类依据」里猜</b>）。
+        ///
+        /// 取法与「分类依据」完全相同 —— 就是 <c>tables\*.csv</c> 里命中的那一格原文，
+        /// 前面带命中的 CSV 文件名（<c>table_05.csv：H467 ＴＡ 室内引戸 V片引戸 枠 アッセンブリ図</c>），
+        /// <b>但不用「文件名 …」这一路依据</b>：文件名里写着图面分类（<c>…_アッセンブリ図.pdf</c>）时
+        /// 「分类依据」取自文件名，而品種仍然只在表格内容里找；表格里找不到就留空
+        /// （见 <see cref="PdfInfoListBuilder.ResolveKind"/>）。
+        /// </summary>
+        public string Kind { get; set; }
 
         /// <summary>本次识别到的有线表格张数。</summary>
         public int TableCount { get; set; }
@@ -151,10 +162,10 @@ namespace CadPartSplitter
         /// <summary>tables 子目录名（与 <see cref="RuledTableWriter"/> 写出的位置一致）。</summary>
         private const string TablesFolderName = "tables";
 
-        /// <summary>输出表头：固定四列，下游按列取数。</summary>
+        /// <summary>输出表头：固定五列，下游按列取数。</summary>
         private static readonly string[] Header =
         {
-            "図番号", "文件名", "图面分类", "分类依据"
+            "図番号", "文件名", "图面分类", "分类依据", "品種"
         };
 
         /// <summary>
@@ -251,15 +262,52 @@ namespace CadPartSplitter
             return byRow;
         }
 
+        /// <summary>
+        /// 取一张图的「品種」：与「分类依据」**同一套表格取法** —— 在 <c>tables\*.csv</c> 里找
+        /// 「図番号前 4 位 + 图种关键字（基本図 / 加工図 / アッセンブリ図 / 要領図）」命中的那一格，
+        /// 逐格没命中时与 <see cref="ClassifyCategory"/> 一样按「同一行」再找一次。
+        ///
+        /// 与「分类依据」的唯一区别：<b>不走「文件名 …」这一路</b>（文件名里写着图面分类时，
+        /// 分类依据取自文件名，但品種仍然只看表格内容），也不认「特注」（图番号第 5 位 <c>Z</c>）/
+        /// 「手工设定」这类与表格无关的依据 —— 表格里找不到就返回空串。
+        ///
+        /// 返回写法与「分类依据」相同：<c>table_05.csv：H467 ＴＡ 室内引戸 V片引戸 枠 アッセンブリ図</c>
+        /// （下游的品種比对就是在这段文字里找「品種」，见 MSIFAITOOLS 的第 3 / 4 步）。
+        /// </summary>
+        /// <param name="drawingNumber">図番号（PDF 文件名去扩展名）。</param>
+        /// <param name="tablesDirectory">该图纸的 <c>tables</c> 目录。</param>
+        /// <param name="opts">参数 / 日志（可为 null）。</param>
+        /// <returns>品種（<c>CSV 文件名：单元格原文</c>）；表格里找不到时为空串。</returns>
+        public static string ResolveKind(string drawingNumber, string tablesDirectory, DetectorOptions opts)
+        {
+            DetectorOptions o = opts ?? new DetectorOptions();
+            string cell;
+            string table;
+            string category = DrawingListBuilder.ClassifyByTables(drawingNumber, tablesDirectory, o,
+                                                                  out cell, out table);
+
+            if (string.IsNullOrEmpty(category))
+            {
+                category = ClassifyByRow(drawingNumber, tablesDirectory, o, out cell, out table);
+            }
+
+            if (string.IsNullOrEmpty(category) || string.IsNullOrEmpty(table))
+                return string.Empty;
+
+            string text = CsvFile.SingleLine(cell ?? string.Empty);
+
+            return text.Length == 0 ? string.Empty : table + "：" + text;
+        }
+
         // ── 生成 ──────────────────────────────────────────────────────────────
 
         /// <summary>
-        /// 提取一张 PDF 的 図番号 / 文件名 / 图面分类，合并进整批共用的
+        /// 提取一张 PDF 的 図番号 / 文件名 / 图面分类 / 分类依据 / 品種，合并进整批共用的
         /// <c>&lt;输出根目录&gt;\classify\PdfInfoList.txt</c>：同一张图（同図番号）就替换那一行，否则追加一行。
         /// </summary>
         /// <param name="pdfPath">PDF 路径（非 PDF 直接跳过，不生成文件）。</param>
         /// <param name="outputDirectory">该图纸的输出目录（用来推回输出根目录 → <c>classify</c>）。</param>
-        /// <param name="partCount">本次分割出的零件个数（清单只写四列，参数保留兼容调用方）。</param>
+        /// <param name="partCount">本次分割出的零件个数（清单只写五列，参数保留兼容调用方）。</param>
         /// <param name="tableCount">本次识别到的有线表格张数（同上）。</param>
         /// <param name="renderWidth">本次渲染的像素宽（同上）。</param>
         /// <param name="renderHeight">本次渲染的像素高（同上）。</param>
@@ -300,6 +348,16 @@ namespace CadPartSplitter
                 info.DrawingNumber, Path.Combine(outputDirectory, TablesFolderName), o, out cell, out table);
             info.MatchedCell = cell;
             info.MatchedTable = table;
+
+            // 品種：与「分类依据」同一套表格取法（tables\*.csv 里命中的那一格），
+            // 但不走「文件名 …」这一路 —— 文件名里的图面分类是人写的，不代表表格内容
+            info.Kind = ResolveKind(info.DrawingNumber, Path.Combine(outputDirectory, TablesFolderName), o);
+
+            if (!string.IsNullOrEmpty(info.Kind))
+                o.Log("[INFO] PdfInfoList：品種取自表格 —— " + info.DrawingNumber + " → " + CsvFile.SingleLine(info.Kind));
+            else if (info.Classified)
+                o.Log("[INFO] PdfInfoList：品種：表格里没找到（" + info.DrawingNumber
+                      + "）—— 下游按「没有品種」处理");
 
             // 特注 / 取自文件名时没有 table（MatchedTable 为空），单独记一行日志说明理由
             if (info.Category == SpotCategoryKeyword)
@@ -354,7 +412,7 @@ namespace CadPartSplitter
         ///
         /// 只改内存里的 <paramref name="info"/>，不碰 <paramref name="rows"/>（替换由 <see cref="ReplaceRow"/> 做）。
         /// </summary>
-        /// <param name="rows">清单里表头之外的数据行（第一列是図番号，第三列是図面分類，第四列是分类依据）。</param>
+        /// <param name="rows">清单里表头之外的数据行（第一列是図番号，第三列是図面分類，第四列是分类依据，第五列是品種）。</param>
         /// <param name="info">本次要写进去的那条记录（会被就地修改）。</param>
         /// <param name="o">参数 / 日志。</param>
         private static void KeepManualCategory(List<string[]> rows, PdfInfo info, DetectorOptions o)
@@ -376,6 +434,11 @@ namespace CadPartSplitter
 
             if (existing == null)
                 return;
+
+            // 品種：这次表格里没命中就沿用清单里的（上回判出来的 / 人手工补的），
+            // 与「分类这次有没有判出来」无关 —— 分类来自文件名时品種照样可能来自表格
+            if (string.IsNullOrEmpty(info.Kind))
+                info.Kind = Cell(existing, 4);
 
             string oldCategory = Cell(existing, 2);
             if (string.IsNullOrEmpty(oldCategory))
@@ -628,6 +691,7 @@ namespace CadPartSplitter
             int cSize = CsvFile.IndexOfHeader(header, "页面尺寸mm");
             int cCategory = CsvFile.IndexOfHeader(header, "图面分类");
             int cBasis = CsvFile.IndexOfHeader(header, "分类依据");
+            int cKind = CsvFile.IndexOfHeader(header, "品種");
             int cTables = CsvFile.IndexOfHeader(header, "表格数");
             int cParts = CsvFile.IndexOfHeader(header, "零件数");
 
@@ -647,6 +711,7 @@ namespace CadPartSplitter
                     PartCount = IntCell(row, cParts),
                     Category = Cell(row, cCategory),
                     MatchedCell = Cell(row, cBasis),
+                    Kind = Cell(row, cKind),
                     ModifiedTime = DateTime.MinValue
                 };
 
@@ -895,7 +960,7 @@ namespace CadPartSplitter
         }
 
         /// <summary>
-        /// 整份清单覆盖写回（GUI 手工维护「图面分类」用）：固定四列、RFC 4180 + BOM + CRLF，
+        /// 整份清单覆盖写回（GUI 手工维护「图面分类」用）：固定五列、RFC 4180 + BOM + CRLF，
         /// 与 <see cref="Build"/> 写出的格式完全一致；目录不存在时自动创建。
         ///
         /// 与 <see cref="Build"/> 的唯一区别：<b>分类为空也照样写出「分类依据」</b> ——
@@ -966,13 +1031,13 @@ namespace CadPartSplitter
 
         // ── 一行 <-> 对象 ──────────────────────────────────────────────────────
 
-        /// <summary>把一条信息转成一行数据（列顺序与 <see cref="Header"/> 一致：図番号 / 文件名 / 图面分类 / 分类依据）。</summary>
+        /// <summary>把一条信息转成一行数据（列顺序与 <see cref="Header"/> 一致：図番号 / 文件名 / 图面分类 / 分类依据 / 品種）。</summary>
         private static string[] ToRow(PdfInfo info)
         {
             return ToRow(info, false);
         }
 
-        /// <summary>把一条信息转成一行数据（列顺序与 <see cref="Header"/> 一致：図番号 / 文件名 / 图面分类 / 分类依据）。</summary>
+        /// <summary>把一条信息转成一行数据（列顺序与 <see cref="Header"/> 一致：図番号 / 文件名 / 图面分类 / 分类依据 / 品種）。</summary>
         /// <param name="info">一条信息。</param>
         /// <param name="keepBasisWhenUnclassified">
         /// 分类为空时是否照样写出「分类依据」：<see cref="Build"/> 写盘用 false（与历史行为一致，未识别就不留依据）；
@@ -985,7 +1050,8 @@ namespace CadPartSplitter
                 info.DrawingNumber ?? string.Empty,
                 info.FileName ?? string.Empty,
                 info.Category ?? string.Empty,
-                BasisText(info, keepBasisWhenUnclassified)
+                BasisText(info, keepBasisWhenUnclassified),
+                info.Kind ?? string.Empty
             };
         }
 

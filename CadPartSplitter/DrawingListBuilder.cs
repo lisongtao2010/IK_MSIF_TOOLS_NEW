@@ -276,6 +276,28 @@ namespace CadPartSplitter
                 return byName;
             }
 
+            return ClassifyByTables(drawingNumber, tablesDirectory, opts, out matchedCell, out matchedTable);
+        }
+
+        /// <summary>
+        /// <b>只查表格</b>判分类（跳过「文件名里写着分类」那一路）：逐格找「図番号 前 4 位 + 关键字」，
+        /// 命中返回规范写法并给出那一格的原文与 CSV 文件名；都没命中返回空串。
+        /// <para>
+        /// 供 <see cref="PdfInfoListBuilder.ResolveKind"/> 取「品種」用 —— 品種列与「分类依据」同一套表格取法，
+        /// <b>但不采用「文件名 …」这种依据</b>（文件名里的分类是人写的，不代表表格内容）。
+        /// </para>
+        /// </summary>
+        /// <param name="drawingNumber">図番号（PDF 文件名去掉扩展名）。</param>
+        /// <param name="tablesDirectory">该图纸的 <c>tables</c> 目录。</param>
+        /// <param name="opts">参数 / 日志（可为 null）。</param>
+        /// <param name="matchedCell">命中那一格的原文（取最后一个命中的）；没命中时为 null。</param>
+        /// <param name="matchedTable">命中的 CSV 文件名；没命中时为 null。</param>
+        public static string ClassifyByTables(string drawingNumber, string tablesDirectory, DetectorOptions opts,
+                                              out string matchedCell, out string matchedTable)
+        {
+            matchedCell = null;
+            matchedTable = null;
+
             string prefix = DrawingPrefix(drawingNumber);
 
             if (prefix.Length == 0 || string.IsNullOrWhiteSpace(tablesDirectory))
